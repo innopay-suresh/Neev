@@ -15,9 +15,13 @@ New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Write-Host "==> flutter build windows --release"
 flutter build windows --release
+if ($LASTEXITCODE -ne 0) { throw "flutter build windows failed (exit $LASTEXITCODE)" }
 
 $ReleaseDir = "build\windows\x64\runner\Release"
 if (-not (Test-Path $ReleaseDir)) { throw "Release dir not found: $ReleaseDir" }
+if (-not (Test-Path "$ReleaseDir\neev_remote.exe")) {
+  throw "neev_remote.exe missing - build did not produce the app"
+}
 
 # Bundle the Visual C++ runtime DLLs next to the exe so the app runs on a clean
 # PC with nothing pre-installed (end users don't need the VC++ redistributable).

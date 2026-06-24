@@ -15,12 +15,15 @@ namespace {
 // Returns 0 when unmapped.
 WORD HidToVk(int usage) {
   // a-z
-  if (usage >= 0x04 && usage <= 0x1D) return 'A' + (usage - 0x04);
+  if (usage >= 0x04 && usage <= 0x1D)
+    return static_cast<WORD>('A' + (usage - 0x04));
   // 1-9, 0
-  if (usage >= 0x1E && usage <= 0x26) return '1' + (usage - 0x1E);
-  if (usage == 0x27) return '0';
+  if (usage >= 0x1E && usage <= 0x26)
+    return static_cast<WORD>('1' + (usage - 0x1E));
+  if (usage == 0x27) return static_cast<WORD>('0');
   // F1-F12
-  if (usage >= 0x3A && usage <= 0x45) return VK_F1 + (usage - 0x3A);
+  if (usage >= 0x3A && usage <= 0x45)
+    return static_cast<WORD>(VK_F1 + (usage - 0x3A));
 
   switch (usage) {
     case 0x28: return VK_RETURN;
