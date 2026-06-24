@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../../core/constants/app_constants.dart';
@@ -57,6 +59,10 @@ class RemoteService extends ChangeNotifier {
   MediaStream? _remoteStream;
   SessionStats _stats = const SessionStats();
   Timer? _statsTimer;
+
+  // ---- Clipboard sync (shared across roles) ----
+  Timer? _clipTimer;
+  String? _lastClip;
 
   ViewerStatus get viewerStatus => _viewerStatus;
   bool get isViewing =>
@@ -182,10 +188,7 @@ class RemoteService extends ChangeNotifier {
     }
 
     final peer = WebRTCService();
-    peer.onDataMessage = (raw) {
-      final event = InputEvent.decode(raw);
-      if (event != null) _injector.inject(event);
-    };
+    peer.onDataMessage = (raw) => _handleData(raw, isHost: true);
     peer.onIceCandidate = (c) =>
         _hostSignaling?.sendCandidate(controllerId, _candidateMap(c));
     peer.onConnectionStateChange = (state) {
@@ -202,6 +205,7 @@ class RemoteService extends ChangeNotifier {
     await peer.addLocalStream(stream);
     final offer = await peer.createOffer();
     _hostSignaling?.sendOffer(controllerId, _sdpMap(offer));
+    _ensureClipboardSync();
     notifyListeners();
   }
 
@@ -300,10 +304,12 @@ class RemoteService extends ChangeNotifier {
 
     final peer = WebRTCService();
     _viewerPeer = peer;
+    peer.onDataMessage = (raw) => _handleData(raw, isHost: false);
     peer.onRemoteStream = (stream) {
       _remoteStream = stream;
       _viewerStatus = ViewerStatus.connected;
       _startStatsTimer();
+      _ensureClipboardSync();
       notifyListeners();
     };
     peer.onIceCandidate = (c) =>
@@ -339,6 +345,65 @@ class RemoteService extends ChangeNotifier {
   void _statsTimerMaybeStop() {
     _statsTimer?.cancel();
     _statsTimer = null;
+  }
+
+  // =========================================================================
+  // Clipboard sync + data-channel routing
+  // =========================================================================
+
+  /// Routes an incoming data-channel message. Clipboard messages update the
+  /// local clipboard on both roles; input events are injected on the host only.
+  Future<void> _handleData(String raw, {required bool isHost}) async {
+    Map<String, dynamic>? m;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) m = decoded;
+    } catch (_) {}
+    if (m == null) return;
+
+    if (m['k'] == 'clip') {
+      final text = m['t'] as String?;
+      if (text != null) {
+        _lastClip = text; // avoid echoing it straight back
+        await Clipboard.setData(ClipboardData(text: text));
+      }
+      return;
+    }
+
+    if (isHost) {
+      final event = InputEvent.decode(raw);
+      if (event != null) _injector.inject(event);
+    }
+  }
+
+  void _ensureClipboardSync() {
+    if (_clipTimer != null) return;
+    // Prime _lastClip so we don't immediately broadcast the existing clipboard.
+    Clipboard.getData('text/plain').then((d) => _lastClip = d?.text);
+    _clipTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) async {
+      if (_hostPeers.isEmpty && _viewerPeer == null) {
+        _stopClipboardSync();
+        return;
+      }
+      final data = await Clipboard.getData('text/plain');
+      final text = data?.text;
+      if (text == null || text.isEmpty || text == _lastClip) return;
+      _lastClip = text;
+      _broadcastClip(text);
+    });
+  }
+
+  void _stopClipboardSync() {
+    _clipTimer?.cancel();
+    _clipTimer = null;
+  }
+
+  void _broadcastClip(String text) {
+    final msg = jsonEncode({'k': 'clip', 't': text});
+    for (final peer in _hostPeers.values) {
+      peer.sendData(msg);
+    }
+    _viewerPeer?.sendData(msg);
   }
 
   // =========================================================================
@@ -389,6 +454,7 @@ class RemoteService extends ChangeNotifier {
   @override
   void dispose() {
     _statsTimerMaybeStop();
+    _stopClipboardSync();
     stopHosting();
     disconnectViewer();
     super.dispose();

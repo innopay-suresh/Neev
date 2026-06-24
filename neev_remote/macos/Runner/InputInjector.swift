@@ -11,6 +11,7 @@ class InputInjector {
   private var leftDown = false
   private var rightDown = false
   private var otherDown = false
+  private var modifierFlags: CGEventFlags = []
 
   static func register(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(
@@ -49,6 +50,9 @@ class InputInjector {
     switch kind {
     case "mv":
       lastPos = point(args)
+      // Warp sets the exact absolute position (no pointer acceleration), then
+      // we post the matching move/drag event for app awareness.
+      CGWarpMouseCursorPosition(lastPos)
       let type: CGEventType = leftDown ? .leftMouseDragged
         : (rightDown ? .rightMouseDragged
         : (otherDown ? .otherMouseDragged : .mouseMoved))
@@ -69,9 +73,14 @@ class InputInjector {
     case "key":
       let usage = (args["u"] as? Int) ?? 0
       let down = (args["d"] as? Bool) ?? false
+      // Track modifier state so capitals, symbols and shortcuts (Cmd+C/V) work.
+      if let flag = InputInjector.modifierFlag(usage) {
+        if down { modifierFlags.insert(flag) } else { modifierFlags.remove(flag) }
+      }
       if let vk = InputInjector.hidToKeyCode(usage),
          let e = CGEvent(keyboardEventSource: source, virtualKey: vk,
                          keyDown: down) {
+        e.flags = modifierFlags
         e.post(tap: .cghidEventTap)
       }
     default:
@@ -102,7 +111,19 @@ class InputInjector {
   private func post(type: CGEventType, at pos: CGPoint, button: CGMouseButton) {
     if let e = CGEvent(mouseEventSource: source, mouseType: type,
                        mouseCursorPosition: pos, mouseButton: button) {
+      e.flags = modifierFlags
       e.post(tap: .cghidEventTap)
+    }
+  }
+
+  /// Maps a USB HID modifier usage to its CGEventFlags bit.
+  static func modifierFlag(_ usage: Int) -> CGEventFlags? {
+    switch usage {
+    case 0xE0, 0xE4: return .maskControl
+    case 0xE1, 0xE5: return .maskShift
+    case 0xE2, 0xE6: return .maskAlternate
+    case 0xE3, 0xE7: return .maskCommand
+    default: return nil
     }
   }
 

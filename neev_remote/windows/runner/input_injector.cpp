@@ -91,6 +91,10 @@ double GetNum(const flutter::EncodableMap& map, const char* key) {
   return 0.0;
 }
 
+// Last pointer position (normalized) so clicks can reposition atomically.
+double gLastNx = 0.0;
+double gLastNy = 0.0;
+
 void SendMouseAbsolute(double nx, double ny, DWORD flags, DWORD mouseData) {
   INPUT in = {};
   in.type = INPUT_MOUSE;
@@ -107,19 +111,20 @@ void HandleInject(const flutter::EncodableMap& args) {
   if (!kind) return;
 
   if (*kind == "mv") {
-    SendMouseAbsolute(GetNum(args, "x"), GetNum(args, "y"),
+    gLastNx = GetNum(args, "x");
+    gLastNy = GetNum(args, "y");
+    SendMouseAbsolute(gLastNx, gLastNy,
                       MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0);
   } else if (*kind == "btn") {
     int button = Find<int>(args, "b") ? *Find<int>(args, "b") : 0;
     bool down = Find<bool>(args, "d") && *Find<bool>(args, "d");
-    DWORD flags = 0;
-    if (button == 1) flags = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
-    else if (button == 2) flags = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
-    else flags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
-    INPUT in = {};
-    in.type = INPUT_MOUSE;
-    in.mi.dwFlags = flags;
-    SendInput(1, &in, sizeof(INPUT));
+    DWORD btnFlag = 0;
+    if (button == 1) btnFlag = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+    else if (button == 2) btnFlag = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+    else btnFlag = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+    // Reposition + click atomically so the click lands under the cursor.
+    SendMouseAbsolute(gLastNx, gLastNy,
+                      MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | btnFlag, 0);
   } else if (*kind == "whl") {
     double dy = GetNum(args, "dy");
     if (dy != 0.0) {
