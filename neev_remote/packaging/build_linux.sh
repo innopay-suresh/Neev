@@ -12,7 +12,9 @@ OUT="dist"
 mkdir -p "$OUT"
 
 echo "==> flutter build linux --release"
-flutter build linux --release
+RELAY_DEFINE=""
+[ -n "${RELAY_URL:-}" ] && RELAY_DEFINE="--dart-define=RELAY_URL=$RELAY_URL"
+flutter build linux --release $RELAY_DEFINE
 
 BUNDLE="build/linux/x64/release/bundle"
 [ -d "$BUNDLE" ] || { echo "bundle not found at $BUNDLE"; exit 1; }

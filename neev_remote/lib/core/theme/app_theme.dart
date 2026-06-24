@@ -1,19 +1,19 @@
 import 'package:flutter/material.dart';
 
-/// App color palette based on SPEC.md
+/// App color palette — light theme.
 class AppColors {
   static const Color primary = Color(0xFF2563EB);
   static const Color primaryDark = Color(0xFF1D4ED8);
   static const Color secondary = Color(0xFF64748B);
-  static const Color background = Color(0xFF0F172A);
-  static const Color surface = Color(0xFF1E293B);
-  static const Color surfaceLight = Color(0xFF334155);
-  static const Color textPrimary = Color(0xFFF8FAFC);
-  static const Color textSecondary = Color(0xFF94A3B8);
-  static const Color success = Color(0xFF22C55E);
-  static const Color warning = Color(0xFFF59E0B);
-  static const Color error = Color(0xFFEF4444);
-  static const Color border = Color(0xFF475569);
+  static const Color background = Color(0xFFF5F7FA);
+  static const Color surface = Color(0xFFFFFFFF);
+  static const Color surfaceLight = Color(0xFFEEF2F7);
+  static const Color textPrimary = Color(0xFF0F172A);
+  static const Color textSecondary = Color(0xFF64748B);
+  static const Color success = Color(0xFF16A34A);
+  static const Color warning = Color(0xFFD97706);
+  static const Color error = Color(0xFFDC2626);
+  static const Color border = Color(0xFFE2E8F0);
 }
 
 /// App typography
@@ -62,21 +62,21 @@ class AppRadius {
   static const double lg = 12;
 }
 
-/// Dark theme for the app
-ThemeData darkTheme() {
+/// Light theme for the app.
+ThemeData lightTheme() {
   return ThemeData(
     useMaterial3: true,
-    brightness: Brightness.dark,
+    brightness: Brightness.light,
     scaffoldBackgroundColor: AppColors.background,
-    colorScheme: const ColorScheme.dark(
+    colorScheme: const ColorScheme.light(
       primary: AppColors.primary,
       secondary: AppColors.secondary,
       surface: AppColors.surface,
       error: AppColors.error,
-      onPrimary: AppColors.textPrimary,
-      onSecondary: AppColors.textPrimary,
+      onPrimary: Colors.white,
+      onSecondary: Colors.white,
       onSurface: AppColors.textPrimary,
-      onError: AppColors.textPrimary,
+      onError: Colors.white,
     ),
     appBarTheme: const AppBarTheme(
       backgroundColor: AppColors.surface,
@@ -96,7 +96,7 @@ ThemeData darkTheme() {
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: AppColors.primary,
-        foregroundColor: AppColors.textPrimary,
+        foregroundColor: Colors.white,
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.lg,
           vertical: AppSpacing.md,

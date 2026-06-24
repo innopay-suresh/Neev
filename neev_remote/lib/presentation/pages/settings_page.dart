@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -24,12 +25,7 @@ class SettingsPage extends ConsumerWidget {
               // Connection Settings
               _buildSectionHeader('Connection'),
               _buildSettingsCard([
-                _buildTextField(
-                  context,
-                  label: 'Relay Server URL',
-                  value: settings.relayUrl,
-                  onChanged: (v) => ref.read(settingsProvider.notifier).updateRelayUrl(v),
-                ),
+                const _RelayUrlField(),
                 const Divider(),
                 _buildToggle(
                   label: 'View Only Mode',
@@ -124,43 +120,6 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
-  Widget _buildTextField(
-    BuildContext context, {
-    required String label,
-    required String value,
-    required ValueChanged<String> onChanged,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: AppTypography.body),
-              ],
-            ),
-          ),
-          SizedBox(
-            width: 300,
-            child: TextField(
-              controller: TextEditingController(text: value),
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                  vertical: AppSpacing.sm,
-                ),
-              ),
-              onSubmitted: onChanged,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildToggle({
     required String label,
     required String subtitle,
@@ -237,6 +196,92 @@ class SettingsPage extends ConsumerWidget {
         children: [
           Text(label, style: AppTypography.body),
           Text(value, style: AppTypography.body.copyWith(color: AppColors.textSecondary)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Relay server URL field with an explicit Save button. Persists via
+/// SharedPreferences and reconnects the host with the new address.
+class _RelayUrlField extends ConsumerStatefulWidget {
+  const _RelayUrlField();
+
+  @override
+  ConsumerState<_RelayUrlField> createState() => _RelayUrlFieldState();
+}
+
+class _RelayUrlFieldState extends ConsumerState<_RelayUrlField> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller =
+        TextEditingController(text: ref.read(settingsProvider).relayUrl);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final url = _controller.text.trim();
+    if (url.isEmpty) return;
+    ref.read(settingsProvider.notifier).updateRelayUrl(url);
+    // Reconnect the host with the new server address so it takes effect now.
+    final service = ref.read(remoteServiceProvider);
+    if (service.isHosting || service.hostStatus == HostStatus.error) {
+      try {
+        await service.startHosting(relayUrl: url);
+      } catch (_) {}
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Relay URL saved'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Relay Server URL', style: AppTypography.body),
+          const SizedBox(height: AppSpacing.xs),
+          const Text(
+            'Address of your signaling server, e.g. ws://192.168.1.10:8080/ws',
+            style: AppTypography.caption,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: 'ws://server-ip:8080/ws',
+                  ),
+                  onSubmitted: (_) => _save(),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              ElevatedButton.icon(
+                onPressed: _save,
+                icon: const Icon(Icons.save, size: 18),
+                label: const Text('Save'),
+              ),
+            ],
+          ),
         ],
       ),
     );

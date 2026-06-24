@@ -13,7 +13,9 @@ OUT="dist"
 mkdir -p "$OUT"
 
 echo "==> flutter build macos --release"
-flutter build macos --release
+RELAY_DEFINE=""
+[ -n "${RELAY_URL:-}" ] && RELAY_DEFINE="--dart-define=RELAY_URL=$RELAY_URL"
+flutter build macos --release $RELAY_DEFINE
 
 APP_PATH="$(find build/macos/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)"
 [ -n "$APP_PATH" ] || { echo "build .app not found"; exit 1; }

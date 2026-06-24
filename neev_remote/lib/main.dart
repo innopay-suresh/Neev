@@ -18,7 +18,7 @@ class NeevRemoteApp extends StatelessWidget {
     return MaterialApp(
       title: 'Neev Remote',
       debugShowCheckedModeBanner: false,
-      theme: darkTheme(),
+      theme: lightTheme(),
       home: const ConnectPage(),
     );
   }

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +22,31 @@ class ConnectPage extends ConsumerStatefulWidget {
 class _ConnectPageState extends ConsumerState<ConnectPage> {
   final _idController = TextEditingController();
   final _passwordController = TextEditingController();
+  bool _autoStarted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // On desktop, start hosting automatically when the app opens so the
+    // machine is immediately reachable (service-like). The browser web build
+    // stays manual (each visitor shouldn't auto-share their screen).
+    if (!kIsWeb) {
+      Future.delayed(const Duration(milliseconds: 600), _autoStartHost);
+    }
+  }
+
+  Future<void> _autoStartHost() async {
+    if (_autoStarted || !mounted) return;
+    _autoStarted = true;
+    final service = ref.read(remoteServiceProvider);
+    if (service.isHosting) return;
+    final relayUrl = ref.read(settingsProvider).relayUrl;
+    try {
+      await service.startHosting(relayUrl: relayUrl);
+    } catch (_) {
+      // Surfaced on the Share card; user can fix the relay URL in Settings.
+    }
+  }
 
   @override
   void dispose() {

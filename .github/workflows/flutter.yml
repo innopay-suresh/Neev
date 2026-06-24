@@ -12,6 +12,9 @@ on:
 env:
   # Must provide Dart >= 3.10 (see neev_remote/pubspec.yaml).
   FLUTTER_VERSION: '3.38.5'
+  # Global signaling-server URL baked into every installer. Change this to your
+  # server's public address/IP. Per-machine override is available in Settings.
+  RELAY_URL: 'ws://10.81.20.67:8080/ws'
 
 jobs:
   # ---- Native desktop packages: installer + portable, built on each OS ----

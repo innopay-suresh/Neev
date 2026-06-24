@@ -14,7 +14,11 @@ $Out = "dist"
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Write-Host "==> flutter build windows --release"
-flutter build windows --release
+if ($env:RELAY_URL) {
+  flutter build windows --release "--dart-define=RELAY_URL=$($env:RELAY_URL)"
+} else {
+  flutter build windows --release
+}
 if ($LASTEXITCODE -ne 0) { throw "flutter build windows failed (exit $LASTEXITCODE)" }
 
 $ReleaseDir = "build\windows\x64\runner\Release"

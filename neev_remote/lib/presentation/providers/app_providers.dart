@@ -4,17 +4,27 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/services/remote_service.dart';
 
+/// Build-time global server URL, baked into every installer via
+///   flutter build <platform> --dart-define=RELAY_URL=ws://YOUR_SERVER_IP:8080/ws
+/// Empty when not provided.
+const String kBuiltInRelayUrl = String.fromEnvironment('RELAY_URL');
+
 /// The signaling server URL to use by default.
 ///
-/// On the web the app must dial the SAME origin it was served from — otherwise
-/// "localhost" resolves to the *viewer's* machine, not the server. On desktop
-/// there is no serving origin, so we fall back to localhost for dev.
+/// Priority:
+///  1. On web: the SAME origin the app was served from (so it always reaches
+///     the server that delivered it — never the viewer's own "localhost").
+///  2. A build-time `RELAY_URL` baked into the installer (global config).
+///  3. Dev fallback: localhost.
+///
+/// A per-machine override saved in Settings takes precedence over all of these.
 String defaultRelayUrl() {
   if (kIsWeb) {
     final base = Uri.base; // the page URL the app was loaded from
     final scheme = base.scheme == 'https' ? 'wss' : 'ws';
     return '$scheme://${base.authority}/ws';
   }
+  if (kBuiltInRelayUrl.isNotEmpty) return kBuiltInRelayUrl;
   return 'ws://localhost:8080/ws';
 }
 
