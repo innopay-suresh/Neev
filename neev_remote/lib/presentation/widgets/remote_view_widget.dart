@@ -161,14 +161,18 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
               focusNode: _focusNode,
               autofocus: true,
               onKeyEvent: _onKey,
-              child: MouseRegion(
-                cursor: SystemMouseCursors.none,
-                onHover: (e) => _onPointerMove(e.localPosition, size),
-                child: Listener(
-                  onPointerDown: (e) => _onPointerDown(e, size),
-                  onPointerMove: (e) => _onPointerMove(e.localPosition, size),
-                  onPointerUp: (_) => _onPointerUp(),
-                  onPointerSignal: _onPointerSignal,
+              child: Listener(
+                // opaque so pointer down/up fire over the (non-hit-testable)
+                // video texture — otherwise only hover worked and clicks were
+                // silently dropped.
+                behavior: HitTestBehavior.opaque,
+                onPointerHover: (e) => _onPointerMove(e.localPosition, size),
+                onPointerDown: (e) => _onPointerDown(e, size),
+                onPointerMove: (e) => _onPointerMove(e.localPosition, size),
+                onPointerUp: (_) => _onPointerUp(),
+                onPointerSignal: _onPointerSignal,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.none,
                   child: video,
                 ),
               ),

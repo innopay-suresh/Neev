@@ -50,9 +50,6 @@ class InputInjector {
     switch kind {
     case "mv":
       lastPos = point(args)
-      // Warp sets the exact absolute position (no pointer acceleration), then
-      // we post the matching move/drag event for app awareness.
-      CGWarpMouseCursorPosition(lastPos)
       let type: CGEventType = leftDown ? .leftMouseDragged
         : (rightDown ? .rightMouseDragged
         : (otherDown ? .otherMouseDragged : .mouseMoved))
