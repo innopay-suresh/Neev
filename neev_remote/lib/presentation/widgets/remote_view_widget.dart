@@ -31,6 +31,8 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
   final FocusNode _focusNode = FocusNode();
   bool _initialized = false;
   int _activeButton = 0;
+  final Stopwatch _moveClock = Stopwatch()..start();
+  int _lastMoveMs = -100;
 
   @override
   void initState() {
@@ -108,6 +110,10 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
   }
 
   void _onPointerMove(Offset local, Size size) {
+    // Throttle to ~60/s so fast movement doesn't flood the data channel.
+    final now = _moveClock.elapsedMilliseconds;
+    if (now - _lastMoveMs < 16) return;
+    _lastMoveMs = now;
     final pos = _normalize(local, size);
     if (pos != null) _emit(InputEvent.move(pos.dx, pos.dy));
   }

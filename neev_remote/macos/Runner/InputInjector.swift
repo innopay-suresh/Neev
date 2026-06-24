@@ -1,3 +1,4 @@
+import ApplicationServices
 import Cocoa
 import FlutterMacOS
 
@@ -27,6 +28,11 @@ class InputInjector {
     }
     // Retain the channel/injector for the process lifetime.
     InputInjector.retained = (channel, injector)
+
+    // Ask for Accessibility permission so injected clicks/keys reach other
+    // apps. Prompts once if not yet granted; no-op once the user allows it.
+    let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
+    _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
   }
 
   private static var retained: (FlutterMethodChannel, InputInjector)?
