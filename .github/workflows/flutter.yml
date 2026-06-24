@@ -39,14 +39,14 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
 
+      # Cache only the immutable package downloads. Caching .dart_tool/ causes
+      # a stale "build/native_assets/<os> not found" install failure on reruns.
       - name: Cache pub
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.pub-cache
-            neev_remote/.dart_tool
-          key: ${{ runner.os }}-flutter-${{ hashFiles('neev_remote/pubspec.lock') }}
-          restore-keys: ${{ runner.os }}-flutter-
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pubcache-${{ hashFiles('neev_remote/pubspec.lock') }}
+          restore-keys: ${{ runner.os }}-pubcache-
 
       - name: Install Linux deps
         if: matrix.platform == 'linux'
