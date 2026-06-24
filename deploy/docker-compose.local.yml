@@ -1,0 +1,7 @@
+services:
+  server:
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./deploy/config.local.yaml:/app/config.yaml:ro
+      - ./dist/packages:/app/downloads:ro

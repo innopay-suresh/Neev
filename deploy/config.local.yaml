@@ -1,0 +1,44 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  public_download_dir: "dist/packages"
+  tls_cert: ""
+  tls_key: ""
+  tls_client_ca: ""
+  tls_client_ca_key: ""
+  debug: true
+
+redis:
+  addr: "redis:6379"
+  db: 0
+  password: ""
+
+db:
+  dsn: "postgres://remote_agent:remote_agent@postgres:5432/remote_agent?sslmode=disable"
+
+turn:
+  public_ip: "127.0.0.1"
+  port: 3478
+  realm: "remote-agent.local"
+  auth_user: "agent"
+  auth_pass: "changeme"
+
+jwt:
+  secret: "CHANGE_ME"
+  expiry_hours: 24
+
+auth:
+  enabled: true
+  bootstrap_email: "admin@example.com"
+  bootstrap_password: "CHANGE_ME"
+  bootstrap_role: "admin"
+
+network:
+  stun_servers:
+    - "stun:stun.l.google.com:19302"
+    - "stun:stun1.l.google.com:19302"
+  turn_server: ""
+  relay_url: "ws://10.81.20.67:8081/ws"
+  enrollment_code: "change-me"
+  default_org_id: "company"
+  default_device_group: "fleet"

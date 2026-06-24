@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.neev.remoteagent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/RemoteAgent.app/Contents/MacOS/RemoteAgent</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>REMOTE_AGENT_CONFIG</key>
+        <string>/Library/Application Support/RemoteAgent/agent.env</string>
+        <key>NO_BROWSER</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardErrorPath</key>
+    <string>/tmp/remote-agent.err.log</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/remote-agent.out.log</string>
+</dict>
+</plist>

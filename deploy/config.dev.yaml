@@ -1,0 +1,47 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+  public_download_dir: "/app/downloads"
+  tls_client_ca: ""
+  tls_client_ca_key: ""
+  debug: true
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
+
+redis:
+  addr: redis:6379
+  password: ""
+  db: 0
+
+db:
+  dsn: postgres://remote_agent:remote_agent@postgres:5432/remote_agent?sslmode=disable
+
+turn:
+  public_ip: "10.81.20.67"   # Change to your server's public IP when exposing TURN publicly
+  port: 3478
+  realm: remote-agent.local
+  auth_user: agent
+  auth_pass: changeme_in_prod
+
+jwt:
+  secret: "dev_jwt_secret_CHANGE_IN_PROD"
+  expiry_hours: 24
+
+auth:
+  enabled: false
+  bootstrap_email: "admin@local"
+  bootstrap_password: "change-me"
+  bootstrap_role: "admin"
+
+network:
+  stun_servers:
+    - stun:stun.l.google.com:19302
+    - stun:stun1.l.google.com:19302
+  turn_server: "turn:10.81.20.67:3478"
+  relay_url: "ws://10.81.20.67:8080/ws"
+  enrollment_code: ""
+  default_org_id: "acme"
+  default_device_group: "engineering"

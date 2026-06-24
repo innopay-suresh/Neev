@@ -1,0 +1,55 @@
+.page { animation: fadeUp 0.25s ease forwards; }
+
+.layout { display: grid; grid-template-columns: 240px 1fr; gap: var(--space-5); align-items: start; }
+
+/* Left nav */
+.settingsNav { display: flex; flex-direction: column; gap: var(--space-1); position: sticky; top: 0; }
+
+.navItem {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-md);
+  text-align: left;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--t-fast);
+  border: 1px solid transparent;
+}
+.navItem:hover { background: var(--bg-hover); color: var(--text-primary); }
+.navItem.active { background: var(--accent-muted); color: var(--accent); border-color: var(--border-active); }
+.navItem svg { margin-top: 2px; flex-shrink: 0; }
+.navLabel { font-size: 13px; font-weight: 600; }
+.navDesc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* Panel */
+.panel { min-height: 400px; }
+
+.section { display: flex; flex-direction: column; gap: var(--space-5); }
+.sectionTitle { font-size: 15px; font-weight: 700; padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+
+/* Field groups */
+.group { display: flex; flex-direction: column; gap: var(--space-4); }
+
+.field { display: flex; flex-direction: column; gap: var(--space-1); }
+.fieldLabel { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.fieldDesc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.fieldHint { font-size: 11px; color: var(--text-muted); }
+
+.toggleRow { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.toggleRow span { flex: 1; }
+
+/* Toggle switch */
+.toggle { width: 40px; height: 22px; appearance: none; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius-full); position: relative; cursor: pointer; transition: background-color var(--t-fast), border-color var(--t-fast); flex-shrink: 0; }
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform var(--t-spring), background-color var(--t-fast);
+}
+.toggle:checked { background: var(--accent-muted); border-color: var(--accent); }
+.toggle:checked::after { transform: translateX(18px); background: var(--accent); }

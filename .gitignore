@@ -1,0 +1,64 @@
+# RemoteAgent .gitignore
+
+# --- Binaries & compiled output ---
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.pkg
+*.dmg
+*.deb
+*.zip
+vendor/
+go.sum
+
+# Build artifacts (Go + Flutter + web)
+dist/
+build/
+**/build/
+public/
+**/.dart_tool/
+**/ephemeral/
+**/node_modules/
+macos/Pods/
+**/Pods/
+
+# Prebuilt / runtime binaries scattered in the tree
+client/remote-agent-viewer
+client/build/
+web/dist_test/
+web/dist/
+bin/
+bin_agent/
+bin_agent_backup
+bin_server
+test_agent
+test_bounds
+remote-agent
+remote-agent-mac
+remote-agent-linux
+NeevRemote-Desktop-macOS
+downloads/
+flutter-downloads/
+agent/RemoteAgent-Host-*
+agent/remote-agent-*
+
+# Config with secrets / local runtime
+deploy/config.prod.yaml
+config.run.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs & misc dumps
+*.log
+objdump.txt
+build_server.err
+external_scan_103.txt

@@ -1,0 +1,57 @@
+#!/bin/bash
+set -euo pipefail
+
+PLIST="/Library/LaunchAgents/com.neev.remoteagent.plist"
+ENV_FILE="/Library/Application Support/RemoteAgent/agent.env"
+APP="/Applications/RemoteAgent.app"
+APP_BIN="$APP/Contents/MacOS/RemoteAgent"
+BIN="/usr/local/bin/remote-agent-mac"
+STATUS_APP="/Applications/RemoteAgent Status.app"
+STATUS_BIN="$STATUS_APP/Contents/MacOS/remote-agent-status"
+
+chown root:wheel "$PLIST"
+chmod 644 "$PLIST"
+chmod 755 "$APP_BIN"
+if [ -L "$BIN" ] || [ -f "$BIN" ]; then
+  rm -f "$BIN"
+fi
+ln -s "$APP_BIN" "$BIN"
+chown -h root:wheel "$BIN"
+if [ -d "$STATUS_APP" ]; then
+  chown -R root:wheel "$STATUS_APP"
+  chmod 755 "$STATUS_APP"
+  chmod 755 "$STATUS_BIN"
+fi
+if [ -d "$APP" ]; then
+  chown -R root:wheel "$APP"
+  chmod 755 "$APP"
+  chmod 755 "$APP_BIN"
+fi
+
+if [ -f "$ENV_FILE" ]; then
+  chown root:wheel "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+fi
+
+if command -v xattr >/dev/null 2>&1; then
+  xattr -dr com.apple.quarantine "$APP" >/dev/null 2>&1 || true
+  xattr -dr com.apple.quarantine "$BIN" >/dev/null 2>&1 || true
+  xattr -dr com.apple.quarantine "$PLIST" >/dev/null 2>&1 || true
+  xattr -dr com.apple.quarantine "$STATUS_APP" >/dev/null 2>&1 || true
+fi
+
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1 || true
+  codesign --force --sign - --timestamp=none "$STATUS_APP" >/dev/null 2>&1 || true
+fi
+
+console_user="$(stat -f %Su /dev/console 2>/dev/null || echo "")"
+console_uid="$(id -u "$console_user" 2>/dev/null || echo "")"
+if [ -n "$console_uid" ] && [ "$console_uid" != "0" ] && [ "$console_user" != "root" ] && [ "$console_user" != "loginwindow" ]; then
+  launchctl bootout "gui/$console_uid" "$PLIST" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$console_uid" "$PLIST" >/dev/null 2>&1 || true
+  launchctl enable "gui/$console_uid/com.neev.remoteagent" >/dev/null 2>&1 || true
+  launchctl kickstart -k "gui/$console_uid/com.neev.remoteagent" >/dev/null 2>&1 || true
+fi
+
+exit 0

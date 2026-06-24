@@ -1,0 +1,542 @@
+/* ConnectScreen.module.css — AnyDesk Premium Split Theme */
+
+.root {
+  min-height: 100vh;
+  display: flex;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 40px 24px;
+  background: linear-gradient(-45deg, #fff7ed, #ffedd5, #fed7aa, #fff1e6);
+  background-size: 400% 400%;
+  animation: gradientBG 15s ease infinite;
+  isolation: isolate;
+}
+
+@keyframes gradientBG {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.heroImage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.5;
+  object-fit: cover;
+  pointer-events: none;
+  animation: floatImg 8s ease-in-out infinite alternate;
+  z-index: 0;
+  mix-blend-mode: multiply;
+}
+
+@keyframes floatImg {
+  0% { transform: translateY(-10px) scale(1); }
+  100% { transform: translateY(10px) scale(1.02); }
+}
+
+/* Split Main Layout */
+.mainLayout {
+  display: flex;
+  gap: 28px;
+  width: 100%;
+  max-width: 1100px;
+  margin: auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* Left Sidebar */
+.sidebar {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+/* Right Content */
+.mainContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0; /* prevent layout overflow in nested flex grid */
+}
+
+/* Cards System */
+.logoCard, .thisDeskCard, .statusCard, .connectCard, .devicesSection {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: var(--r-md);
+  padding: 24px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.03), 0 0 0 1px rgba(255, 255, 255, 0.3) inset;
+}
+
+/* Logo Card Style */
+.logoCard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.logoIcon {
+  width: 42px; height: 42px;
+  background: linear-gradient(135deg, var(--col-accent), var(--col-accent-2));
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  box-shadow: 0 4px 12px var(--col-accent-glow);
+  flex-shrink: 0;
+}
+
+.logoTitle {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--col-text);
+}
+.logoVersion {
+  font-size: 11px;
+  color: var(--col-text-dim);
+  font-family: var(--mono);
+  display: block;
+}
+
+/* This Desk Card */
+.thisDeskCard {
+  display: flex;
+  flex-direction: column;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.cardHeader h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--col-text);
+}
+
+.dotIndicator {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--col-accent);
+}
+
+.helpText {
+  font-size: 12px;
+  color: var(--col-text-dim);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+.localField {
+  display: flex;
+  flex-direction: column;
+}
+
+.label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--col-text-muted);
+  letter-spacing: 0.8px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.localIDDisplay {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--col-accent-dark);
+  letter-spacing: 0.05em;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: var(--t-fast);
+}
+.localIDDisplay:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: var(--col-accent);
+}
+
+.copyBadge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--col-text-dim);
+  background: var(--col-bg2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: var(--t-fast);
+}
+.localIDDisplay:hover .copyBadge {
+  background: var(--col-accent);
+  color: white;
+}
+
+.localPassDisplay {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--col-text);
+  letter-spacing: 0.1em;
+}
+
+/* Status & Quick Settings Card */
+.statusCard {
+  padding: 18px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.statusHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.statusDot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+}
+.statusOnline {
+  background: var(--col-success);
+  box-shadow: 0 0 6px var(--col-success);
+}
+.statusOffline {
+  background: var(--col-danger);
+  box-shadow: 0 0 6px var(--col-danger);
+}
+.statusText {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--col-text);
+}
+.relayURLText {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--col-text-muted);
+  margin-top: 4px;
+}
+
+.settingsToggleBtn {
+  margin-top: 14px;
+  background: transparent;
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--col-text-dim);
+  cursor: pointer;
+  transition: var(--t-fast);
+  text-align: center;
+}
+.statusActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.logsToggleBtn {
+  flex: 0 0 auto;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--col-accent-dark);
+  cursor: pointer;
+  transition: var(--t-fast);
+}
+.logsToggleBtn:hover {
+  background: rgba(99, 102, 241, 0.18);
+  color: var(--col-accent);
+  border-color: rgba(99, 102, 241, 0.35);
+}
+.settingsToggleBtn:hover {
+  background: var(--col-surface2);
+  color: var(--col-text);
+  border-color: var(--col-text-dim);
+}
+
+.settingsPanel {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.input {
+  width: 100%;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-sm);
+  color: var(--col-text);
+  font-size: 13px;
+  outline: none;
+  transition: var(--t-fast);
+}
+.input:focus {
+  border-color: var(--col-accent);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px var(--col-accent-glow);
+}
+
+.saveSettingsBtn {
+  margin-top: 12px;
+  background: var(--col-accent);
+  color: white;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--t-fast);
+}
+.saveSettingsBtn:hover {
+  background: var(--col-accent-dark);
+}
+
+/* Right: Connection controls */
+.connectCard {
+  display: flex;
+  flex-direction: column;
+}
+
+.connectHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--col-accent);
+  margin-bottom: 6px;
+}
+.connectHeader h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--col-text);
+  margin: 0;
+}
+.connectDesc {
+  font-size: 12px;
+  color: var(--col-text-dim);
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.inputRow {
+  display: flex;
+  gap: 20px;
+}
+.inputCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.connectInput {
+  width: 100%;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-sm);
+  color: var(--col-text);
+  font-size: 14px;
+  outline: none;
+  transition: var(--t-fast);
+}
+.connectInput:focus {
+  border-color: var(--col-accent);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px var(--col-accent-glow);
+}
+
+.idInput {
+  width: 100%;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-sm);
+  color: var(--col-text);
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: center;
+  outline: none;
+  transition: var(--t-fast);
+}
+.idInput:focus {
+  border-color: var(--col-accent);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px var(--col-accent-glow);
+}
+.idInputError {
+  border-color: var(--col-danger) !important;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15) !important;
+}
+
+.errorBox {
+  background: rgba(220, 38, 38, 0.06);
+  border: 1px solid rgba(220, 38, 38, 0.2);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  color: var(--col-danger);
+  font-size: 13px;
+  margin-top: 14px;
+}
+
+.btnPrimary {
+  width: 100%;
+  margin-top: 20px;
+  padding: 13px;
+  background: linear-gradient(135deg, var(--col-accent), var(--col-accent-2));
+  border: none;
+  border-radius: var(--r-sm);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: var(--t-fast);
+  box-shadow: 0 4px 14px var(--col-accent-glow);
+}
+.btnPrimary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.btnPrimary:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+}
+
+.btnLoading {
+  opacity: 0.8;
+}
+
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Devices Section */
+.devicesSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.devicesTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--col-text);
+  margin-bottom: 14px;
+}
+
+.devicesGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.deviceCard {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-md);
+  padding: 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: var(--t-fast);
+  position: relative;
+  overflow: hidden;
+}
+.deviceCard:hover {
+  background: #ffffff;
+  border-color: var(--col-accent);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
+}
+
+.deviceCardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.deviceOS {
+  font-size: 18px;
+}
+.deviceStatusDot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+}
+
+.deviceCardBody {
+  display: flex;
+  flex-direction: column;
+}
+.deviceName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--col-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.deviceHostID {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--col-text-muted);
+  margin-top: 2px;
+}
+
+.deviceCardFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--col-accent);
+  margin-top: 4px;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: var(--t-fast);
+}
+.deviceCard:hover .deviceCardFooter {
+  opacity: 1;
+  transform: translateX(0);
+}

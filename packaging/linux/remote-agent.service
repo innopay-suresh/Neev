@@ -1,0 +1,16 @@
+[Unit]
+Description=Remote Agent Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/remote-agent/remote-agent
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+EnvironmentFile=-/etc/remote-agent/agent.env
+
+[Install]
+WantedBy=multi-user.target

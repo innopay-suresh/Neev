@@ -1,0 +1,504 @@
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes popIn {
+  0%   { opacity: 0; transform: scale(0.85); }
+  70%  { transform: scale(1.05); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* SessionView.module.css */
+
+.root {
+  position: relative;
+  width: 100%; height: 100vh;
+  background: #000;
+  outline: none;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* Placeholder shown before stream arrives */
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--col-text-dim);
+  background: var(--col-bg);
+}
+.placeholderIcon {
+  color: var(--col-border2);
+  animation: breathe 3s ease-in-out infinite;
+}
+.placeholder p {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+.placeholderDots {
+  display: flex;
+  gap: 6px;
+}
+.placeholderDot {
+  width: 6px; height: 6px;
+  background: var(--col-accent);
+  border-radius: 50%;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────── */
+.toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 252, 248, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(249,115,22,0.15);
+  border-radius: 100px;
+  padding: 5px 8px;
+  box-shadow: 0 4px 24px rgba(249,115,22,0.12), 0 1px 4px rgba(0,0,0,0.06);
+  z-index: 100;
+  pointer-events: auto;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.toolbarLeft { display: flex; align-items: center; }
+.toolbarCenter { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
+.toolbarRight { display: flex; align-items: center; gap: 4px; }
+
+.agentBadge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(249,115,22,0.1);
+  border: 1px solid rgba(249,115,22,0.2);
+  border-radius: 100px;
+  padding: 4px 10px;
+  color: var(--col-accent);
+  font-size: 12px;
+}
+
+.agentIDText {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+.statBadge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 3px 8px;
+  border-radius: 100px;
+  background: rgba(249,115,22,0.06);
+}
+
+.connectionBadge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 3px 8px;
+  border-radius: 100px;
+  background: rgba(249,115,22,0.06);
+}
+
+/* Toolbar buttons */
+.toolBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: rgba(249,115,22,0.06);
+  border: 1px solid rgba(249,115,22,0.12);
+  border-radius: 100px;
+  color: var(--col-text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  transition: var(--t-fast);
+}
+.toolBtn:hover {
+  background: rgba(249,115,22,0.14);
+  border-color: rgba(249,115,22,0.25);
+  color: var(--col-accent-dark);
+  transform: translateY(-1px);
+}
+
+.toolBtnDanger {
+  color: var(--col-danger);
+  border-color: rgba(239,68,68,0.2);
+  background: rgba(239,68,68,0.06);
+}
+.toolBtnDanger:hover {
+  background: rgba(239,68,68,0.15);
+  border-color: rgba(239,68,68,0.4);
+  color: #fca5a5;
+}
+
+/* Connection quality indicator dot */
+.qualityDot {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+  animation: pulse 2s ease-in-out infinite;
+  z-index: 10;
+}
+
+.alwaysVisibleDisconnect {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+}
+
+/* ── Chat Drawer ─────────────────────────────────────────────────────────── */
+.chatDrawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 320px;
+  height: 100vh;
+  background: rgba(10, 15, 30, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  z-index: 200;
+  box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+  cursor: default;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.chatHeader h4 {
+  margin: 0;
+  font-size: 14px;
+  color: #ffffff;
+  font-weight: 500;
+}
+.chatHeader button {
+  background: none;
+  border: none;
+  color: var(--col-text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+.chatHeader button:hover {
+  background: rgba(255,255,255,0.1);
+  color: #ffffff;
+}
+
+.chatBody {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.chatNotice {
+  font-size: 12px;
+  color: var(--col-text-dim);
+  background: rgba(255,255,255,0.05);
+  padding: 10px;
+  border-radius: 8px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.chatForm {
+  padding: 16px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  gap: 8px;
+}
+
+.chatInput {
+  flex: 1;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: #ffffff;
+  font-size: 13px;
+  outline: none;
+  transition: var(--t-fast);
+}
+.chatInput:focus {
+  border-color: var(--col-accent);
+}
+
+.chatSendBtn {
+  background: var(--col-accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--t-fast);
+}
+.chatSendBtn:hover {
+  background: var(--col-accent-hover, #4f46e5);
+}
+
+/* Chat bubble list styles */
+.chatMsgList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.chatBubble {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  max-width: 85%;
+  word-wrap: break-word;
+  line-height: 1.4;
+}
+
+.chatBubbleSelf {
+  align-self: flex-end;
+  background: var(--col-accent);
+  color: white;
+  border-bottom-right-radius: 2px;
+}
+
+.chatBubblePeer {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  border-bottom-left-radius: 2px;
+}
+
+/* ── Logs Drawer ─────────────────────────────────────────────────────────── */
+.logsDrawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 460px; /* wider than chat for layout readability */
+  height: 100vh;
+  background: rgba(10, 15, 30, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  z-index: 200;
+  box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+  cursor: default;
+}
+
+.logsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.logsTitleArea {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+}
+
+.logsTitleArea h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.logsHeader button {
+  background: none;
+  border: none;
+  color: var(--col-text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: var(--t-fast);
+}
+
+.logsHeader button:hover {
+  background: rgba(255,255,255,0.1);
+  color: #ffffff;
+}
+
+.logsFilters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+}
+
+.filterGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--col-text-dim);
+}
+
+.filterGroup select {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: #fff;
+  font-size: 12px;
+  outline: none;
+}
+
+.filterGroup select option {
+  color: #000;
+}
+
+.clearBtn {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--col-text-dim);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: var(--t-fast);
+}
+
+.clearBtn:hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.logsBody {
+  flex: 1;
+  padding: 10px 0;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.logsList {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+}
+
+.logRow {
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  line-height: 1.5;
+  gap: 10px;
+  transition: background-color 0.1s ease;
+}
+
+.logRow:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.logTime {
+  color: var(--col-text-dim);
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.logSource {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  min-width: 80px;
+  text-align: center;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+}
+
+.sourceViewer {
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.sourceAgent {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+
+.logMessage {
+  flex: 1;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Severity styles */
+.logInfo .logMessage {
+  color: #e2e8f0;
+}
+
+.logWarn {
+  background: rgba(245, 158, 11, 0.02);
+}
+.logWarn .logMessage {
+  color: #fbd38d;
+}
+.logWarn .logTime {
+  color: #f6ad55;
+}
+
+.logError {
+  background: rgba(239, 68, 68, 0.04);
+}
+.logError .logMessage {
+  color: #feb2b2;
+}
+.logError .logTime {
+  color: #fc8181;
+}

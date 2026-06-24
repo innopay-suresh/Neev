@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+
+case "${1:-remove}" in
+  remove|upgrade|deconfigure)
+    systemctl stop remote-agent.service >/dev/null 2>&1 || true
+    ;;
+esac
+
+exit 0

@@ -1,0 +1,161 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Build Server
+        run: |
+          cd server
+          go build -ldflags "-s -w" -o remote-agent-server .
+
+      - name: Build Web App
+        run: |
+          cd web
+          npm install
+          npm run build
+
+      - name: Archive Server
+        run: |
+          mkdir -p dist/server
+          cp server/remote-agent-server dist/server/
+          cp -r web/dist dist/server/public
+          tar -czvf remote-agent-server-linux-amd64.tar.gz -C dist server
+
+      - name: Upload Server Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: server-linux
+          path: remote-agent-server-linux-amd64.tar.gz
+
+  build-agent-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Install MSYS2 for CGO
+        uses: msys2/setup-msys2@v2
+        with:
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y
+
+      - name: Build Agent
+        shell: msys2 {0}
+        run: |
+          cd agent
+          go build -ldflags "-s -w -H=windowsgui" -o remote-agent.exe .
+
+      - name: Build Windows Installer
+        shell: pwsh
+        run: |
+          $env:RELAY_URL = "wss://your-domain/ws"
+          $env:ENROLLMENT_CODE = "change-me"
+          $env:ORG_ID = "company"
+          $env:DEVICE_GROUP = "fleet"
+          & .\scripts\release-packages.ps1 -AgentBinary .\agent\remote-agent.exe -Version $env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows Agent Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: agent-windows
+          path: dist/packages/RemoteAgentInstaller.exe
+
+  build-agent-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Build Agent
+        run: |
+          cd agent
+          go build -ldflags "-s -w" -o remote-agent-mac .
+
+      - name: Build Mac Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}" \
+          RELAY_URL="wss://your-domain/ws" \
+          ENROLLMENT_CODE="change-me" \
+          ORG_ID="company" \
+          DEVICE_GROUP="fleet" \
+          ./scripts/release-packages.sh mac
+        shell: bash
+
+      - name: Upload Mac Agent Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: agent-mac
+          path: dist/packages/*.pkg
+
+  build-agent-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Build Agent
+        run: |
+          cd agent
+          go build -ldflags "-s -w" -o remote-agent .
+
+      - name: Build Linux Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}" \
+          RELAY_URL="wss://your-domain/ws" \
+          ENROLLMENT_CODE="change-me" \
+          ORG_ID="company" \
+          DEVICE_GROUP="fleet" \
+          ./scripts/release-packages.sh linux
+        shell: bash
+
+      - name: Upload Linux Package Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: agent-linux
+          path: dist/packages/*.deb
+
+  release:
+    needs: [build-server, build-agent-linux, build-agent-windows, build-agent-mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v3
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            server-linux/remote-agent-server-linux-amd64.tar.gz
+            agent-linux/*.deb
+            agent-windows/RemoteAgentInstaller.exe
+            agent-mac/*.pkg

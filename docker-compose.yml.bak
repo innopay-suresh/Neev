@@ -1,0 +1,96 @@
+version: "3.9"
+
+services:
+  # ─── Redis ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── PostgreSQL ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: remote_agent
+      POSTGRES_USER: remote_agent
+      POSTGRES_PASSWORD: remote_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./server/db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remote_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── coturn TURN/STUN Server ─────────────────────────────────
+  turn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/udp"   # TURNS (TLS)
+      - "5349:5349/tcp"
+      - "49160-49200:49160-49200/udp"  # media relay port range
+    volumes:
+      - ./deploy/turnserver.conf:/etc/turnserver.conf:ro
+    environment:
+      - TURN_PUBLIC_IP=${PUBLIC_IP:-127.0.0.1}
+    command: sh -c "turnserver -c /etc/turnserver.conf --external-ip=$${TURN_PUBLIC_IP}"
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_uclient -T 127.0.0.1 2>/dev/null && echo ok"]
+      interval: 30s
+      retries: 3
+
+  # ─── Signaling Server ───────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      TURN_PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+    volumes:
+      - ./deploy/config.dev.yaml:/app/config.yaml:ro
+      - ./dist/packages:/app/downloads:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health | grep ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Web Viewer / Dashboard (dev mode) ──────────────────────
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./web:/app
+    ports:
+      - "8081:5173"
+    command: sh -c "npm install && npm run dev -- --host"
+    environment: []
+
+volumes:
+  redis_data:
+  postgres_data:

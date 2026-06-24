@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "name": "neev-remote",
+  "outputfilename": "neev-remote",
+  "frontend:dir": "frontend",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Neev Project",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Neev",
+    "productName": "Neev Remote",
+    "productVersion": "1.0.0",
+    "copyright": "2025 Neev Project",
+    "comments": "Cross-platform remote desktop agent"
+  },
+  "build": {
+    "windows": {
+      "icon": "build/appicon.ico"
+    },
+    "darwin": {
+      "icon": "build/appicon.icns",
+      "info_plist_overrides": {
+        "NSScreenCaptureUsageDescription": "RemoteAgent needs screen recording permission to display remote screens.",
+        "NSAccessibilityUsageDescription": "RemoteAgent needs accessibility permission to forward keyboard and mouse events."
+      }
+    },
+    "linux": {
+      "icon": "build/appicon.png"
+    }
+  }
+}

@@ -1,0 +1,144 @@
+.overlay {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 320px;
+  max-height: 400px;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  z-index: 9999;
+  overflow: hidden;
+  font-family: var(--font);
+}
+
+.header {
+  padding: 12px 16px;
+  background: var(--col-surface2);
+  border-bottom: 1px solid var(--col-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--col-text);
+}
+
+.header button {
+  background: none;
+  border: none;
+  color: var(--col-text-dim);
+  cursor: pointer;
+}
+
+.header button:hover {
+  color: var(--col-text);
+}
+
+.body {
+  padding: 16px;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 250px;
+  background: var(--col-bg);
+}
+
+.bubble {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  max-width: 85%;
+  word-wrap: break-word;
+}
+
+.bubbleSelf {
+  align-self: flex-end;
+  background: var(--col-accent);
+  color: white;
+  border-bottom-right-radius: 2px;
+}
+
+.bubbleAdmin {
+  align-self: flex-start;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  color: var(--col-text);
+  border-bottom-left-radius: 2px;
+}
+
+.footer {
+  display: flex;
+  padding: 12px;
+  background: var(--col-surface);
+  border-top: 1px solid var(--col-border);
+  gap: 8px;
+}
+
+.footer input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-sm);
+  outline: none;
+  font-family: var(--font);
+}
+
+.footer input:focus {
+  border-color: var(--col-accent);
+}
+
+.footer button {
+  background: var(--col-accent);
+  color: white;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fab {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: var(--col-accent);
+  color: white;
+  border: none;
+  box-shadow: 0 4px 12px rgba(79,142,247,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 9999;
+  transition: transform 0.2s ease;
+}
+
+.fab:hover {
+  transform: scale(1.05);
+}
+
+.badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  background: var(--col-danger, #ef4444);
+  color: white;
+  font-size: 11px;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 2px solid var(--col-bg);
+}
