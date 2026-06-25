@@ -106,7 +106,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
     _focusNode.requestFocus();
     _activeButton = _buttonFrom(e.buttons);
     _emit(InputEvent.move(pos.dx, pos.dy));
-    _emit(InputEvent.button(_activeButton, true));
+    _emit(InputEvent.button(_activeButton, true, x: pos.dx, y: pos.dy));
   }
 
   void _onPointerMove(Offset local, Size size) {
@@ -118,7 +118,12 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
     if (pos != null) _emit(InputEvent.move(pos.dx, pos.dy));
   }
 
-  void _onPointerUp() => _emit(InputEvent.button(_activeButton, false));
+  void _onPointerUp(Offset local, Size size) {
+    // Always release the active button, even if the pointer was lifted outside
+    // the video rect — otherwise the host's button stays stuck down.
+    final pos = _normalize(local, size);
+    _emit(InputEvent.button(_activeButton, false, x: pos?.dx, y: pos?.dy));
+  }
 
   void _onPointerSignal(PointerSignalEvent e) {
     if (e is PointerScrollEvent) {
@@ -129,11 +134,17 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     final usage = event.physicalKey.usbHidUsage;
     if (usage == 0) return KeyEventResult.ignored;
-    if (event is KeyDownEvent) {
-      _emit(InputEvent.key(usage, true));
+    // Flutter packs the USB HID *usage page* into the upper 16 bits (the
+    // keyboard page is 0x07, so e.g. KeyA == 0x00070004). Every native host
+    // maps the bare usage code, so strip the page before sending — otherwise
+    // no key ever matches and typing silently does nothing.
+    final hid = usage & 0xFFFF;
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      // Forward auto-repeat as additional downs so holding a key repeats it.
+      _emit(InputEvent.key(hid, true));
       return KeyEventResult.handled;
     } else if (event is KeyUpEvent) {
-      _emit(InputEvent.key(usage, false));
+      _emit(InputEvent.key(hid, false));
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -175,7 +186,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
                 onPointerHover: (e) => _onPointerMove(e.localPosition, size),
                 onPointerDown: (e) => _onPointerDown(e, size),
                 onPointerMove: (e) => _onPointerMove(e.localPosition, size),
-                onPointerUp: (_) => _onPointerUp(),
+                onPointerUp: (e) => _onPointerUp(e.localPosition, size),
                 onPointerSignal: _onPointerSignal,
                 child: MouseRegion(
                   cursor: SystemMouseCursors.none,

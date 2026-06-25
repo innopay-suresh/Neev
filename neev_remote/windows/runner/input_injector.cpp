@@ -6,10 +6,12 @@
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
 
+#include <condition_variable>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
-#include <atomic>
 
 namespace {
 
@@ -151,17 +153,60 @@ void HandleInject(const flutter::EncodableMap& args) {
   }
 }
 
-// Called on the Flutter platform thread (safe for Flutter API calls).
+// Single background worker that drains a FIFO queue of input events.
+//
+// Why a dedicated serial worker (and not a thread per event):
+//   * SendInput can block briefly, so it must run off the Flutter platform
+//     thread to avoid stalling the Dart event loop.
+//   * Events MUST be applied in the exact order they were received. Spawning a
+//     thread per event let a button-up overtake its button-down, leaving the
+//     remote mouse button stuck down — the "click and everything freezes" bug.
+//   * gLastNx/gLastNy are only ever touched by this one thread, so the
+//     last-position fallback needs no extra locking.
+class InjectWorker {
+ public:
+  InjectWorker() : thread_([this] { Run(); }) {}
+
+  void Post(flutter::EncodableMap args) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      queue_.push_back(std::move(args));
+    }
+    cv_.notify_one();
+  }
+
+ private:
+  void Run() {
+    for (;;) {
+      flutter::EncodableMap args;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return !queue_.empty(); });
+        args = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      HandleInject(args);
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::deque<flutter::EncodableMap> queue_;
+  std::thread thread_;
+};
+
+// Leaked intentionally: the worker lives for the whole process and the joinless
+// thread must outlive any caller.
+InjectWorker& Worker() {
+  static InjectWorker* worker = new InjectWorker();
+  return *worker;
+}
+
+// Called on the Flutter platform thread. Copies the event into the queue and
+// returns immediately; the worker applies it in order. The Dart side does not
+// await a reply (fire-and-forget).
 void InjectAsync(const flutter::EncodableMap& args) {
-  // Deep-copy the map before passing to the background thread so there is
-  // no data race with the main thread.
-  auto argsCopy = std::make_shared<flutter::EncodableMap>(args);
-  std::thread([argsCopy]() {
-    HandleInject(*argsCopy);
-    // Result Success() is NOT called — the Dart side does not wait for a
-    // reply from the input channel (fire-and-forget).  This avoids any
-    // thread-safety issues with the Flutter MethodResult API.
-  }).detach();
+  Worker().Post(args);
 }
 
 }  // namespace

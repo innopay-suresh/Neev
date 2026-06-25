@@ -18,21 +18,39 @@ class InputInjector {
   /// Checked lazily and cached to avoid repeated syscalls.
   private var hasAccessibility: Bool? = nil
 
+  // Double-click tracking. macOS only opens Finder items / selects words when
+  // the click-state field advances (1 → 2 → 3) for rapid clicks at the same
+  // spot, so we replicate the OS's own detection from the event stream.
+  private var clickState: Int64 = 1
+  private var lastClickTime: TimeInterval = 0
+  private var lastClickPos = CGPoint.zero
+  private var lastClickButton: CGMouseButton = .left
+  private let doubleClickInterval: TimeInterval
+
+  // Serial queue: CGEvent posting can block, which must never stall the Flutter
+  // platform thread, but injection MUST stay strictly ordered — a button-up
+  // racing ahead of its button-down would leave the remote button stuck down
+  // (the classic "click and everything freezes" symptom).
+  private static let injectQueue = DispatchQueue(
+    label: "in.innopay.neev_remote.input", qos: .userInteractive)
+
+  init(doubleClickInterval: TimeInterval) {
+    self.doubleClickInterval = doubleClickInterval
+  }
+
   static func register(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(
       name: "neev_remote/input", binaryMessenger: messenger)
-    let injector = InputInjector()
+    // Read the user's double-click speed once, here on the main thread.
+    let injector = InputInjector(
+      doubleClickInterval: NSEvent.doubleClickInterval)
     channel.setMethodCallHandler { call, result in
       if call.method == "inject", let args = call.arguments as? [String: Any] {
-        // Dispatch to a background queue so that a blocking CGEvent call
-        // cannot freeze the Flutter Dart event loop.  The result callback is
-        // invoked asynchronously after the injection attempt completes.
-        DispatchQueue.global(qos: .userInteractive).async {
-          injector.inject(args)
-          DispatchQueue.main.async {
-            result(nil)
-          }
-        }
+        // Hand off to the serial queue and reply immediately. The Dart side
+        // fires injection events and does not await the reply, so returning now
+        // keeps the Flutter platform thread responsive while preserving order.
+        injectQueue.async { injector.inject(args) }
+        result(nil)
       } else {
         result(FlutterMethodNotImplemented)
       }
@@ -69,6 +87,18 @@ class InputInjector {
     return CGPoint(x: nx * Double(size.width), y: ny * Double(size.height))
   }
 
+  /// Returns the event's position only when it actually carries one. Button
+  /// events may omit x/y (e.g. a release outside the video); returning nil lets
+  /// the caller fall back to the last known position instead of clicking (0,0)
+  /// — which on macOS is the top-left corner and opens the Apple menu.
+  private func pointIfPresent(_ args: [String: Any]) -> CGPoint? {
+    guard let nx = args["x"] as? Double, let ny = args["y"] as? Double else {
+      return nil
+    }
+    let size = screenSize()
+    return CGPoint(x: nx * Double(size.width), y: ny * Double(size.height))
+  }
+
   private var lastPos = CGPoint.zero
 
   func inject(_ args: [String: Any]) {
@@ -90,8 +120,10 @@ class InputInjector {
     case "btn":
       let b = (args["b"] as? Int) ?? 0
       let down = (args["d"] as? Bool) ?? false
-      let pos = point(args)
-      mouseButton(b, down, at: pos)
+      // Use the click's own position when present; otherwise reuse the last
+      // pointer position set by the preceding move/drag.
+      if let p = pointIfPresent(args) { lastPos = p }
+      mouseButton(b, down, at: lastPos)
     case "whl":
       let dy = (args["dy"] as? Double) ?? 0
       let dx = (args["dx"] as? Double) ?? 0
@@ -135,13 +167,40 @@ class InputInjector {
       button = .left
     }
     lastPos = pos
-    post(type: type, at: pos, button: button)
+    post(type: type, at: pos, button: button,
+         clickState: clickStateFor(button: button, down: down, at: pos))
   }
 
-  private func post(type: CGEventType, at pos: CGPoint, button: CGMouseButton) {
+  /// Advances the click counter on each press so consecutive quick clicks at the
+  /// same spot register as double/triple clicks; a release reuses the press's
+  /// value. Resets when the button, location or timing breaks the streak.
+  private func clickStateFor(button: CGMouseButton, down: Bool,
+                             at pos: CGPoint) -> Int64 {
+    guard down else { return clickState }
+    let now = ProcessInfo.processInfo.systemUptime
+    let dx = pos.x - lastClickPos.x
+    let dy = pos.y - lastClickPos.y
+    let near = (dx * dx + dy * dy) <= 25  // within ~5px
+    if button == lastClickButton && near
+        && (now - lastClickTime) <= doubleClickInterval {
+      clickState += 1
+    } else {
+      clickState = 1
+    }
+    lastClickTime = now
+    lastClickPos = pos
+    lastClickButton = button
+    return clickState
+  }
+
+  private func post(type: CGEventType, at pos: CGPoint, button: CGMouseButton,
+                    clickState: Int64? = nil) {
     if let e = CGEvent(mouseEventSource: source, mouseType: type,
                        mouseCursorPosition: pos, mouseButton: button) {
       e.flags = modifierFlags
+      if let cs = clickState {
+        e.setIntegerValueField(.mouseEventClickState, value: cs)
+      }
       e.post(tap: .cghidEventTap)
     }
   }

@@ -19,8 +19,19 @@ class InputEvent {
       InputEvent({'k': 'mv', 'x': _clamp01(x), 'y': _clamp01(y)});
 
   /// Mouse button: [button] 0=left, 1=right, 2=middle; [down] = press/release.
-  factory InputEvent.button(int button, bool down) =>
-      InputEvent({'k': 'btn', 'b': button, 'd': down});
+  ///
+  /// The normalized [x]/[y] of the press/release are sent alongside the button
+  /// so the host clicks exactly where the pointer is, even if a preceding move
+  /// event was throttled, dropped or reordered. The host falls back to the last
+  /// known pointer position when they are omitted.
+  factory InputEvent.button(int button, bool down, {double? x, double? y}) {
+    final data = <String, dynamic>{'k': 'btn', 'b': button, 'd': down};
+    if (x != null && y != null) {
+      data['x'] = _clamp01(x);
+      data['y'] = _clamp01(y);
+    }
+    return InputEvent(data);
+  }
 
   /// Scroll wheel deltas (logical pixels).
   factory InputEvent.wheel(double dx, double dy) =>
