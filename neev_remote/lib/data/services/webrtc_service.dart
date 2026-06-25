@@ -108,19 +108,28 @@ class WebRTCService {
 
   Future<RTCSessionDescription> createOffer() async {
     final offer = await _pc!.createOffer();
-    final munged = RTCSessionDescription(_preferVp8(offer.sdp), offer.type);
+    // Only the OFFER is munged. The offerer's codec order drives negotiation,
+    // so VP8 still wins for video. Rewriting the ANSWER's SDP was found to
+    // break the SCTP data channel (all remote input) on Windows answerers,
+    // while leaving video intact — so the answer is now sent verbatim.
+    String sdp;
+    try {
+      sdp = _preferVp8(offer.sdp);
+    } catch (_) {
+      sdp = offer.sdp ?? '';
+    }
+    final munged = RTCSessionDescription(sdp, offer.type);
     await _pc!.setLocalDescription(munged);
     return munged;
   }
 
   Future<RTCSessionDescription> createAnswer() async {
     final answer = await _pc!.createAnswer();
-    final munged = RTCSessionDescription(_preferVp8(answer.sdp), answer.type);
-    await _pc!.setLocalDescription(munged);
-    return munged;
+    await _pc!.setLocalDescription(answer);
+    return answer;
   }
 
-  /// Reorders the m=video codec list so VP8 is negotiated first.
+  /// Reorders the m=video codec list so VP8 is negotiated first (offer only).
   ///
   /// H.264 hardware encode/decode is inconsistent across platforms — notably a
   /// Windows→Windows pair can negotiate an H.264 profile that one side can

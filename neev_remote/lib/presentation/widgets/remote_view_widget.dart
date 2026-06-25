@@ -9,7 +9,7 @@ import '../../data/services/input_event.dart';
 /// Flip to true to log the input event stream (down/up/cancel + a 1/s move
 /// heartbeat) to the console / app log. Used to pinpoint whether the *viewer*
 /// stops sending after a click vs. the host stops injecting.
-const bool kLogRemoteInput = true;
+const bool kLogRemoteInput = false;
 
 /// Renders the remote video stream and, unless [viewOnly], captures local
 /// mouse + keyboard input and forwards it as normalized [InputEvent]s via
@@ -68,10 +68,22 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    // Minimizing/restoring the window can leave the video texture detached,
-    // showing a frozen/hung frame. Re-bind the stream when we come back.
-    if (state == AppLifecycleState.resumed && _initialized) {
-      _renderer.srcObject = widget.remoteStream;
+    if (!_initialized) return;
+    // The macOS WebRTC renderer can hang the app when the window is minimized
+    // (hidden) while a texture is still attached. Detach the stream while
+    // hidden/paused and re-attach on resume. `inactive` (mere focus loss) is
+    // deliberately ignored so the video doesn't blank when you click away.
+    switch (state) {
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        _renderer.srcObject = null;
+        break;
+      case AppLifecycleState.resumed:
+        _renderer.srcObject = widget.remoteStream;
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+        break;
     }
   }
 
