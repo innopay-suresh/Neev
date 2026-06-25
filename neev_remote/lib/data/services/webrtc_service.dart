@@ -98,14 +98,49 @@ class WebRTCService {
 
   Future<RTCSessionDescription> createOffer() async {
     final offer = await _pc!.createOffer();
-    await _pc!.setLocalDescription(offer);
-    return offer;
+    final munged = RTCSessionDescription(_preferVp8(offer.sdp), offer.type);
+    await _pc!.setLocalDescription(munged);
+    return munged;
   }
 
   Future<RTCSessionDescription> createAnswer() async {
     final answer = await _pc!.createAnswer();
-    await _pc!.setLocalDescription(answer);
-    return answer;
+    final munged = RTCSessionDescription(_preferVp8(answer.sdp), answer.type);
+    await _pc!.setLocalDescription(munged);
+    return munged;
+  }
+
+  /// Reorders the m=video codec list so VP8 is negotiated first.
+  ///
+  /// H.264 hardware encode/decode is inconsistent across platforms — notably a
+  /// Windows→Windows pair can negotiate an H.264 profile that one side can
+  /// encode but not decode, yielding a connected session with a blank video.
+  /// VP8 is a software codec present in libwebrtc on every platform, so forcing
+  /// it guarantees a decodable stream in all viewer/host combinations.
+  String _preferVp8(String? sdp) {
+    if (sdp == null || sdp.isEmpty) return sdp ?? '';
+    final lines = sdp.split(RegExp(r'\r\n|\n'));
+    final mIndex = lines.indexWhere((l) => l.startsWith('m=video'));
+    if (mIndex == -1) return sdp;
+
+    final vp8Pts = <String>[];
+    final re = RegExp(r'^a=rtpmap:(\d+)\s+VP8/90000', caseSensitive: false);
+    for (final l in lines) {
+      final m = re.firstMatch(l);
+      if (m != null) vp8Pts.add(m.group(1)!);
+    }
+    if (vp8Pts.isEmpty) return sdp;
+
+    final parts = lines[mIndex].split(' ');
+    if (parts.length <= 3) return sdp;
+    final header = parts.sublist(0, 3); // m=video <port> <proto>
+    final pts = parts.sublist(3);
+    final reordered = <String>[
+      ...vp8Pts.where(pts.contains),
+      ...pts.where((p) => !vp8Pts.contains(p)),
+    ];
+    lines[mIndex] = [...header, ...reordered].join(' ');
+    return lines.join('\r\n');
   }
 
   Future<void> setRemoteDescription(RTCSessionDescription sdp) async {

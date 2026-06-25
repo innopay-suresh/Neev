@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/app_constants.dart';
 import 'auth_service.dart';
@@ -89,6 +91,10 @@ class RemoteService extends ChangeNotifier {
         ? AuthService.generatePassword()
         : password;
     _password = pw;
+    // Stable per-install ID: generated once, persisted, and reused on every
+    // launch so the ID a user shares keeps working. The password still rotates
+    // each session. Only a reinstall (cleared prefs) yields a new ID.
+    final agentId = fixedAgentId ?? await _persistentAgentId();
     _hostStatus = HostStatus.starting;
     _hostError = null;
     notifyListeners();
@@ -99,7 +105,7 @@ class RemoteService extends ChangeNotifier {
       onConnected: () {
         _hostSignaling?.registerHost(
           passwordHash: AuthService.hashPassword(pw),
-          agentId: fixedAgentId,
+          agentId: agentId,
           hostname: _hostname(),
           os: _osName(),
           version: AppConstants.appVersion,
@@ -463,6 +469,27 @@ class RemoteService extends ChangeNotifier {
         p['sdpMid'] as String?,
         p['sdpMLineIndex'] as int?,
       );
+
+  static const _kPersistentAgentId = 'persistentAgentId';
+
+  /// Returns this install's stable agent ID, generating and persisting one the
+  /// first time. Format matches the server's `%03d-%03d-%03d` (e.g. 123-456-789)
+  /// so existing routing/UI conventions keep working.
+  Future<String> _persistentAgentId() async {
+    final prefs = await SharedPreferences.getInstance();
+    var id = prefs.getString(_kPersistentAgentId);
+    if (id == null || id.isEmpty) {
+      id = _generateAgentId();
+      await prefs.setString(_kPersistentAgentId, id);
+    }
+    return id;
+  }
+
+  String _generateAgentId() {
+    final n = Random.secure().nextInt(1000000000); // 0 .. 999,999,999
+    final s = n.toString().padLeft(9, '0');
+    return '${s.substring(0, 3)}-${s.substring(3, 6)}-${s.substring(6, 9)}';
+  }
 
   /// A best-effort hostname. The platform host name is only available via
   /// dart:io on native targets; to keep the orchestrator web-safe we derive a

@@ -310,15 +310,18 @@ func (h *Hub) handleRegister(ctx context.Context, cli *client, msg Message) {
 		return
 	}
 
-	// Generate unique ID with collision retry.
+	// Determine the agent ID.
 	var agentID string
 	if cli.agentID != "" {
 		agentID = cli.agentID
-	} else if strings.TrimSpace(payload.AgentID) != "" {
-		agentID = strings.TrimSpace(payload.AgentID)
-		if _, err := h.registry.Get(ctx, agentID); err != nil {
-			agentID = ""
-		}
+	} else if id := strings.TrimSpace(payload.AgentID); id != "" {
+		// Honour a client-supplied persistent ID so an install keeps the same
+		// ID across restarts/reconnects (new or already known). A later
+		// h.agents[id] = cli simply replaces any stale prior connection; that
+		// connection's own disconnect is guarded against removing the newer
+		// entry, so re-registration after a dropped session "just works"
+		// without the user having to refresh their ID.
+		agentID = id
 	} else {
 		for i := 0; i < 5; i++ {
 			id, err := session.GenerateID()

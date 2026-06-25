@@ -31,7 +31,8 @@ class RemoteViewWidget extends StatefulWidget {
   State<RemoteViewWidget> createState() => _RemoteViewWidgetState();
 }
 
-class _RemoteViewWidgetState extends State<RemoteViewWidget> {
+class _RemoteViewWidgetState extends State<RemoteViewWidget>
+    with WidgetsBindingObserver {
   final RTCVideoRenderer _renderer = RTCVideoRenderer();
   final FocusNode _focusNode = FocusNode();
   bool _initialized = false;
@@ -47,6 +48,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initRenderer();
   }
 
@@ -59,6 +61,16 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // Minimizing/restoring the window can leave the video texture detached,
+    // showing a frozen/hung frame. Re-bind the stream when we come back.
+    if (state == AppLifecycleState.resumed && _initialized) {
+      _renderer.srcObject = widget.remoteStream;
+    }
+  }
+
+  @override
   void didUpdateWidget(RemoteViewWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.remoteStream != oldWidget.remoteStream) {
@@ -68,6 +80,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _renderer.srcObject = null;
     _renderer.dispose();
     _focusNode.dispose();
