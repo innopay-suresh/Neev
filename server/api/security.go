@@ -104,7 +104,8 @@ func originFromRelayURL(raw string) string {
 }
 
 func originAllowed(origin string, allowed []string) bool {
-	if origin == "" {
+	// Empty or "null" (Flutter desktop / native apps don't send a real origin)
+	if origin == "" || origin == "null" {
 		return true
 	}
 	for _, candidate := range allowed {

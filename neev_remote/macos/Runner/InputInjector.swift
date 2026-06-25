@@ -14,14 +14,25 @@ class InputInjector {
   private var otherDown = false
   private var modifierFlags: CGEventFlags = []
 
+  /// Whether accessibility permission is currently granted.
+  /// Checked lazily and cached to avoid repeated syscalls.
+  private var hasAccessibility: Bool? = nil
+
   static func register(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(
       name: "neev_remote/input", binaryMessenger: messenger)
     let injector = InputInjector()
     channel.setMethodCallHandler { call, result in
       if call.method == "inject", let args = call.arguments as? [String: Any] {
-        injector.inject(args)
-        result(nil)
+        // Dispatch to a background queue so that a blocking CGEvent call
+        // cannot freeze the Flutter Dart event loop.  The result callback is
+        // invoked asynchronously after the injection attempt completes.
+        DispatchQueue.global(qos: .userInteractive).async {
+          injector.inject(args)
+          DispatchQueue.main.async {
+            result(nil)
+          }
+        }
       } else {
         result(FlutterMethodNotImplemented)
       }
@@ -36,6 +47,15 @@ class InputInjector {
   }
 
   private static var retained: (FlutterMethodChannel, InputInjector)?
+
+  /// Returns true only when accessibility is explicitly granted.
+  /// Cached after first check to avoid syscalls on every event.
+  private func checkAccessibility() -> Bool {
+    if let cached = hasAccessibility { return cached }
+    let granted = AXIsProcessTrusted()
+    hasAccessibility = granted
+    return granted
+  }
 
   private func screenSize() -> CGSize {
     let bounds = CGDisplayBounds(CGMainDisplayID())
@@ -53,6 +73,12 @@ class InputInjector {
 
   func inject(_ args: [String: Any]) {
     guard let kind = args["k"] as? String else { return }
+
+    // Silently drop input events if accessibility is not granted.
+    // The UI cannot notify the user from a fire-and-forget data-channel
+    // handler, so we just don't crash.
+    if !checkAccessibility() { return }
+
     switch kind {
     case "mv":
       lastPos = point(args)
@@ -64,8 +90,6 @@ class InputInjector {
     case "btn":
       let b = (args["b"] as? Int) ?? 0
       let down = (args["d"] as? Bool) ?? false
-      // Use the click position from args so the click lands correctly even if
-      // mv/btn messages arrived out of order over the data channel.
       let pos = point(args)
       mouseButton(b, down, at: pos)
     case "whl":
@@ -79,7 +103,6 @@ class InputInjector {
     case "key":
       let usage = (args["u"] as? Int) ?? 0
       let down = (args["d"] as? Bool) ?? false
-      // Track modifier state so capitals, symbols and shortcuts (Cmd+C/V) work.
       if let flag = InputInjector.modifierFlag(usage) {
         if down { modifierFlags.insert(flag) } else { modifierFlags.remove(flag) }
       }
