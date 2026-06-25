@@ -110,8 +110,20 @@ class WebRTCService {
 
   Future<RTCSessionDescription> createOffer() async {
     final offer = await _pc!.createOffer();
-    await _pc!.setLocalDescription(offer);
-    return offer;
+    // setCodecPreferences (above) is the clean way to force VP8, but desktop
+    // libwebrtc may no-op it. As a deterministic fallback, strip non-VP8 video
+    // codecs from the OFFER so the answerer can only pick VP8 (fixes
+    // Windows→Windows blank video). Only the OFFER is touched — munging the
+    // ANSWER breaks the data channel/input on Windows, the offer does not.
+    String sdp;
+    try {
+      sdp = _stripNonVp8FromOffer(offer.sdp);
+    } catch (_) {
+      sdp = offer.sdp ?? '';
+    }
+    final out = RTCSessionDescription(sdp, offer.type);
+    await _pc!.setLocalDescription(out);
+    return out;
   }
 
   Future<RTCSessionDescription> createAnswer() async {
@@ -153,6 +165,68 @@ class WebRTCService {
     } catch (_) {
       // Best-effort; leaves default codec negotiation in place.
     }
+  }
+
+  /// Removes non-VP8 video codecs (H.264/VP9/AV1/H.265 and their RTX) from the
+  /// offer's m=video so the answerer is forced to VP8. Keeps VP8, VP8's RTX and
+  /// FEC (red/ulpfec). Operates only on the video m-section — the data channel
+  /// (m=application) and everything else are left byte-for-byte intact, so the
+  /// SCTP/input channel is unaffected. Returns the SDP unchanged if VP8 isn't
+  /// present or anything looks off.
+  String _stripNonVp8FromOffer(String? sdp) {
+    if (sdp == null || sdp.isEmpty) return sdp ?? '';
+    final lines = sdp.split(RegExp(r'\r\n|\n'));
+    final mIndex = lines.indexWhere((l) => l.startsWith('m=video'));
+    if (mIndex == -1) return sdp;
+    var endIndex = lines.length;
+    for (var i = mIndex + 1; i < lines.length; i++) {
+      if (lines[i].startsWith('m=')) {
+        endIndex = i;
+        break;
+      }
+    }
+
+    final codecOf = <String, String>{}; // pt -> codec (lowercase)
+    final aptOf = <String, String>{}; // rtx pt -> referenced pt
+    final rtpmapRe = RegExp(r'^a=rtpmap:(\d+)\s+([A-Za-z0-9\-]+)/');
+    final aptRe = RegExp(r'^a=fmtp:(\d+)\s+.*\bapt=(\d+)');
+    for (var i = mIndex + 1; i < endIndex; i++) {
+      final r = rtpmapRe.firstMatch(lines[i]);
+      if (r != null) codecOf[r.group(1)!] = r.group(2)!.toLowerCase();
+      final a = aptRe.firstMatch(lines[i]);
+      if (a != null) aptOf[a.group(1)!] = a.group(2)!;
+    }
+
+    bool isFec(String c) =>
+        c == 'red' || c == 'ulpfec' || c == 'flexfec-03';
+    final keep = <String>{};
+    codecOf.forEach((pt, c) {
+      if (c == 'vp8' || isFec(c)) keep.add(pt);
+    });
+    codecOf.forEach((pt, c) {
+      if (c == 'rtx' && codecOf[aptOf[pt]] == 'vp8') keep.add(pt);
+    });
+
+    if (!keep.any((pt) => codecOf[pt] == 'vp8')) return sdp; // VP8 absent
+
+    final parts = lines[mIndex].split(' ');
+    if (parts.length <= 3) return sdp;
+    final keptPts = parts.sublist(3).where(keep.contains).toList();
+    if (keptPts.isEmpty) return sdp;
+    final removed =
+        parts.sublist(3).where((p) => !keep.contains(p)).toSet();
+    lines[mIndex] = [...parts.sublist(0, 3), ...keptPts].join(' ');
+
+    final attrRe = RegExp(r'^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)\b');
+    final out = <String>[];
+    for (var i = 0; i < lines.length; i++) {
+      if (i > mIndex && i < endIndex) {
+        final m = attrRe.firstMatch(lines[i]);
+        if (m != null && removed.contains(m.group(1))) continue;
+      }
+      out.add(lines[i]);
+    }
+    return out.join('\r\n');
   }
 
   Future<void> setRemoteDescription(RTCSessionDescription sdp) async {
