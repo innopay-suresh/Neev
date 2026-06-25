@@ -58,6 +58,7 @@ class RemoteService extends ChangeNotifier {
   ViewerStatus _viewerStatus = ViewerStatus.idle;
   String? _targetId;
   String? _viewerError;
+  String? _remoteHostOs;
   MediaStream? _remoteStream;
   SessionStats _stats = const SessionStats();
   Timer? _statsTimer;
@@ -72,6 +73,10 @@ class RemoteService extends ChangeNotifier {
       _viewerStatus == ViewerStatus.connected;
   String? get targetId => _targetId;
   String? get viewerError => _viewerError;
+  /// The remote host's OS ('windows' | 'macos' | 'linux'), learned over the
+  /// control channel. Null until the host announces it. Used by the viewer to
+  /// translate the primary command modifier across platforms.
+  String? get remoteHostOs => _remoteHostOs;
   MediaStream? get remoteStream => _remoteStream;
   SessionStats get stats => _stats;
 
@@ -199,6 +204,10 @@ class RemoteService extends ChangeNotifier {
 
     final peer = WebRTCService();
     peer.onDataMessage = (raw) => _handleData(raw, isHost: true);
+    // Announce our OS so the viewer can translate its primary command modifier
+    // (⌘ on macOS ↔ Ctrl on Windows/Linux) for copy/paste and other shortcuts.
+    peer.onDataChannelOpen = () =>
+        peer.sendData(jsonEncode({'k': 'os', 'v': _osName()}));
     peer.onIceCandidate = (c) =>
         _hostSignaling?.sendCandidate(controllerId, _candidateMap(c));
     peer.onConnectionStateChange = (state) {
@@ -378,6 +387,14 @@ class RemoteService extends ChangeNotifier {
         await Clipboard.setData(ClipboardData(text: text));
         debugPrint('[clip] received ${text.length} chars -> local clipboard');
       }
+      return;
+    }
+
+    // Host announces its OS so the viewer can map ⌘ ↔ Ctrl.
+    if (m['k'] == 'os') {
+      _remoteHostOs = m['v'] as String?;
+      debugPrint('[os] remote host is $_remoteHostOs');
+      notifyListeners();
       return;
     }
 

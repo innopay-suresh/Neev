@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +18,9 @@ class RemoteViewWidget extends StatefulWidget {
   final MediaStream? remoteStream;
   final bool isConnected;
   final bool viewOnly;
+  /// The remote host's OS ('windows' | 'macos' | 'linux'), used to translate
+  /// the primary command modifier (⌘ ↔ Ctrl) so copy/paste etc. work cross-OS.
+  final String? hostOs;
   final void Function(InputEvent event)? onInput;
 
   const RemoteViewWidget({
@@ -24,6 +28,7 @@ class RemoteViewWidget extends StatefulWidget {
     this.remoteStream,
     this.isConnected = false,
     this.viewOnly = false,
+    this.hostOs,
     this.onInput,
   });
 
@@ -187,6 +192,31 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     if (kLogRemoteInput) debugPrint('[remote-input] $msg');
   }
 
+  // HID usages for the primary command modifiers.
+  static const int _hidCtrlL = 0xE0, _hidCtrlR = 0xE4;
+  static const int _hidGuiL = 0xE3, _hidGuiR = 0xE7; // ⌘ on macOS, Win key
+
+  /// Translates the viewer's primary command modifier to the host's so that
+  /// shortcuts like copy/paste work across platforms. macOS uses ⌘ (GUI);
+  /// Windows/Linux use Ctrl. Same-family pairs pass through unchanged.
+  int _remapModifier(int hid) {
+    final host = widget.hostOs;
+    if (host == null) return hid;
+    final viewerIsMac = defaultTargetPlatform == TargetPlatform.macOS;
+    final hostIsMac = host == 'macos';
+    if (viewerIsMac == hostIsMac) return hid; // same family, no swap
+    if (viewerIsMac && !hostIsMac) {
+      // ⌘ on this Mac → Ctrl on the Windows/Linux host.
+      if (hid == _hidGuiL) return _hidCtrlL;
+      if (hid == _hidGuiR) return _hidCtrlR;
+    } else {
+      // Ctrl on this Windows/Linux box → ⌘ on the macOS host.
+      if (hid == _hidCtrlL) return _hidGuiL;
+      if (hid == _hidCtrlR) return _hidGuiR;
+    }
+    return hid;
+  }
+
   void _onPointerSignal(PointerSignalEvent e) {
     if (e is PointerScrollEvent) {
       _emit(InputEvent.wheel(e.scrollDelta.dx, e.scrollDelta.dy));
@@ -200,7 +230,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     // keyboard page is 0x07, so e.g. KeyA == 0x00070004). Every native host
     // maps the bare usage code, so strip the page before sending — otherwise
     // no key ever matches and typing silently does nothing.
-    final hid = usage & 0xFFFF;
+    final hid = _remapModifier(usage & 0xFFFF);
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       // Forward auto-repeat as additional downs so holding a key repeats it.
       _emit(InputEvent.key(hid, true));

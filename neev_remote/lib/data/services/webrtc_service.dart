@@ -37,6 +37,7 @@ class WebRTCService {
   void Function(RTCIceCandidate candidate)? onIceCandidate;
   void Function(String message)? onDataMessage;
   void Function(RTCPeerConnectionState state)? onConnectionStateChange;
+  void Function()? onDataChannelOpen;
 
   RTCPeerConnection? get peerConnection => _pc;
   MediaStream? get remoteStream => _remoteStream;
@@ -87,6 +88,15 @@ class WebRTCService {
     channel.onMessage = (msg) {
       if (!msg.isBinary) onDataMessage?.call(msg.text);
     };
+    channel.onDataChannelState = (state) {
+      if (state == RTCDataChannelState.RTCDataChannelOpen) {
+        onDataChannelOpen?.call();
+      }
+    };
+    // The channel may already be open by the time we bind (offerer side).
+    if (channel.state == RTCDataChannelState.RTCDataChannelOpen) {
+      onDataChannelOpen?.call();
+    }
   }
 
   /// Adds the captured screen stream (host side) to the connection.

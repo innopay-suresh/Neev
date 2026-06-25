@@ -420,6 +420,7 @@ class _ConnectedSession extends ConsumerWidget {
                 isConnected: true,
                 remoteStream: service.remoteStream,
                 viewOnly: viewOnly,
+                hostOs: service.remoteHostOs,
                 onInput: viewOnly
                     ? null
                     : (event) =>
