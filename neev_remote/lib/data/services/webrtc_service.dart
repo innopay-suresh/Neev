@@ -99,28 +99,19 @@ class WebRTCService {
     }
   }
 
-  /// Adds the captured screen stream (host side) to the connection.
+  /// Adds the captured screen stream (host side) to the connection, then
+  /// restricts the video transceiver to VP8 so the generated offer is VP8-only.
   Future<void> addLocalStream(MediaStream stream) async {
     for (final track in stream.getTracks()) {
       await _pc!.addTrack(track, stream);
     }
+    await _forceVp8();
   }
 
   Future<RTCSessionDescription> createOffer() async {
     final offer = await _pc!.createOffer();
-    // Only the OFFER is munged. The offerer's codec order drives negotiation,
-    // so VP8 still wins for video. Rewriting the ANSWER's SDP was found to
-    // break the SCTP data channel (all remote input) on Windows answerers,
-    // while leaving video intact — so the answer is now sent verbatim.
-    String sdp;
-    try {
-      sdp = _preferVp8(offer.sdp);
-    } catch (_) {
-      sdp = offer.sdp ?? '';
-    }
-    final munged = RTCSessionDescription(sdp, offer.type);
-    await _pc!.setLocalDescription(munged);
-    return munged;
+    await _pc!.setLocalDescription(offer);
+    return offer;
   }
 
   Future<RTCSessionDescription> createAnswer() async {
@@ -129,37 +120,39 @@ class WebRTCService {
     return answer;
   }
 
-  /// Reorders the m=video codec list so VP8 is negotiated first (offer only).
-  ///
-  /// H.264 hardware encode/decode is inconsistent across platforms — notably a
-  /// Windows→Windows pair can negotiate an H.264 profile that one side can
-  /// encode but not decode, yielding a connected session with a blank video.
-  /// VP8 is a software codec present in libwebrtc on every platform, so forcing
-  /// it guarantees a decodable stream in all viewer/host combinations.
-  String _preferVp8(String? sdp) {
-    if (sdp == null || sdp.isEmpty) return sdp ?? '';
-    final lines = sdp.split(RegExp(r'\r\n|\n'));
-    final mIndex = lines.indexWhere((l) => l.startsWith('m=video'));
-    if (mIndex == -1) return sdp;
+  /// Restricts the sending video transceiver to VP8 (+ RTX/FEC) via the proper
+  /// `setCodecPreferences` API on the host (offerer). This makes the OFFER
+  /// VP8-only, so the answerer is forced to VP8 — fixing Windows→Windows blank
+  /// video (H.264 negotiated but undecodable) — WITHOUT rewriting any SDP.
+  /// SDP munging the answer broke the data channel (all input) on Windows, so
+  /// this codec-preference approach is used instead. Best-effort: on failure it
+  /// falls back to default negotiation.
+  Future<void> _forceVp8() async {
+    try {
+      final caps = await getRtpSenderCapabilities('video');
+      final codecs = caps.codecs ?? const <RTCRtpCodecCapability>[];
+      bool keep(RTCRtpCodecCapability c) {
+        final m = c.mimeType.toLowerCase();
+        return m == 'video/vp8' ||
+            m == 'video/rtx' ||
+            m == 'video/red' ||
+            m == 'video/ulpfec' ||
+            m == 'video/flexfec-03';
+      }
 
-    final vp8Pts = <String>[];
-    final re = RegExp(r'^a=rtpmap:(\d+)\s+VP8/90000', caseSensitive: false);
-    for (final l in lines) {
-      final m = re.firstMatch(l);
-      if (m != null) vp8Pts.add(m.group(1)!);
+      final preferred = codecs.where(keep).toList();
+      final hasVp8 =
+          preferred.any((c) => c.mimeType.toLowerCase() == 'video/vp8');
+      if (!hasVp8) return; // don't strip everything if VP8 isn't available
+
+      for (final t in await _pc!.getTransceivers()) {
+        if (t.sender.track?.kind == 'video') {
+          await t.setCodecPreferences(preferred);
+        }
+      }
+    } catch (_) {
+      // Best-effort; leaves default codec negotiation in place.
     }
-    if (vp8Pts.isEmpty) return sdp;
-
-    final parts = lines[mIndex].split(' ');
-    if (parts.length <= 3) return sdp;
-    final header = parts.sublist(0, 3); // m=video <port> <proto>
-    final pts = parts.sublist(3);
-    final reordered = <String>[
-      ...vp8Pts.where(pts.contains),
-      ...pts.where((p) => !vp8Pts.contains(p)),
-    ];
-    lines[mIndex] = [...header, ...reordered].join(' ');
-    return lines.join('\r\n');
   }
 
   Future<void> setRemoteDescription(RTCSessionDescription sdp) async {
