@@ -64,7 +64,10 @@ class InputInjector {
     case "btn":
       let b = (args["b"] as? Int) ?? 0
       let down = (args["d"] as? Bool) ?? false
-      mouseButton(b, down)
+      // Use the click position from args so the click lands correctly even if
+      // mv/btn messages arrived out of order over the data channel.
+      let pos = point(args)
+      mouseButton(b, down, at: pos)
     case "whl":
       let dy = (args["dy"] as? Double) ?? 0
       let dx = (args["dx"] as? Double) ?? 0
@@ -91,7 +94,7 @@ class InputInjector {
     }
   }
 
-  private func mouseButton(_ b: Int, _ down: Bool) {
+  private func mouseButton(_ b: Int, _ down: Bool, at pos: CGPoint) {
     let type: CGEventType
     let button: CGMouseButton
     switch b {
@@ -108,7 +111,8 @@ class InputInjector {
       type = down ? .leftMouseDown : .leftMouseUp
       button = .left
     }
-    post(type: type, at: lastPos, button: button)
+    lastPos = pos
+    post(type: type, at: pos, button: button)
   }
 
   private func post(type: CGEventType, at pos: CGPoint, button: CGMouseButton) {

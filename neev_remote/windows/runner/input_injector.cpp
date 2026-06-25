@@ -122,9 +122,13 @@ void HandleInject(const flutter::EncodableMap& args) {
     if (button == 1) btnFlag = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
     else if (button == 2) btnFlag = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
     else btnFlag = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
-    // Reposition + click atomically so the click lands under the cursor.
-    SendMouseAbsolute(gLastNx, gLastNy,
-                      MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | btnFlag, 0);
+    // Read click position from the btn event args (sent by viewer for every click)
+    // so the click lands at the correct coordinates even if mv/btn arrived out of order.
+    double nx = GetNum(args, "x");
+    double ny = GetNum(args, "y");
+    if (nx == 0.0 && ny == 0.0) { nx = gLastNx; ny = gLastNy; }
+    SendMouseAbsolute(nx, ny, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | btnFlag, 0);
+    gLastNx = nx; gLastNy = ny;
   } else if (*kind == "whl") {
     double dy = GetNum(args, "dy");
     if (dy != 0.0) {

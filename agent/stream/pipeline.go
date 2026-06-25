@@ -311,7 +311,14 @@ func (p *Pipeline) Start(ctx context.Context) error {
 					// Force a keyframe every 2 seconds even if screen is static
 					if ticksSinceLastEncode >= currentFPS*2 {
 						if lastFrame != nil {
-							frame = lastFrame
+							// Use a copy so lastFrame's backing Pix is not aliased
+							// when CaptureFrame fills frame.Pix on the next iteration.
+							prev := lastFrame
+							frame = &image.RGBA{
+								Pix:    append([]byte(nil), prev.Pix...),
+								Stride: prev.Stride,
+								Rect:   prev.Rect,
+							}
 						} else {
 							// Generate a placeholder frame to kickstart WebRTC if the OS
 							// hasn't given us a single frame yet (e.g. perfectly static headless desktop)
