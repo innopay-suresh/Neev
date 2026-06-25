@@ -8,6 +8,8 @@
 
 #include <memory>
 #include <string>
+#include <thread>
+#include <atomic>
 
 namespace {
 
@@ -89,13 +91,14 @@ double GetNum(const flutter::EncodableMap& map, const char* key) {
 double gLastNx = 0.0;
 double gLastNy = 0.0;
 
+// Synchronized by Windows' INPUT struct — SendInput is atomic for one input.
 void SendMouseAbsolute(double nx, double ny, DWORD flags, DWORD mouseData) {
   INPUT in = {};
   in.type = INPUT_MOUSE;
   in.mi.dx = static_cast<LONG>(nx * 65535.0);
   in.mi.dy = static_cast<LONG>(ny * 65535.0);
   in.mi.mouseData = mouseData;
-  in.mi.dwFlags = flags;
+  in.mi.dwFlags = flags | MOUSEEVENTF_ABSOLUTE;
   SendInput(1, &in, sizeof(INPUT));
 }
 
@@ -104,10 +107,11 @@ void HandleInject(const flutter::EncodableMap& args) {
   if (!kind) return;
 
   if (*kind == "mv") {
-    gLastNx = GetNum(args, "x");
-    gLastNy = GetNum(args, "y");
-    SendMouseAbsolute(gLastNx, gLastNy,
-                      MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0);
+    double nx = GetNum(args, "x");
+    double ny = GetNum(args, "y");
+    gLastNx = nx;
+    gLastNy = ny;
+    SendMouseAbsolute(nx, ny, MOUSEEVENTF_MOVE, 0);
   } else if (*kind == "btn") {
     int button = Find<int>(args, "b") ? *Find<int>(args, "b") : 0;
     bool down = Find<bool>(args, "d") && *Find<bool>(args, "d");
@@ -117,8 +121,9 @@ void HandleInject(const flutter::EncodableMap& args) {
     else btnFlag = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
     double nx = GetNum(args, "x");
     double ny = GetNum(args, "y");
+    // Fall back to last known position if args say (0,0).
     if (nx == 0.0 && ny == 0.0) { nx = gLastNx; ny = gLastNy; }
-    SendMouseAbsolute(nx, ny, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | btnFlag, 0);
+    SendMouseAbsolute(nx, ny, MOUSEEVENTF_MOVE | btnFlag, 0);
     gLastNx = nx; gLastNy = ny;
   } else if (*kind == "whl") {
     double dy = GetNum(args, "dy");
@@ -146,25 +151,17 @@ void HandleInject(const flutter::EncodableMap& args) {
   }
 }
 
-// Struct passed to the thread pool work item.
-struct InjectWork {
-  std::shared_ptr<flutter::EncodableMap> args;
-  std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result;
-};
-
-void CALLBACK InjectWorkCallback(PTP_CALLBACK_INSTANCE,
-                                 void* param,
-                                 PTP_WORK) {
-  // This runs on a thread pool thread — not the Flutter platform thread.
-  auto* work = static_cast<InjectWork*>(param);
-  HandleInject(*work->args);
-  // Signal completion via the platform thread using Flash's
-  // non-blocking task posting.  FlutterWindowsEngine::PostTask threadsafe.
-  // Since we can't safely call result->Success() from here, we use
-  // SendMessage to a hidden window as a synchronous cross-thread dispatch.
-  // Actually for simplicity, just delete the result as "fire-and-forget"
-  // — the Flutter side doesn't require a response for input events.
-  delete work;
+// Called on the Flutter platform thread (safe for Flutter API calls).
+void InjectAsync(const flutter::EncodableMap& args) {
+  // Deep-copy the map before passing to the background thread so there is
+  // no data race with the main thread.
+  auto argsCopy = std::make_shared<flutter::EncodableMap>(args);
+  std::thread([argsCopy]() {
+    HandleInject(*argsCopy);
+    // Result Success() is NOT called — the Dart side does not wait for a
+    // reply from the input channel (fire-and-forget).  This avoids any
+    // thread-safety issues with the Flutter MethodResult API.
+  }).detach();
 }
 
 }  // namespace
@@ -183,16 +180,8 @@ void RegisterInputInjector(flutter::FlutterEngine* engine) {
           const auto* args =
               std::get_if<flutter::EncodableMap>(call.arguments());
           if (args) {
-            // Dispatch input injection to the Windows thread pool so
-            // SendInput blocking cannot freeze the Flutter event loop.
-            auto work = new InjectWork{
-              std::make_shared<flutter::EncodableMap>(*args),
-              std::move(result),
-            };
-            // Use CreateThreadpoolWork for reliable fire-and-forget async.
-            static PTP_WORK g_work = CreateThreadpoolWork(
-                InjectWorkCallback, work, nullptr);
-            SubmitThreadpoolWork(g_work);
+            InjectAsync(*args);
+            result->Success();  // Called on platform thread — safe.
             return;
           }
           result->Success();
