@@ -180,7 +180,11 @@ class RemoteService extends ChangeNotifier {
 
   Future<void> _startHostOffer(String controllerId) async {
     // Capture the screen once and reuse the stream across viewers.
-    final stream = _capture.stream ?? await _capture.startCapture();
+    // Cap the resolution: capturing a Retina display at full native pixels
+    // (e.g. 2880×1800) produces large frames that add encode + network
+    // latency. 1920-wide keeps text readable while noticeably cutting lag.
+    final stream = _capture.stream ??
+        await _capture.startCapture(fps: 30, maxWidth: 1920, maxHeight: 1200);
     if (stream == null) {
       _hostError = 'Screen capture failed (permission denied?)';
       notifyListeners();
@@ -366,13 +370,38 @@ class RemoteService extends ChangeNotifier {
       if (text != null) {
         _lastClip = text; // avoid echoing it straight back
         await Clipboard.setData(ClipboardData(text: text));
+        debugPrint('[clip] received ${text.length} chars -> local clipboard');
       }
       return;
     }
 
     if (isHost) {
       final event = InputEvent.decode(raw);
-      if (event != null) _injector.inject(event);
+      if (event != null) {
+        _logHostInput(event);
+        _injector.inject(event);
+      }
+    }
+  }
+
+  // Host-side receive heartbeat: confirms whether input keeps arriving after a
+  // click (host stops receiving = viewer/data-channel issue; host receives but
+  // cursor frozen = native injection issue).
+  int _hostMoveCount = 0;
+  final Stopwatch _hostInputClock = Stopwatch()..start();
+  int _hostInputHeartbeatMs = 0;
+  void _logHostInput(InputEvent e) {
+    final kind = e.kind;
+    if (kind == 'mv') {
+      _hostMoveCount++;
+      final now = _hostInputClock.elapsedMilliseconds;
+      if (now - _hostInputHeartbeatMs >= 1000) {
+        debugPrint('[host-input] moves received ~1s: $_hostMoveCount');
+        _hostMoveCount = 0;
+        _hostInputHeartbeatMs = now;
+      }
+    } else {
+      debugPrint('[host-input] $kind ${e.data}');
     }
   }
 
@@ -380,15 +409,22 @@ class RemoteService extends ChangeNotifier {
     if (_clipTimer != null) return;
     // Prime _lastClip so we don't immediately broadcast the existing clipboard.
     Clipboard.getData('text/plain').then((d) => _lastClip = d?.text);
-    _clipTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) async {
+    _clipTimer = Timer.periodic(const Duration(milliseconds: 600), (_) async {
       if (_hostPeers.isEmpty && _viewerPeer == null) {
         _stopClipboardSync();
         return;
       }
-      final data = await Clipboard.getData('text/plain');
-      final text = data?.text;
+      String? text;
+      try {
+        final data = await Clipboard.getData('text/plain');
+        text = data?.text;
+      } catch (e) {
+        debugPrint('[clip] read failed: $e');
+        return;
+      }
       if (text == null || text.isEmpty || text == _lastClip) return;
       _lastClip = text;
+      debugPrint('[clip] local change ${text.length} chars -> broadcasting');
       _broadcastClip(text);
     });
   }

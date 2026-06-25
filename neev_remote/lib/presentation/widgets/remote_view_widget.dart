@@ -5,6 +5,11 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/input_event.dart';
 
+/// Flip to true to log the input event stream (down/up/cancel + a 1/s move
+/// heartbeat) to the console / app log. Used to pinpoint whether the *viewer*
+/// stops sending after a click vs. the host stops injecting.
+const bool kLogRemoteInput = true;
+
 /// Renders the remote video stream and, unless [viewOnly], captures local
 /// mouse + keyboard input and forwards it as normalized [InputEvent]s via
 /// [onInput].
@@ -31,8 +36,13 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
   final FocusNode _focusNode = FocusNode();
   bool _initialized = false;
   int _activeButton = 0;
+  bool _buttonHeld = false;
+  Offset _lastLocal = Offset.zero;
   final Stopwatch _moveClock = Stopwatch()..start();
   int _lastMoveMs = -100;
+  // Move-heartbeat logging.
+  int _moveCount = 0;
+  int _lastHeartbeatMs = 0;
 
   @override
   void initState() {
@@ -101,28 +111,67 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
   void _emit(InputEvent e) => widget.onInput?.call(e);
 
   void _onPointerDown(PointerDownEvent e, Size size) {
+    _lastLocal = e.localPosition;
     final pos = _normalize(e.localPosition, size);
     if (pos == null) return;
-    _focusNode.requestFocus();
+    // Only request focus when we don't already have it. Calling requestFocus on
+    // every click rebuilds the Focus subtree, and on macOS that rebuild drops
+    // the MouseRegion's hover tracking — so move/hover events silently stop
+    // after the first click and the remote cursor appears frozen.
+    if (!_focusNode.hasFocus) _focusNode.requestFocus();
     _activeButton = _buttonFrom(e.buttons);
+    _buttonHeld = true;
     _emit(InputEvent.move(pos.dx, pos.dy));
     _emit(InputEvent.button(_activeButton, true, x: pos.dx, y: pos.dy));
+    _log('DOWN btn=$_activeButton');
   }
 
   void _onPointerMove(Offset local, Size size) {
+    _lastLocal = local;
     // Throttle to ~60/s so fast movement doesn't flood the data channel.
     final now = _moveClock.elapsedMilliseconds;
     if (now - _lastMoveMs < 16) return;
     _lastMoveMs = now;
     final pos = _normalize(local, size);
-    if (pos != null) _emit(InputEvent.move(pos.dx, pos.dy));
+    if (pos != null) {
+      _emit(InputEvent.move(pos.dx, pos.dy));
+      _heartbeat(now);
+    }
   }
 
   void _onPointerUp(Offset local, Size size) {
+    _lastLocal = local;
     // Always release the active button, even if the pointer was lifted outside
     // the video rect — otherwise the host's button stays stuck down.
+    if (!_buttonHeld) return;
+    _buttonHeld = false;
     final pos = _normalize(local, size);
     _emit(InputEvent.button(_activeButton, false, x: pos?.dx, y: pos?.dy));
+    _log('UP btn=$_activeButton');
+  }
+
+  // macOS can deliver a PointerCancel instead of a PointerUp after a click
+  // (gesture arena / cursor changes). If we ignore it the host's button stays
+  // pressed, turning every later move into a drag and freezing the cursor.
+  void _onPointerCancel(Size size) {
+    if (!_buttonHeld) return;
+    _buttonHeld = false;
+    final pos = _normalize(_lastLocal, size);
+    _emit(InputEvent.button(_activeButton, false, x: pos?.dx, y: pos?.dy));
+    _log('CANCEL btn=$_activeButton (released)');
+  }
+
+  void _heartbeat(int now) {
+    _moveCount++;
+    if (now - _lastHeartbeatMs >= 1000) {
+      _log('moves sent in last ~1s: $_moveCount');
+      _moveCount = 0;
+      _lastHeartbeatMs = now;
+    }
+  }
+
+  void _log(String msg) {
+    if (kLogRemoteInput) debugPrint('[remote-input] $msg');
   }
 
   void _onPointerSignal(PointerSignalEvent e) {
@@ -187,6 +236,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget> {
                 onPointerDown: (e) => _onPointerDown(e, size),
                 onPointerMove: (e) => _onPointerMove(e.localPosition, size),
                 onPointerUp: (e) => _onPointerUp(e.localPosition, size),
+                onPointerCancel: (_) => _onPointerCancel(size),
                 onPointerSignal: _onPointerSignal,
                 child: MouseRegion(
                   cursor: SystemMouseCursors.none,
