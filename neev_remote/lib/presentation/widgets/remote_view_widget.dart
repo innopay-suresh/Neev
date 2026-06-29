@@ -347,6 +347,10 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                 onPointerSignal: _onPointerSignal,
                 child: MouseRegion(
                   cursor: SystemMouseCursors.none,
+                  // The cursor leaving the video (incl. when the window is
+                  // minimized) releases any held button so the host never gets
+                  // stuck — desktop lifecycle events are unreliable on minimize.
+                  onExit: (_) => _releaseHeld(),
                   child: video,
                 ),
               ),

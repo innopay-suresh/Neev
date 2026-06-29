@@ -67,6 +67,13 @@ class RemoteService extends ChangeNotifier {
   Timer? _clipTimer;
   String? _lastClip;
 
+  // ---- Host dead-man's switch: release stuck buttons if input goes silent
+  // (viewer minimized / frozen / disconnected) so the host mouse never freezes.
+  final Set<int> _heldButtons = {};
+  final Stopwatch _inputClock = Stopwatch()..start();
+  int _lastInputMs = 0;
+  Timer? _hostInputWatchdog;
+
   ViewerStatus get viewerStatus => _viewerStatus;
   bool get isViewing =>
       _viewerStatus == ViewerStatus.connecting ||
@@ -139,6 +146,7 @@ class RemoteService extends ChangeNotifier {
 
   Future<void> stopHosting() async {
     _statsTimerMaybeStop();
+    _stopHostInputWatchdog();
     for (final peer in _hostPeers.values) {
       await peer.close();
     }
@@ -225,6 +233,7 @@ class RemoteService extends ChangeNotifier {
     final offer = await peer.createOffer();
     _hostSignaling?.sendOffer(controllerId, _sdpMap(offer));
     _ensureClipboardSync();
+    _startHostInputWatchdog();
     notifyListeners();
   }
 
@@ -401,10 +410,42 @@ class RemoteService extends ChangeNotifier {
     if (isHost) {
       final event = InputEvent.decode(raw);
       if (event != null) {
+        _trackHeldButton(event);
+        _lastInputMs = _inputClock.elapsedMilliseconds;
         _logHostInput(event);
         _injector.inject(event);
       }
     }
+  }
+
+  void _trackHeldButton(InputEvent e) {
+    if (e.data['k'] != 'btn') return;
+    final b = (e.data['b'] as int?) ?? 0;
+    if (e.data['d'] == true) {
+      _heldButtons.add(b);
+    } else {
+      _heldButtons.remove(b);
+    }
+  }
+
+  void _startHostInputWatchdog() {
+    _hostInputWatchdog?.cancel();
+    _hostInputWatchdog = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (_heldButtons.isEmpty) return;
+      if (_inputClock.elapsedMilliseconds - _lastInputMs < 1500) return;
+      // Input went silent while a button was held — release it so the host's
+      // mouse doesn't stay stuck (fixes the minimize/maximize freeze).
+      for (final b in _heldButtons.toList()) {
+        _injector.inject(InputEvent.button(b, false));
+      }
+      _heldButtons.clear();
+    });
+  }
+
+  void _stopHostInputWatchdog() {
+    _hostInputWatchdog?.cancel();
+    _hostInputWatchdog = null;
+    _heldButtons.clear();
   }
 
   // Host-side receive heartbeat: confirms whether input keeps arriving after a
