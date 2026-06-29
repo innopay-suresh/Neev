@@ -115,39 +115,60 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
           ),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final share = _ShareCard(service: service);
-          final connect = _ConnectCard(
-            service: service,
-            idController: _idController,
-            passwordController: _passwordController,
-            onConnect: _connect,
-          );
-          final wide = constraints.maxWidth > 760;
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(AppSpacing.xl),
-            child: Center(
-              child: wide
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(width: 380, child: share),
-                        const SizedBox(width: AppSpacing.xl),
-                        SizedBox(width: 380, child: connect),
-                      ],
-                    )
-                  : Column(
-                      children: [
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFEDF2FB), Color(0xFFF6F8FC)],
+          ),
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth > 820;
+            final share = _ShareCard(service: service);
+            final connect = _ConnectCard(
+              service: service,
+              idController: _idController,
+              passwordController: _passwordController,
+              onConnect: _connect,
+            );
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xl, vertical: AppSpacing.xxl),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 900),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _HeroBanner(service: service),
+                      const SizedBox(height: AppSpacing.xl),
+                      if (wide)
+                        IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(child: share),
+                              const SizedBox(width: AppSpacing.lg),
+                              Expanded(child: connect),
+                            ],
+                          ),
+                        )
+                      else ...[
                         share,
-                        const SizedBox(height: AppSpacing.xl),
+                        const SizedBox(height: AppSpacing.lg),
                         connect,
                       ],
-                    ),
-            ),
-          );
-        },
+                      const SizedBox(height: AppSpacing.xl),
+                      const _HowItWorks(),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -168,18 +189,196 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
 
 class _Card extends StatelessWidget {
   final Widget child;
-  const _Card({required this.child});
+  final EdgeInsets? padding;
+  const _Card({required this.child, this.padding});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.xl),
+      padding: padding ?? const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE8EDF4)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14101828),
+            blurRadius: 28,
+            offset: Offset(0, 12),
+          ),
+          BoxShadow(
+            color: Color(0x0A101828),
+            blurRadius: 4,
+            offset: Offset(0, 1),
+          ),
+        ],
       ),
       child: child,
+    );
+  }
+}
+
+/// Gradient welcome banner across the top — adds depth/brand and fills space.
+class _HeroBanner extends StatelessWidget {
+  final RemoteService service;
+  const _HeroBanner({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    final online = service.hostStatus == HostStatus.online;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.xl, vertical: AppSpacing.lg),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF2D6CFF), Color(0xFF1E40AF)],
+        ),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x382D6CFF), blurRadius: 30, offset: Offset(0, 14)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 26),
+          ),
+          const SizedBox(width: AppSpacing.lg),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Welcome to Neev Remote',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 21,
+                        fontWeight: FontWeight.bold)),
+                SizedBox(height: 3),
+                Text('Securely view and control any computer, anywhere.',
+                    style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
+              ],
+            ),
+          ),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: online ? const Color(0xFF4ADE80) : Colors.white70,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 7),
+                Text(online ? 'Ready to receive' : 'Starting…',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Three-step explainer row that fills the lower space tastefully.
+class _HowItWorks extends StatelessWidget {
+  const _HowItWorks();
+
+  @override
+  Widget build(BuildContext context) {
+    const steps = [
+      (Icons.tag_rounded, 'Share your ID',
+          'Give your ID + password to whoever should connect.'),
+      (Icons.cast_connected_rounded, 'Or connect out',
+          'Enter a partner ID + password to control their screen.'),
+      (Icons.lock_rounded, 'Encrypted & direct',
+          'Sessions are peer-to-peer and end-to-end encrypted.'),
+    ];
+    return LayoutBuilder(builder: (context, c) {
+      final wide = c.maxWidth > 680;
+      final cards = [
+        for (final s in steps) _StepCard(icon: s.$1, title: s.$2, body: s.$3),
+      ];
+      if (!wide) {
+        return Column(
+          children: [
+            for (var i = 0; i < cards.length; i++) ...[
+              if (i > 0) const SizedBox(height: AppSpacing.md),
+              cards[i],
+            ],
+          ],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < cards.length; i++) ...[
+            if (i > 0) const SizedBox(width: AppSpacing.md),
+            Expanded(child: cards[i]),
+          ],
+        ],
+      );
+    });
+  }
+}
+
+class _StepCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String body;
+  const _StepCard(
+      {required this.icon, required this.title, required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE8EDF4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: AppColors.primary, size: 18),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(title,
+              style: AppTypography.body
+                  .copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 2),
+          Text(body, style: AppTypography.caption),
+        ],
+      ),
     );
   }
 }
@@ -339,12 +538,20 @@ class _CardHeader extends StatelessWidget {
       children: [
         Row(
           children: [
-            Icon(icon, color: AppColors.primary),
-            const SizedBox(width: AppSpacing.sm),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Icon(icon, color: AppColors.primary, size: 20),
+            ),
+            const SizedBox(width: AppSpacing.md),
             Expanded(child: Text(title, style: AppTypography.heading2)),
           ],
         ),
-        const SizedBox(height: AppSpacing.xs),
+        const SizedBox(height: AppSpacing.md),
         Text(subtitle, style: AppTypography.caption),
       ],
     );
