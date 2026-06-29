@@ -41,6 +41,7 @@ dependencies:
   # Platform info
   platform_info: ^5.0.0
   hashlib: ^2.3.4
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

@@ -62,10 +62,16 @@ class WebRTCService {
   Future<void> initialize({
     required List<Map<String, dynamic>> iceServers,
     required bool isOfferer,
+    bool forceRelay = false,
   }) async {
     final config = <String, dynamic>{
       'sdpSemantics': 'unified-plan',
       'iceServers': iceServers,
+      // When a reachable TURN relay is advertised, force all media through it.
+      // A direct candidate pair can pass STUN connectivity checks yet silently
+      // drop media (asymmetric NAT / firewall), leaving the session "connected"
+      // at 0 kbps. Relay-only sidesteps that dead path.
+      if (forceRelay) 'iceTransportPolicy': 'relay',
     };
 
     _pc = await createPeerConnection(config);

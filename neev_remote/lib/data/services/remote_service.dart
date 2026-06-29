@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/app_constants.dart';
@@ -37,6 +38,53 @@ class RemoteService extends ChangeNotifier {
   RemoteService({this.iceServers = AppConstants.iceServers});
 
   final List<Map<String, dynamic>> iceServers;
+
+  // ICE servers resolved from the signaling server at connect time. The server
+  // advertises STUN + a reachable TURN relay; without this the app would only
+  // ever have STUN and could never relay when the direct path is dead.
+  List<Map<String, dynamic>>? _resolvedIce;
+
+  /// Fetch ICE servers (STUN + TURN) from the deployment server. Falls back to
+  /// the built-in STUN list if the server is unreachable or returns nothing.
+  Future<List<Map<String, dynamic>>> _resolveIceServers(String relayUrl) async {
+    try {
+      final ws = Uri.parse(relayUrl);
+      final scheme = (ws.scheme == 'wss' || ws.scheme == 'https') ? 'https' : 'http';
+      final base = '$scheme://${ws.authority}';
+      final res = await http
+          .get(Uri.parse('$base/api/v1/session/ice-servers'))
+          .timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final list = (body['ice_servers'] as List?)
+                ?.whereType<Map>()
+                .map((e) => e.cast<String, dynamic>())
+                .toList() ??
+            const [];
+        if (list.isNotEmpty) {
+          if (kRemoteVerboseLog) {
+            debugPrint('[ice] resolved ${list.length} server(s) from $base'
+                '${_hasTurn(list) ? " (incl. TURN -> relay forced)" : ""}');
+          }
+          return list;
+        }
+      }
+    } catch (e) {
+      if (kRemoteVerboseLog) debugPrint('[ice] resolve failed, using STUN: $e');
+    }
+    return iceServers;
+  }
+
+  /// True when a TURN relay is present, in which case we force relay transport
+  /// so media bypasses a direct path that passes STUN checks but drops media.
+  bool _hasTurn(List<Map<String, dynamic>> servers) {
+    for (final s in servers) {
+      final urls = s['urls'];
+      final list = urls is List ? urls : [urls];
+      if (list.any((u) => u.toString().startsWith('turn:'))) return true;
+    }
+    return false;
+  }
 
   // ---- Host state ----
   SignalingService? _hostSignaling;
@@ -102,6 +150,7 @@ class RemoteService extends ChangeNotifier {
     String? fixedAgentId,
   }) async {
     await stopHosting();
+    _resolvedIce = await _resolveIceServers(relayUrl);
 
     final pw = (password == null || password.isEmpty)
         ? AuthService.generatePassword()
@@ -232,7 +281,12 @@ class RemoteService extends ChangeNotifier {
     };
     _hostPeers[controllerId] = peer;
 
-    await peer.initialize(iceServers: iceServers, isOfferer: true);
+    final hostIce = _resolvedIce ?? iceServers;
+    await peer.initialize(
+      iceServers: hostIce,
+      isOfferer: true,
+      forceRelay: _hasTurn(hostIce),
+    );
     await peer.addLocalStream(stream);
     final offer = await peer.createOffer();
     _hostSignaling?.sendOffer(controllerId, _sdpMap(offer));
@@ -251,6 +305,7 @@ class RemoteService extends ChangeNotifier {
     required String password,
   }) async {
     await disconnectViewer();
+    _resolvedIce = await _resolveIceServers(relayUrl);
 
     _targetId = targetId;
     _viewerStatus = ViewerStatus.connecting;
@@ -354,7 +409,12 @@ class RemoteService extends ChangeNotifier {
       }
     };
 
-    await peer.initialize(iceServers: iceServers, isOfferer: false);
+    final viewerIce = _resolvedIce ?? iceServers;
+    await peer.initialize(
+      iceServers: viewerIce,
+      isOfferer: false,
+      forceRelay: _hasTurn(viewerIce),
+    );
     await peer.setRemoteDescription(_sdpFrom(msg.payload));
     final answer = await peer.createAnswer();
     _viewerSignaling?.sendAnswer(hostId, _sdpMap(answer));
