@@ -6,7 +6,31 @@ import {
   Copy, Check, Clock, ShieldCheck, X, ChevronDown, ChevronRight,
   RefreshCw, Smartphone, Lock, Sliders, AlertOctagon, Search, Filter
 } from 'lucide-react'
+import { apiFetch } from '../lib/api.js'
 import styles from './SecurityPage.module.css'
+
+/** Maps a backend audit event to the row shape the audit table renders. */
+function toAuditRow(e, i) {
+  const ts = e.created_at ? new Date(e.created_at) : new Date()
+  const level = (e.outcome === 'denied' || e.outcome === 'error') ? 'error'
+    : (e.outcome === 'rate_limited' || (e.type || '').includes('revoke')) ? 'warn'
+    : 'info'
+  const detailParts = []
+  if (e.target) detailParts.push(`target=${e.target}`)
+  if (e.outcome) detailParts.push(`outcome=${e.outcome}`)
+  if (e.details) detailParts.push(JSON.stringify(e.details))
+  return {
+    id: e.id || i,
+    time: ts.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    date: ts.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    user: e.actor || '—',
+    action: e.type || 'event',
+    ip: e.ip || '—',
+    level,
+    source: (e.type || '').split('.')[0] || 'system',
+    details: detailParts.join(' · ') || (e.type || ''),
+  }
+}
 
 /* ── QR Code generator (no library) ──────────────────────────────────────── */
 function generateQRMatrix(text) {
@@ -451,10 +475,26 @@ function AuditTab() {
   const [query, setQuery] = useState('')
   const [levelFilter, setLevelFilter] = useState('all')
   const [expanded, setExpanded] = useState(null)
+  const [events, setEvents] = useState([])
   const parentRef = useRef(null)
 
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const res = await apiFetch('/api/v1/dashboard/audit')
+        if (!res.ok) return
+        const data = await res.json()
+        if (!cancelled) setEvents((data.events || []).map(toAuditRow))
+      } catch { /* keep empty */ }
+    }
+    load()
+    const t = setInterval(load, 8000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [])
+
   const filtered = useMemo(() => {
-    let entries = AUDIT_LOG
+    let entries = events
     if (levelFilter !== 'all') entries = entries.filter(e => e.level === levelFilter)
     if (query.trim()) {
       const q = query.toLowerCase()
@@ -464,7 +504,7 @@ function AuditTab() {
       )
     }
     return entries
-  }, [query, levelFilter])
+  }, [query, levelFilter, events])
 
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,

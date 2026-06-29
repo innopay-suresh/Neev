@@ -99,11 +99,10 @@ export function DashboardPage() {
   const [loadError, setLoadError] = useState('')
   const { log } = useAppLogs()
 
-  const onlineCount = agents.filter(a => a.online).length
-  const activeSessionCount = sessions.filter(s => s.status === 'active').length
-  const avgLatency = agents.filter(a => a.latency_ms > 0).length
-    ? Math.round(agents.filter(a => a.latency_ms > 0).reduce((sum, a) => sum + a.latency_ms, 0) / agents.filter(a => a.latency_ms > 0).length)
-    : 0
+  const isOnline = (a) => !!a.status && a.status !== 'offline'
+  const onlineCount = stats.agents_online ?? agents.filter(isOnline).length
+  const activeSessionCount = stats.sessions_active ?? sessions.filter(s => s.status === 'active').length
+  const totalSessions = stats.sessions_total ?? sessions.length
 
   const loadDashboard = useCallback(async (role = authUser?.role || 'admin') => {
     setRefreshing(true)
@@ -454,7 +453,7 @@ export function DashboardPage() {
         <StatWidget icon={Server}      label="Total Devices"     value={stats.agents_total || agents.length} trend={3}  trendLabel="%"  sparkData={genSparkData(12, 24, 8)}   color="accent"  />
         <StatWidget icon={Circle}      label="Online Now"        value={onlineCount}                      trend={1}           sparkData={genSparkData(12, 3, 2)}    color="success" />
         <StatWidget icon={Activity}    label="Active Sessions"   value={activeSessionCount}              trend={2}           sparkData={genSparkData(12, 2, 1)}    color="warning" />
-        <StatWidget icon={Zap}         label="Avg Latency"       value={`${avgLatency}ms`}               trend={-5}  trendLabel="ms"                     color="danger"  />
+        <StatWidget icon={Zap}         label="Total Sessions"    value={totalSessions}                   trend={0}                       sparkData={genSparkData(12, 4, 2)}    color="danger"  />
       </div>
 
       {/* ── Main Content Grid ───────────────────────────────────────────── */}
@@ -615,10 +614,10 @@ export function DashboardPage() {
           </div>
           {agents.slice(0, 5).map(agent => (
             <div key={agent.id || agent.agent_id} className={styles.agentRow}>
-              <span className={`${styles.agentDot} ${agent.online ? styles.agentOnline : styles.agentOffline}`} />
+              <span className={`${styles.agentDot} ${isOnline(agent) ? styles.agentOnline : styles.agentOffline}`} />
               <span className={styles.agentName}>{agent.hostname || agent.name || 'Unknown'}</span>
               <span className={styles.agentId}>{agent.id || agent.agent_id || ''}</span>
-              <span className={styles.agentStatus}>{agent.online ? 'Online' : 'Offline'}</span>
+              <span className={styles.agentStatus}>{isOnline(agent) ? 'Online' : 'Offline'}</span>
             </div>
           ))}
           {agents.length === 0 && <p style={{ padding: '16px 20px', color: 'var(--text-muted)', fontSize: 13 }}>No devices enrolled yet.</p>}

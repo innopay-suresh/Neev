@@ -95,6 +95,17 @@ export function ViewerPage() {
     setError('')
   }
 
+  // Pre-fill the target ID when arriving from a device's "Connect" button
+  // (Devices page → /remote?agent=XXX-XXX-XXX), so the modules flow together.
+  useEffect(() => {
+    const agent = new URLSearchParams(window.location.search).get('agent')
+    if (agent) {
+      setTargetID(formatID(agent))
+      idRef.current?.focus?.()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const handleConnect = useCallback(async () => {
     if (!isValid || phase === 'connecting') return
     setError('')

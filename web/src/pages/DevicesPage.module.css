@@ -91,7 +91,7 @@
 
 .tableHead {
   display: grid;
-  grid-template-columns: 48px 2fr 1fr 1fr 1fr 1fr 1fr 1fr 90px 90px;
+  grid-template-columns: 48px 2fr 1.2fr 0.9fr 1fr 0.8fr 110px 96px;
   gap: 0;
   padding: 0 var(--space-4);
   height: 40px;
@@ -130,7 +130,7 @@
 
 .tableRow {
   display: grid;
-  grid-template-columns: 48px 2fr 1fr 1fr 1fr 1fr 1fr 1fr 90px 90px;
+  grid-template-columns: 48px 2fr 1.2fr 0.9fr 1fr 0.8fr 110px 96px;
   gap: 0;
   padding: 0 var(--space-4);
   align-items: center;
@@ -142,6 +142,25 @@
 .tableRow.selected { background: var(--accent-muted); }
 
 .colStatus { display: flex; align-items: center; }
+.colVer, .colGroup, .colSess, .colOs {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  min-height: 300px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: var(--space-6);
+}
 .colName { display: flex; align-items: center; gap: var(--space-3); overflow: hidden; }
 .deviceIcon { font-size: 18px; flex-shrink: 0; }
 .deviceName { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
