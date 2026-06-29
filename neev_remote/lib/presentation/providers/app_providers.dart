@@ -14,18 +14,38 @@ const String kBuiltInRelayUrl = String.fromEnvironment('RELAY_URL');
 /// Priority:
 ///  1. On web: the SAME origin the app was served from (so it always reaches
 ///     the server that delivered it — never the viewer's own "localhost").
-///  2. A build-time `RELAY_URL` baked into the installer (global config).
-///  3. Dev fallback: localhost.
+///  2. A build-time `RELAY_URL` baked into the installer (zero-touch rollout).
+///  3. Empty → the app shows a one-time "connect to your server" setup screen,
+///     so the SAME installer works against any deployment.
 ///
-/// A per-machine override saved in Settings takes precedence over all of these.
+/// A value saved in Settings takes precedence over all of these.
 String defaultRelayUrl() {
   if (kIsWeb) {
     final base = Uri.base; // the page URL the app was loaded from
     final scheme = base.scheme == 'https' ? 'wss' : 'ws';
     return '$scheme://${base.authority}/ws';
   }
-  if (kBuiltInRelayUrl.isNotEmpty) return kBuiltInRelayUrl;
-  return 'ws://localhost:8080/ws';
+  return kBuiltInRelayUrl; // '' when not baked -> first-run setup
+}
+
+/// Turns a friendly server entry into a full relay WebSocket URL. Accepts:
+///   "1.2.3.4", "1.2.3.4:8080", "remote.example.com", "ws://...", "wss://.../ws"
+/// Rules: explicit scheme is kept; a bare domain defaults to wss (TLS); a bare
+/// IP/host defaults to ws and port 8080; the "/ws" path is ensured.
+String normalizeRelayUrl(String input) {
+  var s = input.trim();
+  if (s.isEmpty) return '';
+  if (!s.contains('://')) {
+    final hasPort = RegExp(r':\d+$').hasMatch(s);
+    final looksDomain = RegExp(r'[A-Za-z]').hasMatch(s) && s.contains('.');
+    final scheme = (looksDomain && !hasPort) ? 'wss' : 'ws';
+    final hostPort = (looksDomain || hasPort) ? s : '$s:8080';
+    s = '$scheme://$hostPort';
+  }
+  final uri = Uri.tryParse(s);
+  if (uri == null) return s;
+  final path = (uri.path.isEmpty || uri.path == '/') ? '/ws' : uri.path;
+  return uri.replace(path: path).toString();
 }
 
 // --- Core session service ---

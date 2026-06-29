@@ -228,8 +228,9 @@ class _RelayUrlFieldState extends ConsumerState<_RelayUrlField> {
   }
 
   Future<void> _save() async {
-    final url = _controller.text.trim();
+    final url = normalizeRelayUrl(_controller.text);
     if (url.isEmpty) return;
+    _controller.text = url;
     ref.read(settingsProvider.notifier).updateRelayUrl(url);
     // Reconnect the host with the new server address so it takes effect now.
     final service = ref.read(remoteServiceProvider);

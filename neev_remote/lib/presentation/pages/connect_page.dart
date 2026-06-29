@@ -37,10 +37,11 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
 
   Future<void> _autoStartHost() async {
     if (_autoStarted || !mounted) return;
-    _autoStarted = true;
     final service = ref.read(remoteServiceProvider);
     if (service.isHosting) return;
     final relayUrl = ref.read(settingsProvider).relayUrl;
+    if (relayUrl.isEmpty) return; // wait until the server is configured
+    _autoStarted = true;
     try {
       await service.startHosting(relayUrl: relayUrl);
     } catch (_) {
@@ -58,10 +59,31 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   @override
   Widget build(BuildContext context) {
     final service = ref.watch(remoteServiceProvider);
+    final relayUrl = ref.watch(settingsProvider).relayUrl;
 
     // Active remote session takes the whole window.
     if (service.viewerStatus == ViewerStatus.connected) {
       return _ConnectedSession(service: service);
+    }
+
+    // First run with no server baked in / saved: ask for the server once.
+    if (relayUrl.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(
+          backgroundColor: AppColors.surface,
+          elevation: 0,
+          title: const Text('Neev Remote', style: AppTypography.heading2),
+        ),
+        body: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(AppSpacing.xl),
+            child: SizedBox(width: 420, child: _ServerSetupCard(onSaved: () {
+              _autoStarted = false;
+              _autoStartHost();
+            })),
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -459,6 +481,72 @@ class _ConnectedSession extends ConsumerWidget {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// First-run card: ask for the server address so the same installer works
+/// against any deployment. Shown only when no server is baked in or saved.
+class _ServerSetupCard extends ConsumerStatefulWidget {
+  final VoidCallback onSaved;
+  const _ServerSetupCard({required this.onSaved});
+
+  @override
+  ConsumerState<_ServerSetupCard> createState() => _ServerSetupCardState();
+}
+
+class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final url = normalizeRelayUrl(_controller.text);
+    if (url.isEmpty) return;
+    ref.read(settingsProvider.notifier).updateRelayUrl(url);
+    widget.onSaved();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Icon(Icons.dns_outlined, color: AppColors.primary, size: 40),
+          const SizedBox(height: AppSpacing.md),
+          const Text('Connect to your server', style: AppTypography.heading1),
+          const SizedBox(height: AppSpacing.xs),
+          const Text(
+            'Enter the address of your Neev Remote server (the one you '
+            'downloaded this app from).',
+            style: AppTypography.caption,
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Server address',
+              hintText: 'e.g. 192.168.1.10  or  remote.company.com',
+              prefixIcon: Icon(Icons.public),
+            ),
+            onSubmitted: (_) => _save(),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          ElevatedButton.icon(
+            onPressed: _save,
+            icon: const Icon(Icons.arrow_forward),
+            label: const Text('Save & Continue'),
+            style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.all(AppSpacing.md)),
           ),
         ],
       ),
