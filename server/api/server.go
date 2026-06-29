@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,6 +118,7 @@ func (s *Server) routes() {
 	dash.Get("/agents", s.listAgents)
 	dash.Get("/sessions", s.listSessions)
 	dash.Get("/stats", s.getStats)
+	dash.Get("/analytics", s.getAnalytics)
 	dash.Get("/audit", s.requireRole(serverauth.RoleAdmin), s.listAuditEvents)
 
 	// Serve static web app (if built and placed in ./public)
@@ -413,5 +415,104 @@ func (s *Server) getStats(c *fiber.Ctx) error {
 		"sessions_total":  len(sessions),
 		"server_time":     time.Now().UTC(),
 		"uptime_seconds":  int(time.Since(s.startTime).Seconds()),
+	})
+}
+
+// getAnalytics aggregates REAL history (from the audit log + agents) for the
+// Analytics module: a 30-day session trend, top devices, connection outcomes
+// and device health. Per-session duration/bytes aren't reported by agents, so
+// only tracked metrics are returned.
+func (s *Server) getAnalytics(c *fiber.Ctx) error {
+	ctx := c.Context()
+
+	agents, _ := s.registry.List(ctx)
+	online := 0
+	hostByID := make(map[string]string, len(agents))
+	for _, a := range agents {
+		if a.Status != session.StatusOffline {
+			online++
+		}
+		name := a.Hostname
+		if name == "" {
+			name = a.ID
+		}
+		hostByID[a.ID] = name
+	}
+
+	events, _ := s.registry.ListAuditEvents(ctx, 5000)
+
+	const days = 30
+	now := time.Now().UTC()
+	start := now.AddDate(0, 0, -(days - 1))
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	perDay := make([]int, days)
+	deviceCounts := map[string]int{}
+	outcomes := map[string]int{}
+	sessionsToday := 0
+	for _, e := range events {
+		if e.Type != "session.connect" {
+			continue
+		}
+		outcomes[e.Outcome]++
+		if e.Target != "" {
+			deviceCounts[e.Target]++
+		}
+		if !e.CreatedAt.Before(todayStart) {
+			sessionsToday++
+		}
+		idx := int(e.CreatedAt.UTC().Sub(start).Hours() / 24)
+		if idx >= 0 && idx < days {
+			perDay[idx]++
+		}
+	}
+
+	trend := make([]fiber.Map, days)
+	for i := 0; i < days; i++ {
+		trend[i] = fiber.Map{
+			"label":    start.AddDate(0, 0, i).Format("Jan 2"),
+			"sessions": perDay[i],
+		}
+	}
+
+	type dc struct {
+		id string
+		n  int
+	}
+	top := make([]dc, 0, len(deviceCounts))
+	for id, n := range deviceCounts {
+		top = append(top, dc{id, n})
+	}
+	sort.Slice(top, func(i, j int) bool { return top[i].n > top[j].n })
+	topDevices := make([]fiber.Map, 0, 8)
+	for i := 0; i < len(top) && i < 8; i++ {
+		name := hostByID[top[i].id]
+		if name == "" {
+			name = top[i].id
+		}
+		topDevices = append(topDevices, fiber.Map{"name": name, "sessions": top[i].n})
+	}
+
+	sessions, _ := s.registry.ListSessions(ctx, 1000)
+
+	return c.JSON(fiber.Map{
+		"trend":       trend,
+		"top_devices": topDevices,
+		"outcomes": []fiber.Map{
+			{"name": "Accepted", "value": outcomes["accepted"]},
+			{"name": "Denied", "value": outcomes["denied"]},
+			{"name": "Rate limited", "value": outcomes["rate_limited"]},
+		},
+		"health": []fiber.Map{
+			{"name": "Online", "value": online},
+			{"name": "Offline", "value": len(agents) - online},
+		},
+		"summary": fiber.Map{
+			"active_devices": online,
+			"total_devices":  len(agents),
+			"sessions_today": sessionsToday,
+			"sessions_total": len(sessions),
+		},
 	})
 }
