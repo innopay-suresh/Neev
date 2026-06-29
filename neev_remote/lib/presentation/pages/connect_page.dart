@@ -439,10 +439,17 @@ class _ConnectedSession extends ConsumerWidget {
                 Text('Connected to ${service.targetId}',
                     style: AppTypography.body),
                 const SizedBox(width: AppSpacing.md),
-                if (stats.fps != null)
-                  Text('${stats.fps} fps  ', style: AppTypography.caption),
+                Text('${stats.fps ?? 0} fps  ', style: AppTypography.caption),
                 if (stats.latencyMs != null)
-                  Text('${stats.latencyMs} ms', style: AppTypography.caption),
+                  Text('${stats.latencyMs} ms  ', style: AppTypography.caption),
+                // Diagnostic: codec · frames decoded · bitrate. On a blank
+                // session this pinpoints the failure: bitrate>0 + 0 frames =
+                // receiving but not decoding (codec/decoder); 0 bitrate = not
+                // receiving (transport/send).
+                Text(
+                    '${stats.codec ?? "?"} · ${stats.framesDecoded ?? 0} frames · ${stats.bitrateKbps ?? 0} kbps',
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.textSecondary)),
                 const Spacer(),
                 OutlinedButton.icon(
                   onPressed: () =>

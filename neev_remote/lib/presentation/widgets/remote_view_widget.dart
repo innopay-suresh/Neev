@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -49,6 +51,11 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   // Move-heartbeat logging.
   int _moveCount = 0;
   int _lastHeartbeatMs = 0;
+  // Blank-video watchdog: if no frame is decoded shortly after the stream is
+  // attached, re-attach it to kick the renderer (fixes intermittent blank /
+  // white video, seen Windows→Windows).
+  Timer? _frameWatchdog;
+  int _frameKicks = 0;
 
   @override
   void initState() {
@@ -61,8 +68,35 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     await _renderer.initialize();
     if (widget.remoteStream != null) {
       _renderer.srcObject = widget.remoteStream;
+      _startFrameWatchdog();
     }
     if (mounted) setState(() => _initialized = true);
+  }
+
+  /// Re-attaches the stream if no frame has been decoded a couple seconds after
+  /// it was attached. `videoWidth` stays 0 until the first decoded frame, so it
+  /// is a reliable "is anything rendering" signal. Re-attaching kicks a stuck
+  /// renderer; gives up after a few tries once frames flow.
+  void _startFrameWatchdog() {
+    _frameWatchdog?.cancel();
+    _frameKicks = 0;
+    _frameWatchdog = Timer.periodic(const Duration(seconds: 2), (t) {
+      if (!mounted || !_initialized || widget.remoteStream == null) {
+        t.cancel();
+        return;
+      }
+      if (_renderer.videoWidth > 0) {
+        t.cancel(); // frames are flowing
+        return;
+      }
+      if (_frameKicks >= 6) {
+        t.cancel();
+        return;
+      }
+      _frameKicks++;
+      _renderer.srcObject = null;
+      _renderer.srcObject = widget.remoteStream;
+    });
   }
 
   @override
@@ -76,15 +110,31 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     switch (state) {
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
+        // Releasing here is essential: minimizing/restoring or maximizing the
+        // window can interrupt the pointer stream with NO PointerUp/Cancel, so
+        // a held button would stay stuck-down on the host and freeze its mouse.
+        _releaseHeld();
         _renderer.srcObject = null;
+        break;
+      case AppLifecycleState.inactive:
+        _releaseHeld();
         break;
       case AppLifecycleState.resumed:
         _renderer.srcObject = widget.remoteStream;
+        if (widget.remoteStream != null) _startFrameWatchdog();
         break;
-      case AppLifecycleState.inactive:
       case AppLifecycleState.detached:
         break;
     }
+  }
+
+  /// Sends a button-up for any held button so the host never gets stuck with a
+  /// pressed button (which freezes its cursor).
+  void _releaseHeld() {
+    if (!_buttonHeld) return;
+    _buttonHeld = false;
+    _emit(InputEvent.button(_activeButton, false));
+    _log('lifecycle release btn=$_activeButton');
   }
 
   @override
@@ -92,11 +142,13 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     super.didUpdateWidget(oldWidget);
     if (widget.remoteStream != oldWidget.remoteStream) {
       _renderer.srcObject = widget.remoteStream;
+      if (widget.remoteStream != null) _startFrameWatchdog();
     }
   }
 
   @override
   void dispose() {
+    _frameWatchdog?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _renderer.srcObject = null;
     _renderer.dispose();

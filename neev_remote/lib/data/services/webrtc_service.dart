@@ -8,7 +8,20 @@ class SessionStats {
   final int? fps;
   final int? latencyMs;
 
-  const SessionStats({this.bitrateKbps, this.fps, this.latencyMs});
+  /// Negotiated video codec actually in use (e.g. "VP8", "H264") — for
+  /// diagnosing the Windows→Windows blank-video issue.
+  final String? codec;
+
+  /// Total video frames decoded so far (viewer side). 0 = nothing rendered yet.
+  final int? framesDecoded;
+
+  const SessionStats({
+    this.bitrateKbps,
+    this.fps,
+    this.latencyMs,
+    this.codec,
+    this.framesDecoded,
+  });
 }
 
 /// Wraps a single `RTCPeerConnection`, abstracting the offerer (host) and
@@ -260,19 +273,35 @@ class WebRTCService {
     int? fps;
     int? bytes;
     int? rttMs;
+    int? framesDecoded;
+    String? codecId;
+    String? codec;
 
     for (final r in reports) {
       final v = r.values;
       if (r.type == 'inbound-rtp' && v['kind'] == 'video') {
         fps = (v['framesPerSecond'] as num?)?.round();
         bytes = (v['bytesReceived'] as num?)?.toInt();
+        framesDecoded = (v['framesDecoded'] as num?)?.toInt();
+        codecId ??= v['codecId'] as String?;
       } else if (r.type == 'outbound-rtp' && v['kind'] == 'video') {
         fps ??= (v['framesPerSecond'] as num?)?.round();
         bytes ??= (v['bytesSent'] as num?)?.toInt();
+        codecId ??= v['codecId'] as String?;
       } else if (r.type == 'candidate-pair' &&
           (v['state'] == 'succeeded' || v['nominated'] == true)) {
         final rtt = v['currentRoundTripTime'] as num?;
         if (rtt != null) rttMs = (rtt * 1000).round();
+      }
+    }
+    // Resolve the codec mimeType (e.g. "video/VP8" -> "VP8").
+    if (codecId != null) {
+      for (final r in reports) {
+        if (r.type == 'codec' && r.id == codecId) {
+          final mt = r.values['mimeType'] as String?;
+          if (mt != null) codec = mt.split('/').last;
+          break;
+        }
       }
     }
 
@@ -289,7 +318,13 @@ class WebRTCService {
       _lastStatsAt = now;
     }
 
-    return SessionStats(bitrateKbps: bitrateKbps, fps: fps, latencyMs: rttMs);
+    return SessionStats(
+      bitrateKbps: bitrateKbps,
+      fps: fps,
+      latencyMs: rttMs,
+      codec: codec,
+      framesDecoded: framesDecoded,
+    );
   }
 
   Future<void> close() async {
