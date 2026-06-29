@@ -461,13 +461,15 @@ class _ConnectedSession extends ConsumerWidget {
                 Text('Connected to ${service.targetId}',
                     style: AppTypography.body),
                 const SizedBox(width: AppSpacing.md),
+                // Full diagnostic line (always visible) so a blank session can
+                // be pinpointed: kbps>0 + 0 frames = receiving but not decoding;
+                // 0 kbps = no media arriving (path/host); codec shows what was
+                // negotiated.
                 _StatChip(Icons.speed, '${stats.fps ?? 0} fps'),
-                if (stats.latencyMs != null)
-                  _StatChip(Icons.network_ping, '${stats.latencyMs} ms'),
-                if (stats.bitrateKbps != null && stats.bitrateKbps! > 0)
-                  _StatChip(Icons.bar_chart,
-                      '${(stats.bitrateKbps! / 1000).toStringAsFixed(1)} Mbps'),
-                if (stats.codec != null) _StatChip(Icons.movie, stats.codec!),
+                _StatChip(Icons.network_ping, '${stats.latencyMs ?? 0} ms'),
+                _StatChip(Icons.bar_chart, '${stats.bitrateKbps ?? 0} kbps'),
+                _StatChip(Icons.movie, stats.codec ?? '—'),
+                _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
                 const Spacer(),
                 OutlinedButton.icon(
                   onPressed: () =>
