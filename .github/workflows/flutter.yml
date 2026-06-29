@@ -12,10 +12,10 @@ on:
 env:
   # Must provide Dart >= 3.10 (see neev_remote/pubspec.yaml).
   FLUTTER_VERSION: '3.38.5'
-  # Signaling-server URL baked into every installer. Leave EMPTY so the app is
-  # deployment-agnostic and asks for the server address on first run. Set it to
-  # e.g. 'wss://remote.yourcompany.com/ws' for a zero-touch company rollout.
-  RELAY_URL: ''
+  # Signaling-server URL baked into every installer so installs auto-connect to
+  # the deployment server (no first-run prompt, no stale IP). Change this to the
+  # server you serve the installers from. Leave EMPTY to ask on first run.
+  RELAY_URL: 'ws://172.17.17.77:8080/ws'
 
 jobs:
   # ---- Native desktop packages: installer + portable, built on each OS ----
