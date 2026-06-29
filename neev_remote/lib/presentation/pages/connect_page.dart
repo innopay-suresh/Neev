@@ -145,15 +145,13 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
                       _HeroBanner(service: service),
                       const SizedBox(height: AppSpacing.xl),
                       if (wide)
-                        IntrinsicHeight(
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Expanded(child: share),
-                              const SizedBox(width: AppSpacing.lg),
-                              Expanded(child: connect),
-                            ],
-                          ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: share),
+                            const SizedBox(width: AppSpacing.lg),
+                            Expanded(child: connect),
+                          ],
                         )
                       else ...[
                         share,
@@ -331,7 +329,7 @@ class _HowItWorks extends StatelessWidget {
         );
       }
       return Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (var i = 0; i < cards.length; i++) ...[
             if (i > 0) const SizedBox(width: AppSpacing.md),
