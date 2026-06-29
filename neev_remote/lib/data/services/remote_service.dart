@@ -15,6 +15,10 @@ import 'screen_capture_service.dart';
 import 'signaling_service.dart';
 import 'webrtc_service.dart';
 
+/// Flip to true to emit verbose input/clipboard diagnostics to the console.
+/// Off in shipping builds so the log stays quiet.
+const bool kRemoteVerboseLog = false;
+
 enum HostStatus { offline, starting, online, error }
 
 enum ViewerStatus { idle, connecting, connected, failed }
@@ -394,7 +398,9 @@ class RemoteService extends ChangeNotifier {
       if (text != null) {
         _lastClip = text; // avoid echoing it straight back
         await Clipboard.setData(ClipboardData(text: text));
-        debugPrint('[clip] received ${text.length} chars -> local clipboard');
+        if (kRemoteVerboseLog) {
+          debugPrint('[clip] received ${text.length} chars -> local clipboard');
+        }
       }
       return;
     }
@@ -402,7 +408,7 @@ class RemoteService extends ChangeNotifier {
     // Host announces its OS so the viewer can map ⌘ ↔ Ctrl.
     if (m['k'] == 'os') {
       _remoteHostOs = m['v'] as String?;
-      debugPrint('[os] remote host is $_remoteHostOs');
+      if (kRemoteVerboseLog) debugPrint('[os] remote host is $_remoteHostOs');
       notifyListeners();
       return;
     }
@@ -455,6 +461,7 @@ class RemoteService extends ChangeNotifier {
   final Stopwatch _hostInputClock = Stopwatch()..start();
   int _hostInputHeartbeatMs = 0;
   void _logHostInput(InputEvent e) {
+    if (!kRemoteVerboseLog) return;
     final kind = e.kind;
     if (kind == 'mv') {
       _hostMoveCount++;
@@ -483,12 +490,14 @@ class RemoteService extends ChangeNotifier {
         final data = await Clipboard.getData('text/plain');
         text = data?.text;
       } catch (e) {
-        debugPrint('[clip] read failed: $e');
+        if (kRemoteVerboseLog) debugPrint('[clip] read failed: $e');
         return;
       }
       if (text == null || text.isEmpty || text == _lastClip) return;
       _lastClip = text;
-      debugPrint('[clip] local change ${text.length} chars -> broadcasting');
+      if (kRemoteVerboseLog) {
+        debugPrint('[clip] local change ${text.length} chars -> broadcasting');
+      }
       _broadcastClip(text);
     });
   }

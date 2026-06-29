@@ -439,17 +439,13 @@ class _ConnectedSession extends ConsumerWidget {
                 Text('Connected to ${service.targetId}',
                     style: AppTypography.body),
                 const SizedBox(width: AppSpacing.md),
-                Text('${stats.fps ?? 0} fps  ', style: AppTypography.caption),
+                _StatChip(Icons.speed, '${stats.fps ?? 0} fps'),
                 if (stats.latencyMs != null)
-                  Text('${stats.latencyMs} ms  ', style: AppTypography.caption),
-                // Diagnostic: codec · frames decoded · bitrate. On a blank
-                // session this pinpoints the failure: bitrate>0 + 0 frames =
-                // receiving but not decoding (codec/decoder); 0 bitrate = not
-                // receiving (transport/send).
-                Text(
-                    '${stats.codec ?? "?"} · ${stats.framesDecoded ?? 0} frames · ${stats.bitrateKbps ?? 0} kbps',
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.textSecondary)),
+                  _StatChip(Icons.network_ping, '${stats.latencyMs} ms'),
+                if (stats.bitrateKbps != null && stats.bitrateKbps! > 0)
+                  _StatChip(Icons.bar_chart,
+                      '${(stats.bitrateKbps! / 1000).toStringAsFixed(1)} Mbps'),
+                if (stats.codec != null) _StatChip(Icons.movie, stats.codec!),
                 const Spacer(),
                 OutlinedButton.icon(
                   onPressed: () =>
@@ -465,6 +461,36 @@ class _ConnectedSession extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A small icon + label pill used in the connected-session status bar.
+class _StatChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _StatChip(this.icon, this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: AppSpacing.sm),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: AppColors.textSecondary),
+            const SizedBox(width: AppSpacing.xs),
+            Text(label, style: AppTypography.caption),
+          ],
+        ),
       ),
     );
   }
