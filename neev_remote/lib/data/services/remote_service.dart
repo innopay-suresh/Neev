@@ -329,10 +329,16 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
-  /// Sends a remote-control input event to the host. No-op until the control
-  /// data channel is open.
+  /// Sends a remote-control input event to the host. Mouse MOVES go on the
+  /// low-latency unreliable channel (stale moves are dropped, so the cursor
+  /// doesn't lag); buttons, wheel and keys stay on the reliable channel so they
+  /// are never lost or reordered.
   void sendViewerInput(InputEvent event) {
-    _viewerPeer?.sendData(event.encode());
+    if (event.kind == 'mv') {
+      _viewerPeer?.sendCursor(event.encode());
+    } else {
+      _viewerPeer?.sendData(event.encode());
+    }
   }
 
   Future<void> disconnectViewer() async {

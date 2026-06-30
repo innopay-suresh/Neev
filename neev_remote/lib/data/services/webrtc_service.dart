@@ -36,6 +36,7 @@ class SessionStats {
 class WebRTCService {
   RTCPeerConnection? _pc;
   RTCDataChannel? _dataChannel;
+  RTCDataChannel? _cursorChannel;
   MediaStream? _remoteStream;
 
   bool _remoteDescriptionSet = false;
@@ -90,23 +91,42 @@ class WebRTCService {
     };
 
     if (isOfferer) {
-      final init = RTCDataChannelInit()
+      final ctrlInit = RTCDataChannelInit()
         ..ordered = true
         ..id = 1;
-      _dataChannel = await _pc!.createDataChannel('control', init);
+      _dataChannel = await _pc!.createDataChannel('control', ctrlInit);
       _bindDataChannel(_dataChannel!);
+
+      // High-rate cursor MOVES go on a separate unreliable, unordered channel:
+      // a delayed move is dropped (not retransmitted/queued), so the remote
+      // cursor reflects the latest position with minimal lag and never
+      // head-of-line-blocks clicks/keys on the reliable channel.
+      final curInit = RTCDataChannelInit()
+        ..ordered = false
+        ..maxRetransmits = 0
+        ..id = 2;
+      _cursorChannel = await _pc!.createDataChannel('cursor', curInit);
+      _bindDataChannel(_cursorChannel!, isControl: false);
     } else {
       _pc!.onDataChannel = (channel) {
-        _dataChannel = channel;
-        _bindDataChannel(channel);
+        if (channel.label == 'cursor') {
+          _cursorChannel = channel;
+          _bindDataChannel(channel, isControl: false);
+        } else {
+          _dataChannel = channel;
+          _bindDataChannel(channel);
+        }
       };
     }
   }
 
-  void _bindDataChannel(RTCDataChannel channel) {
+  void _bindDataChannel(RTCDataChannel channel, {bool isControl = true}) {
     channel.onMessage = (msg) {
       if (!msg.isBinary) onDataMessage?.call(msg.text);
     };
+    // Only the control channel drives the "open" callback (OS handshake +
+    // clipboard sync) so it doesn't fire twice.
+    if (!isControl) return;
     channel.onDataChannelState = (state) {
       if (state == RTCDataChannelState.RTCDataChannelOpen) {
         onDataChannelOpen?.call();
@@ -271,6 +291,17 @@ class WebRTCService {
     return true;
   }
 
+  /// Sends a low-latency cursor move on the unreliable channel, falling back to
+  /// the reliable control channel if the cursor channel isn't open yet.
+  bool sendCursor(String data) {
+    final c = _cursorChannel;
+    if (c != null && c.state == RTCDataChannelState.RTCDataChannelOpen) {
+      c.send(RTCDataChannelMessage(data));
+      return true;
+    }
+    return sendData(data);
+  }
+
   /// Samples inbound/outbound RTP stats. Bitrate is derived from the byte
   /// delta since the previous call.
   Future<SessionStats> sampleStats() async {
@@ -339,8 +370,10 @@ class WebRTCService {
     _lastBytes = 0;
     _lastStatsAt = null;
     await _dataChannel?.close();
+    await _cursorChannel?.close();
     await _pc?.close();
     _dataChannel = null;
+    _cursorChannel = null;
     _pc = null;
     // The capture service owns the local stream's lifecycle.
     _remoteStream = null;
