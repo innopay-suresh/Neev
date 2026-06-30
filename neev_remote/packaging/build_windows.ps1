@@ -50,6 +50,39 @@ if (Test-Path $vswhere) {
   Write-Warning "    vswhere not found; skipping VC++ runtime bundling"
 }
 
+# Build the privileged UAC helper (neev_helper.exe) and drop it next to the app.
+# Fully ISOLATED + NON-FATAL: a failure here only means the helper is absent;
+# the app itself is unaffected and still ships.
+Write-Host "==> building privileged helper (neev_helper.exe)"
+try {
+  $helperSrc = "windows\service\neev_helper.cpp"
+  if ((Test-Path $vswhere) -and (Test-Path $helperSrc)) {
+    $vsPath = & $vswhere -latest -property installationPath
+    $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+    $outExe = Join-Path $ReleaseDir "neev_helper.exe"
+    if (Test-Path $vcvars) {
+      $bat = @"
+call "$vcvars"
+cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE "$helperSrc" /Fe:"$outExe" /Fo:"$env:TEMP\neev_helper.obj" /link advapi32.lib user32.lib wtsapi32.lib userenv.lib
+"@
+      $batFile = Join-Path $env:TEMP "build_neev_helper.bat"
+      Set-Content -Path $batFile -Value $bat -Encoding Ascii
+      cmd /c "`"$batFile`""
+      if (Test-Path $outExe) {
+        Write-Host "    built $outExe"
+      } else {
+        Write-Warning "    neev_helper.exe not produced; UAC helper absent (app unaffected)"
+      }
+    } else {
+      Write-Warning "    vcvars64.bat not found; skipping helper build"
+    }
+  } else {
+    Write-Warning "    vswhere or helper source missing; skipping helper build"
+  }
+} catch {
+  Write-Warning "    helper build failed: $_ (app unaffected)"
+}
+
 Write-Host "==> portable zip"
 $Zip = Join-Path $Out "NeevRemote-windows-x64-portable.zip"
 if (Test-Path $Zip) { Remove-Item $Zip }
