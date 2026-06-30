@@ -147,8 +147,15 @@ func (s *Server) getICEServers(c *fiber.Ctx) error {
 		{"urls": s.cfg.Network.STUNServers},
 	}
 	if s.cfg.Network.TURNServer != "" {
+		// Advertise the relay over BOTH UDP and TCP. Many networks (and the
+		// Win<->Win case here) block UDP while allowing TCP, so the TCP variant
+		// is what actually makes the relay usable when the direct path fails.
+		urls := []string{
+			s.cfg.Network.TURNServer,
+			s.cfg.Network.TURNServer + "?transport=tcp",
+		}
 		servers = append(servers, fiber.Map{
-			"urls":       []string{s.cfg.Network.TURNServer},
+			"urls":       urls,
 			"username":   s.cfg.TURN.AuthUser,
 			"credential": s.cfg.TURN.AuthPass,
 		})

@@ -63,8 +63,7 @@ class RemoteService extends ChangeNotifier {
             const [];
         if (list.isNotEmpty) {
           if (kRemoteVerboseLog) {
-            debugPrint('[ice] resolved ${list.length} server(s) from $base'
-                '${_hasTurn(list) ? " (incl. TURN -> relay forced)" : ""}');
+            debugPrint('[ice] resolved ${list.length} server(s) from $base');
           }
           return list;
         }
@@ -75,16 +74,6 @@ class RemoteService extends ChangeNotifier {
     return iceServers;
   }
 
-  /// True when a TURN relay is present, in which case we force relay transport
-  /// so media bypasses a direct path that passes STUN checks but drops media.
-  bool _hasTurn(List<Map<String, dynamic>> servers) {
-    for (final s in servers) {
-      final urls = s['urls'];
-      final list = urls is List ? urls : [urls];
-      if (list.any((u) => u.toString().startsWith('turn:'))) return true;
-    }
-    return false;
-  }
 
   // ---- Host state ----
   SignalingService? _hostSignaling;
@@ -281,11 +270,13 @@ class RemoteService extends ChangeNotifier {
     };
     _hostPeers[controllerId] = peer;
 
-    final hostIce = _resolvedIce ?? iceServers;
+    // Use iceTransportPolicy 'all': direct path for same-network peers (e.g.
+    // <->Mac), automatic TURN-relay fallback when no direct path exists (e.g.
+    // Win<->Win across AP-isolated clients). Forcing relay broke the working
+    // direct paths, so we let ICE choose.
     await peer.initialize(
-      iceServers: hostIce,
+      iceServers: _resolvedIce ?? iceServers,
       isOfferer: true,
-      forceRelay: _hasTurn(hostIce),
     );
     await peer.addLocalStream(stream);
     final offer = await peer.createOffer();
@@ -409,11 +400,9 @@ class RemoteService extends ChangeNotifier {
       }
     };
 
-    final viewerIce = _resolvedIce ?? iceServers;
     await peer.initialize(
-      iceServers: viewerIce,
+      iceServers: _resolvedIce ?? iceServers,
       isOfferer: false,
-      forceRelay: _hasTurn(viewerIce),
     );
     await peer.setRemoteDescription(_sdpFrom(msg.payload));
     final answer = await peer.createAnswer();
