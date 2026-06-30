@@ -352,10 +352,39 @@ static bool CaptureInputDesktopToBmp(const wchar_t* path) {
   return ok;
 }
 
+// Phase 3a proof: inject a keystroke onto the *secure* desktop. The agent runs
+// as SYSTEM, so UIPI does NOT block it from driving consent.exe (which even an
+// elevated user app cannot do). We send ESCAPE — a SAFE decline — to prove the
+// injection path end-to-end; Phase 3b routes the viewer's real Yes/No instead.
+static void InjectKeyOnSecureDesktop(WORD vk) {
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) {
+    Log(L"agent", L"inject: OpenInputDesktop failed %lu", GetLastError());
+    return;
+  }
+  HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
+  if (!SetThreadDesktop(hDesk)) {
+    Log(L"agent", L"inject: SetThreadDesktop failed %lu", GetLastError());
+    CloseDesktop(hDesk);
+    return;
+  }
+  INPUT in[2] = {0};
+  in[0].type = INPUT_KEYBOARD;
+  in[0].ki.wVk = vk;
+  in[1].type = INPUT_KEYBOARD;
+  in[1].ki.wVk = vk;
+  in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+  UINT sent = SendInput(2, in, sizeof(INPUT));
+  Log(L"agent", L"inject: sent vk=0x%02X to secure desktop (SendInput=%u, err=%lu)",
+      vk, sent, GetLastError());
+  SetThreadDesktop(hPrev);
+  CloseDesktop(hDesk);
+}
+
 // --------------------------------------------------------------------------
 // Agent: runs as SYSTEM inside the interactive session. Detects the secure
-// desktop and (Phase 2) captures it to a file so we can confirm we can SEE the
-// UAC prompt.
+// desktop, (Phase 2) captures it, and (Phase 3a) injects a safe keystroke to
+// prove it can drive the UAC prompt.
 // --------------------------------------------------------------------------
 static int RunAgent() {
   Log(L"agent", L"agent started (session detection + capture running)");
@@ -382,6 +411,9 @@ static int RunAgent() {
         Sleep(600);  // let the UAC dialog finish drawing
         CaptureInputDesktopToBmp(
             L"C:\\ProgramData\\NeevRemote\\secure_capture.bmp");
+        Sleep(400);
+        // Phase 3a proof: decline the prompt from SYSTEM so it closes itself.
+        InjectKeyOnSecureDesktop(VK_ESCAPE);
       }
       last = name;
     }
