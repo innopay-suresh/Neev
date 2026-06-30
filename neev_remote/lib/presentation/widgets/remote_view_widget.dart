@@ -208,6 +208,21 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     _log('DOWN btn=$_activeButton');
   }
 
+  // Hover events fire ONLY when no mouse button is pressed. So if we still
+  // believe a button is held when a hover arrives, a PointerUp was missed
+  // (macOS can swallow it during a Space/window switch or cursor-shape change)
+  // and the host is stuck dragging — looking frozen. Release it immediately so
+  // the cursor unfreezes the instant the user moves.
+  void _onPointerHover(Offset local, Size size) {
+    if (_buttonHeld) {
+      _buttonHeld = false;
+      final pos = _normalize(local, size);
+      _emit(InputEvent.button(_activeButton, false, x: pos?.dx, y: pos?.dy));
+      _log('HOVER while held -> released stuck btn=$_activeButton');
+    }
+    _onPointerMove(local, size);
+  }
+
   void _onPointerMove(Offset local, Size size) {
     _lastLocal = local;
     // Throttle to ~60/s so fast movement doesn't flood the data channel.
@@ -339,7 +354,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                 // video texture — otherwise only hover worked and clicks were
                 // silently dropped.
                 behavior: HitTestBehavior.opaque,
-                onPointerHover: (e) => _onPointerMove(e.localPosition, size),
+                onPointerHover: (e) => _onPointerHover(e.localPosition, size),
                 onPointerDown: (e) => _onPointerDown(e, size),
                 onPointerMove: (e) => _onPointerMove(e.localPosition, size),
                 onPointerUp: (e) => _onPointerUp(e.localPosition, size),
