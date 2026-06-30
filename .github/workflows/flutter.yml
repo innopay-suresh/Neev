@@ -86,7 +86,7 @@ jobs:
         with:
           name: neev-remote-${{ matrix.platform }}
           path: neev_remote/dist/*
-          retention-days: 14
+          retention-days: 2
 
   # ---- Web package (static site) ----
   build-web:
@@ -107,7 +107,7 @@ jobs:
         with:
           name: neev-remote-web
           path: neev_remote/dist/NeevRemote-web.zip
-          retention-days: 14
+          retention-days: 2
 
   # ---- Publish a GitHub Release on flutter-v* tags ----
   release-flutter:
