@@ -131,10 +131,31 @@ static int UninstallService() {
 // process inside the user's session that CAN reach the secure desktop and
 // inject into elevated windows.
 // --------------------------------------------------------------------------
-static HANDLE LaunchAgentInActiveSession() {
-  DWORD sid = WTSGetActiveConsoleSessionId();
+// Pick the session that is actively receiving user input. With RDP the physical
+// console (WTSGetActiveConsoleSessionId) is LOCKED and the user is in a separate
+// session, so we must target the WTSActive session — that's where the user (and
+// their UAC prompt) actually is. Fall back to the console.
+static DWORD GetTargetSessionId() {
+  DWORD result = 0xFFFFFFFF;
+  PWTS_SESSION_INFOW sessions = nullptr;
+  DWORD count = 0;
+  if (WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &sessions,
+                            &count)) {
+    for (DWORD i = 0; i < count; i++) {
+      if (sessions[i].State == WTSActive) {
+        result = sessions[i].SessionId;
+        break;
+      }
+    }
+    WTSFreeMemory(sessions);
+  }
+  if (result == 0xFFFFFFFF) result = WTSGetActiveConsoleSessionId();
+  return result;
+}
+
+static HANDLE LaunchAgentInSession(DWORD sid) {
   if (sid == 0xFFFFFFFF) {
-    Log(L"svc", L"no active console session yet");
+    Log(L"svc", L"no target session yet");
     return nullptr;
   }
 
@@ -218,14 +239,25 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   Log(L"svc", L"service started (LOCAL SYSTEM, session 0)");
 
   HANDLE agent = nullptr;
+  DWORD agentSession = 0xFFFFFFFF;
   for (;;) {
-    if (!agent || WaitForSingleObject(agent, 0) == WAIT_OBJECT_0) {
+    DWORD target = GetTargetSessionId();
+    bool dead = (!agent || WaitForSingleObject(agent, 0) == WAIT_OBJECT_0);
+    bool moved = (agent && target != 0xFFFFFFFF && target != agentSession);
+    if (dead || moved) {
       if (agent) {
+        if (moved) {
+          Log(L"svc", L"active session %lu -> %lu; relaunching agent",
+              agentSession, target);
+          TerminateProcess(agent, 0);
+        } else {
+          Log(L"svc", L"agent exited; relaunching");
+        }
         CloseHandle(agent);
         agent = nullptr;
-        Log(L"svc", L"agent exited; relaunching");
       }
-      agent = LaunchAgentInActiveSession();
+      agent = LaunchAgentInSession(target);
+      agentSession = target;
     }
     if (WaitForSingleObject(g_stopEvent, 3000) == WAIT_OBJECT_0) break;
   }
