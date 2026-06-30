@@ -31,9 +31,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
-; Opt-in (off by default): installs the SYSTEM helper service so a remote
-; controller can see and approve Windows UAC / admin prompts.
-Name: "uacservice"; Description: "Enable remote control of Windows admin (UAC) prompts — installs a background helper service"; GroupDescription: "Advanced:"; Flags: unchecked
+; Installs the SYSTEM helper service so a remote controller can see and approve
+; Windows UAC / admin prompts. ON by default (it's a core feature); the user can
+; untick it on machines that only ever act as a viewer.
+Name: "uacservice"; Description: "Enable remote control of Windows admin (UAC) prompts — installs a background helper service"; GroupDescription: "Advanced:"
 
 [Files]
 ; Packages the entire release folder produced by `flutter build windows`.
