@@ -33,6 +33,7 @@
 #include <wtsapi32.h>
 #include <userenv.h>
 #include <string>
+#include <vector>
 #include <cstdarg>
 #include <cstdio>
 
@@ -238,11 +239,94 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
 }
 
 // --------------------------------------------------------------------------
-// Agent: runs as SYSTEM inside the interactive session. Phase 1 just reports
-// the input desktop so we can confirm the secure desktop (UAC) is detected.
+// Phase 2: capture a desktop by name via GDI. The secure (Winlogon) desktop is
+// NOT DWM-composited, so a plain BitBlt captures it correctly (unlike the
+// normal desktop, which needs DXGI). The agent runs as SYSTEM, so it may
+// OpenInputDesktop(Winlogon), SetThreadDesktop onto it, and BitBlt.
+// --------------------------------------------------------------------------
+static bool SaveHBitmapToBmp(HBITMAP hbm, HDC hdc, int w, int h,
+                             const wchar_t* path) {
+  BITMAPINFOHEADER bi = {0};
+  bi.biSize = sizeof(bi);
+  bi.biWidth = w;
+  bi.biHeight = h;  // bottom-up
+  bi.biPlanes = 1;
+  bi.biBitCount = 24;
+  bi.biCompression = BI_RGB;
+  const int rowSize = ((w * 3 + 3) & ~3);
+  const int imgSize = rowSize * h;
+  std::vector<BYTE> bits(imgSize);
+  if (!GetDIBits(hdc, hbm, 0, h, bits.data(),
+                 reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS)) {
+    return false;
+  }
+  BITMAPFILEHEADER bf = {0};
+  bf.bfType = 0x4D42;  // 'BM'
+  bf.bfOffBits = sizeof(bf) + sizeof(bi);
+  bf.bfSize = bf.bfOffBits + imgSize;
+  HANDLE hf = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                          FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (hf == INVALID_HANDLE_VALUE) return false;
+  DWORD wr = 0;
+  WriteFile(hf, &bf, sizeof(bf), &wr, nullptr);
+  WriteFile(hf, &bi, sizeof(bi), &wr, nullptr);
+  WriteFile(hf, bits.data(), imgSize, &wr, nullptr);
+  CloseHandle(hf);
+  return true;
+}
+
+static bool CaptureInputDesktopToBmp(const wchar_t* path) {
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) {
+    Log(L"agent", L"capture: OpenInputDesktop failed %lu", GetLastError());
+    return false;
+  }
+  HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
+  if (!SetThreadDesktop(hDesk)) {
+    Log(L"agent", L"capture: SetThreadDesktop failed %lu", GetLastError());
+    CloseDesktop(hDesk);
+    return false;
+  }
+
+  bool ok = false;
+  HDC hScreen = GetDC(nullptr);
+  if (hScreen) {
+    int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (w <= 0 || h <= 0) {
+      w = GetSystemMetrics(SM_CXSCREEN);
+      h = GetSystemMetrics(SM_CYSCREEN);
+      x = 0;
+      y = 0;
+    }
+    HDC hMem = CreateCompatibleDC(hScreen);
+    HBITMAP hbm = CreateCompatibleBitmap(hScreen, w, h);
+    if (hMem && hbm) {
+      HGDIOBJ oldObj = SelectObject(hMem, hbm);
+      BitBlt(hMem, 0, 0, w, h, hScreen, x, y, SRCCOPY);
+      SelectObject(hMem, oldObj);  // deselect before GetDIBits
+      ok = SaveHBitmapToBmp(hbm, hScreen, w, h, path);
+    }
+    if (hbm) DeleteObject(hbm);
+    if (hMem) DeleteDC(hMem);
+    ReleaseDC(nullptr, hScreen);
+  }
+
+  SetThreadDesktop(hPrev);
+  CloseDesktop(hDesk);
+  if (ok) Log(L"agent", L"capture: wrote %ls", path);
+  return ok;
+}
+
+// --------------------------------------------------------------------------
+// Agent: runs as SYSTEM inside the interactive session. Detects the secure
+// desktop and (Phase 2) captures it to a file so we can confirm we can SEE the
+// UAC prompt.
 // --------------------------------------------------------------------------
 static int RunAgent() {
-  Log(L"agent", L"agent started (session detection running)");
+  Log(L"agent", L"agent started (session detection + capture running)");
   std::wstring last;
   for (;;) {
     std::wstring name = L"(unknown)";
@@ -262,6 +346,11 @@ static int RunAgent() {
       bool secure = (_wcsicmp(name.c_str(), L"Winlogon") == 0);
       Log(L"agent", L"input desktop -> %ls%ls", name.c_str(),
           secure ? L"   <<< SECURE DESKTOP / UAC PROMPT ACTIVE" : L"");
+      if (secure) {
+        Sleep(600);  // let the UAC dialog finish drawing
+        CaptureInputDesktopToBmp(
+            L"C:\\ProgramData\\NeevRemote\\secure_capture.bmp");
+      }
       last = name;
     }
     Sleep(400);

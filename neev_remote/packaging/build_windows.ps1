@@ -63,7 +63,7 @@ try {
     if (Test-Path $vcvars) {
       $bat = @"
 call "$vcvars"
-cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE "$helperSrc" /Fe:"$outExe" /Fo:"$env:TEMP\neev_helper.obj" /link advapi32.lib user32.lib wtsapi32.lib userenv.lib
+cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE "$helperSrc" /Fe:"$outExe" /Fo:"$env:TEMP\neev_helper.obj" /link advapi32.lib user32.lib gdi32.lib wtsapi32.lib userenv.lib
 "@
       $batFile = Join-Path $env:TEMP "build_neev_helper.bat"
       Set-Content -Path $batFile -Value $bat -Encoding Ascii
