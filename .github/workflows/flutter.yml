@@ -21,6 +21,8 @@ jobs:
   # ---- Native desktop packages: installer + portable, built on each OS ----
   build-desktop:
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -83,10 +85,24 @@ jobs:
 
       - name: Upload packages
         uses: actions/upload-artifact@v4
+        continue-on-error: true   # artifact storage quota may be hit; non-fatal
         with:
           name: neev-remote-${{ matrix.platform }}
           path: neev_remote/dist/*
           retention-days: 2
+
+      # Artifact-quota workaround: also publish the desktop installers to a
+      # rolling prerelease (release assets don't count against the artifact
+      # storage quota), so they're always downloadable even when artifacts fail.
+      - name: Publish installer to CI release
+        if: matrix.platform != 'web'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="ci-${{ matrix.platform }}"
+          gh release create "$tag" --prerelease --title "CI ${{ matrix.platform }} latest" --notes "Latest ${{ matrix.platform }} build (CI, auto-updated)" 2>/dev/null || true
+          gh release upload "$tag" neev_remote/dist/* --clobber
 
   # ---- Web package (static site) ----
   build-web:
