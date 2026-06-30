@@ -29,13 +29,19 @@
 //   neev_helper.exe agent       — session-agent loop (the service launches this)
 //   neev_helper.exe             — service entry point (invoked by the SCM)
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <wtsapi32.h>
 #include <userenv.h>
+#include <objidl.h>
+#include <gdiplus.h>
 #include <string>
 #include <vector>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
+#include <cstdint>
 
 static const wchar_t* kServiceName = L"NeevRemoteHelper";
 static const wchar_t* kDisplayName = L"Neev Remote Helper";
@@ -88,6 +94,18 @@ static int InstallService() {
     DWORD e = GetLastError();
     if (e == ERROR_SERVICE_EXISTS) {
       svc = OpenServiceW(scm, kServiceName, SERVICE_ALL_ACCESS);
+      if (svc) {
+        // Service already exists (likely an older build): update its binary
+        // path to THIS exe and stop it, so StartService below loads the new
+        // binary. Without this, re-running 'install' silently keeps the old exe.
+        ChangeServiceConfigW(svc, SERVICE_NO_CHANGE, SERVICE_NO_CHANGE,
+                             SERVICE_NO_CHANGE, path.c_str(), nullptr, nullptr,
+                             nullptr, nullptr, nullptr, nullptr);
+        SERVICE_STATUS st = {0};
+        ControlService(svc, SERVICE_CONTROL_STOP, &st);
+        Sleep(1200);
+        wprintf(L"Updated existing service to this binary\n");
+      }
     } else {
       wprintf(L"CreateService failed: %lu\n", e);
       CloseServiceHandle(scm);
@@ -354,19 +372,158 @@ static bool CaptureInputDesktopToBmp(const wchar_t* path) {
   return ok;
 }
 
-// Phase 3a proof: inject a keystroke onto the *secure* desktop. The agent runs
-// as SYSTEM, so UIPI does NOT block it from driving consent.exe (which even an
-// elevated user app cannot do). We send ESCAPE — a SAFE decline — to prove the
-// injection path end-to-end; Phase 3b routes the viewer's real Yes/No instead.
-static void InjectKeyOnSecureDesktop(WORD vk) {
-  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
-  if (!hDesk) {
-    Log(L"agent", L"inject: OpenInputDesktop failed %lu", GetLastError());
-    return;
+// --------------------------------------------------------------------------
+// Phase 3b: stream the secure desktop to the Flutter app over a named pipe and
+// inject the viewer's real clicks/keys into consent.exe (no more auto-decline).
+//
+//   IPC: localhost TCP on 127.0.0.1:47921 (the SYSTEM agent listens; the
+//   user-session Flutter app connects — a plain Dart Socket). Length-prefixed:
+//     [uint32 LE len][uint8 type][payload]   (len = 1 + payloadLen)
+//   Agent -> app:  'A' int32 w,h (UAC active)   'F' PNG bytes   'G' (UAC gone)
+//   App  -> agent: 'C' uint8 btn, float x,y (click)   'K' uint16 vk (key)
+// --------------------------------------------------------------------------
+static const unsigned short kPort = 47921;  // 127.0.0.1 only
+static CRITICAL_SECTION g_clientLock;
+static SOCKET g_client = INVALID_SOCKET;
+
+static int GetEncoderClsid(const WCHAR* mime, CLSID* clsid) {
+  UINT num = 0, size = 0;
+  Gdiplus::GetImageEncodersSize(&num, &size);
+  if (size == 0) return -1;
+  std::vector<BYTE> buf(size);
+  auto* info = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buf.data());
+  Gdiplus::GetImageEncoders(num, size, info);
+  for (UINT i = 0; i < num; i++) {
+    if (wcscmp(info[i].MimeType, mime) == 0) {
+      *clsid = info[i].Clsid;
+      return (int)i;
+    }
   }
+  return -1;
+}
+
+static bool EncodeHBitmapToPng(HBITMAP hbm, std::vector<BYTE>& out) {
+  Gdiplus::Bitmap bmp(hbm, (HPALETTE) nullptr);
+  CLSID clsid;
+  if (GetEncoderClsid(L"image/png", &clsid) < 0) return false;
+  IStream* stream = nullptr;
+  if (CreateStreamOnHGlobal(nullptr, TRUE, &stream) != S_OK) return false;
+  bool ok = (bmp.Save(stream, &clsid, nullptr) == Gdiplus::Ok);
+  if (ok) {
+    HGLOBAL hg = nullptr;
+    if (GetHGlobalFromStream(stream, &hg) == S_OK && hg) {
+      SIZE_T sz = GlobalSize(hg);
+      void* p = GlobalLock(hg);
+      if (p) {
+        out.assign((BYTE*)p, (BYTE*)p + sz);
+        GlobalUnlock(hg);
+      } else {
+        ok = false;
+      }
+    } else {
+      ok = false;
+    }
+  }
+  stream->Release();
+  return ok;
+}
+
+// Capture the current input (secure) desktop to PNG bytes + report its size.
+// Pixels are grabbed WHILE on the secure desktop (fast BitBlt), then the desktop
+// is restored BEFORE the GDI+ PNG encode — GDI+ run while the thread sits on the
+// Winlogon desktop can stall. Timing is logged so we can see where time goes.
+static bool CaptureSecureDesktopToPng(std::vector<BYTE>& png, int& outW,
+                                      int& outH) {
+  DWORD t0 = GetTickCount();
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) return false;
   HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
   if (!SetThreadDesktop(hDesk)) {
-    Log(L"agent", L"inject: SetThreadDesktop failed %lu", GetLastError());
+    CloseDesktop(hDesk);
+    return false;
+  }
+
+  HBITMAP hbm = nullptr;
+  int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+  int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  int w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+  int h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+  if (w <= 0 || h <= 0) {
+    w = GetSystemMetrics(SM_CXSCREEN);
+    h = GetSystemMetrics(SM_CYSCREEN);
+    x = 0;
+    y = 0;
+  }
+  HDC hScreen = GetDC(nullptr);
+  if (hScreen) {
+    HDC hMem = CreateCompatibleDC(hScreen);
+    hbm = CreateCompatibleBitmap(hScreen, w, h);
+    if (hMem && hbm) {
+      HGDIOBJ old = SelectObject(hMem, hbm);
+      BitBlt(hMem, 0, 0, w, h, hScreen, x, y, SRCCOPY);
+      SelectObject(hMem, old);
+    }
+    if (hMem) DeleteDC(hMem);
+    ReleaseDC(nullptr, hScreen);
+  }
+  DWORD t1 = GetTickCount();
+
+  // Restore the original desktop BEFORE encoding.
+  SetThreadDesktop(hPrev);
+  CloseDesktop(hDesk);
+
+  bool ok = false;
+  if (hbm) {
+    ok = EncodeHBitmapToPng(hbm, png);
+    DeleteObject(hbm);
+    outW = w;
+    outH = h;
+  }
+  DWORD t2 = GetTickCount();
+  Log(L"agent", L"capture-png: blt=%lums encode=%lums size=%u%ls", t1 - t0,
+      t2 - t1, (unsigned)png.size(), ok ? L"" : L"  (FAILED)");
+  return ok;
+}
+
+// Inject a mouse click at normalized (nx,ny) over the virtual desktop on the
+// current (secure) input desktop. Runs as SYSTEM, so it reaches consent.exe.
+static void InjectClickOnSecureDesktop(int button, float nx, float ny) {
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) return;
+  HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
+  if (!SetThreadDesktop(hDesk)) {
+    CloseDesktop(hDesk);
+    return;
+  }
+  LONG ax = (LONG)(nx * 65535.0f), ay = (LONG)(ny * 65535.0f);
+  DWORD dn = (button == 1) ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+  DWORD up = (button == 1) ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
+  INPUT in[3] = {0};
+  in[0].type = INPUT_MOUSE;
+  in[0].mi.dx = ax;
+  in[0].mi.dy = ay;
+  in[0].mi.dwFlags =
+      MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+  in[1].type = INPUT_MOUSE;
+  in[1].mi.dx = ax;
+  in[1].mi.dy = ay;
+  in[1].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | dn;
+  in[2].type = INPUT_MOUSE;
+  in[2].mi.dx = ax;
+  in[2].mi.dy = ay;
+  in[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | up;
+  UINT sent = SendInput(3, in, sizeof(INPUT));
+  Log(L"agent", L"inject: click btn=%d (%.3f,%.3f) sent=%u", button, nx, ny,
+      sent);
+  SetThreadDesktop(hPrev);
+  CloseDesktop(hDesk);
+}
+
+static void InjectKeyOnSecureDesktop(WORD vk) {
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) return;
+  HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
+  if (!SetThreadDesktop(hDesk)) {
     CloseDesktop(hDesk);
     return;
   }
@@ -377,47 +534,189 @@ static void InjectKeyOnSecureDesktop(WORD vk) {
   in[1].ki.wVk = vk;
   in[1].ki.dwFlags = KEYEVENTF_KEYUP;
   UINT sent = SendInput(2, in, sizeof(INPUT));
-  Log(L"agent", L"inject: sent vk=0x%02X to secure desktop (SendInput=%u, err=%lu)",
-      vk, sent, GetLastError());
+  Log(L"agent", L"inject: key vk=0x%02X sent=%u", vk, sent);
   SetThreadDesktop(hPrev);
   CloseDesktop(hDesk);
 }
 
+static bool RecvAll(SOCKET s, void* buf, int n) {
+  char* p = (char*)buf;
+  int off = 0;
+  while (off < n) {
+    int r = recv(s, p + off, n - off, 0);
+    if (r <= 0) return false;
+    off += r;
+  }
+  return true;
+}
+
+static bool SendAll(SOCKET s, const void* buf, int n) {
+  const char* p = (const char*)buf;
+  int off = 0;
+  while (off < n) {
+    int r = send(s, p + off, n - off, 0);
+    if (r == SOCKET_ERROR) return false;
+    off += r;
+  }
+  return true;
+}
+
+// Send a framed message to the connected app. A separate-thread recv is NOT
+// serialized against this send (TCP is full-duplex), so streaming never stalls.
+static void PipeSend(BYTE type, const BYTE* payload, DWORD plen) {
+  EnterCriticalSection(&g_clientLock);
+  if (g_client != INVALID_SOCKET) {
+    DWORD len = 1 + plen;
+    std::vector<BYTE> buf(4 + len);
+    memcpy(buf.data(), &len, 4);
+    buf[4] = type;
+    if (plen) memcpy(buf.data() + 5, payload, plen);
+    if (!SendAll(g_client, buf.data(), (int)buf.size())) {
+      Log(L"agent", L"tcp: send failed; dropping client");
+      shutdown(g_client, SD_BOTH);  // unblock the reader; it closesocket()s
+      g_client = INVALID_SOCKET;
+    }
+  }
+  LeaveCriticalSection(&g_clientLock);
+}
+
+static bool ClientConnected() {
+  EnterCriticalSection(&g_clientLock);
+  bool c = (g_client != INVALID_SOCKET);
+  LeaveCriticalSection(&g_clientLock);
+  return c;
+}
+
+// A viewer command (click/key) -> inject onto the secure desktop.
+static void HandleClientMessage(const std::vector<BYTE>& m) {
+  if (m.empty()) return;
+  if (m[0] == 'C' && m.size() >= 10) {
+    BYTE btn = m[1];
+    float x, y;
+    memcpy(&x, &m[2], 4);
+    memcpy(&y, &m[6], 4);
+    InjectClickOnSecureDesktop(btn, x, y);
+  } else if (m[0] == 'K' && m.size() >= 3) {
+    WORD vk;
+    memcpy(&vk, &m[1], 2);
+    InjectKeyOnSecureDesktop(vk);
+  }
+}
+
+// TCP server on 127.0.0.1: one client at a time. This thread is the reader
+// (recv loop for viewer commands); frames are pushed from the agent loop via
+// PipeSend (send), concurrently — TCP is full-duplex so neither blocks.
+static DWORD WINAPI PipeServerThread(LPVOID) {
+  SOCKET srv = socket(AF_INET, SOCK_STREAM, 0);
+  if (srv == INVALID_SOCKET) {
+    Log(L"agent", L"tcp: socket failed %d", WSAGetLastError());
+    return 0;
+  }
+  int yes = 1;
+  setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
+  sockaddr_in addr = {0};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(kPort);
+  inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+  if (bind(srv, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+    Log(L"agent", L"tcp: bind 127.0.0.1:%d failed %d", kPort, WSAGetLastError());
+    closesocket(srv);
+    return 0;
+  }
+  listen(srv, 1);
+  Log(L"agent", L"tcp: listening on 127.0.0.1:%d", kPort);
+  for (;;) {
+    SOCKET c = accept(srv, nullptr, nullptr);
+    if (c == INVALID_SOCKET) {
+      Sleep(500);
+      continue;
+    }
+    DWORD tmo = 5000;
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (char*)&tmo, sizeof(tmo));
+    EnterCriticalSection(&g_clientLock);
+    g_client = c;
+    LeaveCriticalSection(&g_clientLock);
+    Log(L"agent", L"tcp: client connected");
+    for (;;) {
+      DWORD len = 0;
+      if (!RecvAll(c, &len, 4) || len == 0 || len > (1 << 20)) break;
+      std::vector<BYTE> msg(len);
+      if (!RecvAll(c, msg.data(), (int)len)) break;
+      HandleClientMessage(msg);
+    }
+    EnterCriticalSection(&g_clientLock);
+    if (g_client == c) g_client = INVALID_SOCKET;
+    LeaveCriticalSection(&g_clientLock);
+    closesocket(c);
+    Log(L"agent", L"tcp: client disconnected");
+  }
+}
+
 // --------------------------------------------------------------------------
-// Agent: runs as SYSTEM inside the interactive session. Detects the secure
-// desktop, (Phase 2) captures it, and (Phase 3a) injects a safe keystroke to
-// prove it can drive the UAC prompt.
+// Agent main loop: detect the secure desktop; while it is up, stream PNG frames
+// to a connected app and let it inject the viewer's Yes/No. With no app
+// connected it just logs + keeps a debug BMP (NO auto-decline anymore).
 // --------------------------------------------------------------------------
 static int RunAgent() {
-  Log(L"agent", L"agent started (session detection + capture running)");
+  InitializeCriticalSection(&g_clientLock);
+  WSADATA wsa;
+  WSAStartup(MAKEWORD(2, 2), &wsa);
+  ULONG_PTR gdipToken = 0;
+  Gdiplus::GdiplusStartupInput gdipInput;
+  Gdiplus::GdiplusStartup(&gdipToken, &gdipInput, nullptr);
+  CreateThread(nullptr, 0, PipeServerThread, nullptr, 0, nullptr);
+  Log(L"agent", L"agent started (capture + TCP streaming on 127.0.0.1:47921)");
+
   std::wstring last;
+  bool wasSecure = false;
+  int frameTick = 0;
   for (;;) {
     std::wstring name = L"(unknown)";
     HDESK d = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
     if (d) {
       wchar_t buf[256] = {0};
       DWORD needed = 0;
-      if (GetUserObjectInformationW(d, UOI_NAME, buf, sizeof(buf), &needed)) {
+      if (GetUserObjectInformationW(d, UOI_NAME, buf, sizeof(buf), &needed))
         name = buf;
-      }
       CloseDesktop(d);
-    } else {
-      name = L"(OpenInputDesktop failed: " +
-             std::to_wstring(GetLastError()) + L")";
     }
+    bool secure = (_wcsicmp(name.c_str(), L"Winlogon") == 0);
+
     if (name != last) {
-      bool secure = (_wcsicmp(name.c_str(), L"Winlogon") == 0);
       Log(L"agent", L"input desktop -> %ls%ls", name.c_str(),
           secure ? L"   <<< SECURE DESKTOP / UAC PROMPT ACTIVE" : L"");
-      if (secure) {
-        Sleep(600);  // let the UAC dialog finish drawing
-        CaptureInputDesktopToBmp(
-            L"C:\\ProgramData\\NeevRemote\\secure_capture.bmp");
-        Sleep(400);
-        // Phase 3a proof: decline the prompt from SYSTEM so it closes itself.
-        InjectKeyOnSecureDesktop(VK_ESCAPE);
-      }
       last = name;
+    }
+
+    if (secure) {
+      if (!wasSecure) {
+        Sleep(500);  // let the dialog finish drawing
+        std::vector<BYTE> png;
+        int w = 0, h = 0;
+        if (CaptureSecureDesktopToPng(png, w, h)) {
+          int32_t dims[2] = {w, h};
+          DWORD ts = GetTickCount();
+          PipeSend('A', (BYTE*)dims, sizeof(dims));
+          PipeSend('F', png.data(), (DWORD)png.size());
+          Log(L"agent",
+              L"pipe: sent active+frame (%dx%d, %u bytes) send=%lums%ls", w, h,
+              (unsigned)png.size(), GetTickCount() - ts,
+              ClientConnected() ? L"" : L"  (no client)");
+        }
+        frameTick = 0;
+      } else if (ClientConnected() && (++frameTick % 3 == 0)) {
+        std::vector<BYTE> png;
+        int w = 0, h = 0;
+        if (CaptureSecureDesktopToPng(png, w, h))
+          PipeSend('F', png.data(), (DWORD)png.size());
+      }
+      wasSecure = true;
+    } else {
+      if (wasSecure) {
+        PipeSend('G', nullptr, 0);
+        Log(L"agent", L"pipe: sent UAC-gone");
+      }
+      wasSecure = false;
     }
     Sleep(400);
   }

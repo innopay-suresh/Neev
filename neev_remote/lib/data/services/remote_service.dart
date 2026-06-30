@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -14,6 +15,7 @@ import 'input_event.dart';
 import 'input_injector.dart';
 import 'screen_capture_service.dart';
 import 'signaling_service.dart';
+import 'uac_bridge.dart';
 import 'webrtc_service.dart';
 
 /// Flip to true to emit verbose input/clipboard diagnostics to the console.
@@ -79,6 +81,16 @@ class RemoteService extends ChangeNotifier {
   SignalingService? _hostSignaling;
   final ScreenCaptureService _capture = ScreenCaptureService();
   final InputInjector _injector = InputInjector();
+
+  // Privileged UAC helper bridge (Windows host only; no-op elsewhere). Streams
+  // the secure desktop to viewers and injects their Yes/No into consent.exe.
+  final UacBridge _uac = UacBridge();
+
+  // ---- Viewer-side UAC overlay state (driven by host 'uac' messages) ----
+  bool uacActive = false;
+  Uint8List? uacFrame;
+  int uacW = 0;
+  int uacH = 0;
   final Map<String, WebRTCService> _hostPeers = {};
   HostStatus _hostStatus = HostStatus.offline;
   String? _agentId;
@@ -140,6 +152,7 @@ class RemoteService extends ChangeNotifier {
   }) async {
     await stopHosting();
     _resolvedIce = await _resolveIceServers(relayUrl);
+    _setupUacBridge();  // Windows host: stream UAC to viewers (no-op elsewhere)
 
     final pw = (password == null || password.isEmpty)
         ? AuthService.generatePassword()
@@ -468,6 +481,17 @@ class RemoteService extends ChangeNotifier {
       return;
     }
 
+    // UAC secure-desktop stream (host -> viewer).
+    if (m['k'] == 'uac') {
+      _onUacMessage(m);
+      return;
+    }
+    // UAC viewer input (viewer -> host) -> inject via the helper agent.
+    if (m['k'] == 'uacin') {
+      if (isHost) _onUacInput(m);
+      return;
+    }
+
     if (isHost) {
       final event = InputEvent.decode(raw);
       if (event != null) {
@@ -476,6 +500,63 @@ class RemoteService extends ChangeNotifier {
         _logHostInput(event);
         _injector.inject(event);
       }
+    }
+  }
+
+  // Viewer side: a UAC frame/state arrived from the host.
+  void _onUacMessage(Map<String, dynamic> m) {
+    final t = m['t'] as String?;
+    if (t == 'active') {
+      uacActive = true;
+      uacW = (m['w'] as int?) ?? 0;
+      uacH = (m['h'] as int?) ?? 0;
+    } else if (t == 'frame') {
+      final d = m['d'] as String?;
+      if (d != null) uacFrame = base64Decode(d);
+      uacActive = true;
+    } else if (t == 'gone') {
+      uacActive = false;
+      uacFrame = null;
+    }
+    notifyListeners();
+  }
+
+  // Host side: a viewer's UAC click/key -> inject onto the secure desktop.
+  void _onUacInput(Map<String, dynamic> m) {
+    final a = m['a'] as String?;
+    if (a == 'click') {
+      _uac.sendClick((m['b'] as int?) ?? 0, (m['x'] as num?)?.toDouble() ?? 0,
+          (m['y'] as num?)?.toDouble() ?? 0);
+    } else if (a == 'key') {
+      _uac.sendKey((m['vk'] as int?) ?? 0);
+    }
+  }
+
+  /// Viewer: send a click on the UAC overlay (normalized 0..1) to the host.
+  void sendUacClick(int button, double x, double y) {
+    _viewerPeer?.sendData(
+        jsonEncode({'k': 'uacin', 'a': 'click', 'b': button, 'x': x, 'y': y}));
+  }
+
+  /// Viewer: send a key (Win32 VK code) to the UAC prompt on the host.
+  void sendUacKey(int vk) {
+    _viewerPeer?.sendData(jsonEncode({'k': 'uacin', 'a': 'key', 'vk': vk}));
+  }
+
+  // Host: wire the helper-agent UAC stream to all connected viewers.
+  void _setupUacBridge() {
+    if (!_uac.isSupported) return;
+    _uac.onActive = (w, h) => _broadcastToPeers(
+        jsonEncode({'k': 'uac', 't': 'active', 'w': w, 'h': h}));
+    _uac.onFrame = (png) => _broadcastToPeers(
+        jsonEncode({'k': 'uac', 't': 'frame', 'd': base64Encode(png)}));
+    _uac.onGone = () => _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
+    _uac.start();
+  }
+
+  void _broadcastToPeers(String msg) {
+    for (final peer in _hostPeers.values) {
+      peer.sendData(msg);
     }
   }
 
@@ -640,6 +721,7 @@ class RemoteService extends ChangeNotifier {
   void dispose() {
     _statsTimerMaybeStop();
     _stopClipboardSync();
+    _uac.dispose();
     stopHosting();
     disconnectViewer();
     super.dispose();

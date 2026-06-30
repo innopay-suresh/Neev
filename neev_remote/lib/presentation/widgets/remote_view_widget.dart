@@ -25,6 +25,15 @@ class RemoteViewWidget extends StatefulWidget {
   final String? hostOs;
   final void Function(InputEvent event)? onInput;
 
+  /// UAC overlay: when the host's UAC secure desktop is active, [uacFrame] is a
+  /// PNG of it (the normal video goes black during UAC). Taps are forwarded via
+  /// [onUacClick] (normalized 0..1, button 0=left).
+  final bool uacActive;
+  final Uint8List? uacFrame;
+  final int uacW;
+  final int uacH;
+  final void Function(int button, double x, double y)? onUacClick;
+
   const RemoteViewWidget({
     super.key,
     this.remoteStream,
@@ -32,6 +41,11 @@ class RemoteViewWidget extends StatefulWidget {
     this.viewOnly = false,
     this.hostOs,
     this.onInput,
+    this.uacActive = false,
+    this.uacFrame,
+    this.uacW = 0,
+    this.uacH = 0,
+    this.onUacClick,
   });
 
   @override
@@ -387,9 +401,81 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                   right: AppSpacing.md,
                   child: _viewOnlyBadge(),
                 ),
+              // UAC overlay: the host's secure desktop, on top of the (black)
+              // video while a UAC prompt is up. Taps map to normalized coords
+              // and are injected into consent.exe on the host.
+              if (widget.uacActive && widget.uacFrame != null)
+                _buildUacOverlay(size),
             ],
           );
         },
+      ),
+    );
+  }
+
+  // The host's secure desktop (UAC) shown over the video; taps are mapped to
+  // normalized coords and injected into consent.exe on the host.
+  Widget _buildUacOverlay(Size size) {
+    final png = widget.uacFrame!;
+    final iw = widget.uacW > 0 ? widget.uacW.toDouble() : 16.0;
+    final ih = widget.uacH > 0 ? widget.uacH.toDouble() : 9.0;
+    final ar = iw / ih;
+    double dispW, dispH;
+    if (size.width / size.height > ar) {
+      dispH = size.height;
+      dispW = dispH * ar;
+    } else {
+      dispW = size.width;
+      dispH = dispW / ar;
+    }
+    final left = (size.width - dispW) / 2;
+    final top = (size.height - dispH) / 2;
+
+    return Positioned.fill(
+      child: ColoredBox(
+        color: const Color(0xCC0B1220),
+        child: Stack(
+          children: [
+            Positioned(
+              left: left,
+              top: top,
+              width: dispW,
+              height: dispH,
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (e) {
+                  final nx = (e.localPosition.dx / dispW).clamp(0.0, 1.0);
+                  final ny = (e.localPosition.dy / dispH).clamp(0.0, 1.0);
+                  widget.onUacClick?.call(0, nx, ny);
+                },
+                // The rect already has the image's aspect ratio, so fill = no
+                // distortion and tap math maps 1:1 to the host desktop.
+                child: Image.memory(png, fit: BoxFit.fill, gaplessPlayback: true),
+              ),
+            ),
+            Positioned(
+              top: AppSpacing.md,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text(
+                    'Windows admin prompt — click Yes or No',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

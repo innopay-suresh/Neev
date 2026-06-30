@@ -652,6 +652,12 @@ class _ConnectedSession extends ConsumerWidget {
                     ? null
                     : (event) =>
                         ref.read(remoteServiceProvider).sendViewerInput(event),
+                uacActive: service.uacActive,
+                uacFrame: service.uacFrame,
+                uacW: service.uacW,
+                uacH: service.uacH,
+                onUacClick: (b, x, y) =>
+                    ref.read(remoteServiceProvider).sendUacClick(b, x, y),
               ),
             ),
           ),
