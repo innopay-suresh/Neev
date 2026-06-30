@@ -47,8 +47,10 @@ static const wchar_t* kLogPath = L"C:\\ProgramData\\NeevRemote\\helper.log";
 // --------------------------------------------------------------------------
 static void Log(const wchar_t* tag, const wchar_t* fmt, ...) {
   CreateDirectoryW(kLogDir, nullptr);
-  FILE* f = nullptr;
-  if (_wfopen_s(&f, kLogPath, L"a+, ccs=UTF-8") != 0 || !f) return;
+  // Plain append mode (portable across the MSVC and MinGW runtimes); log text
+  // is ASCII so no wide-encoding mode is needed.
+  FILE* f = _wfopen(kLogPath, L"a+");
+  if (!f) return;
   SYSTEMTIME st;
   GetLocalTime(&st);
   fwprintf(f, L"[%04d-%02d-%02d %02d:%02d:%02d] %ls: ", st.wYear, st.wMonth,
