@@ -361,7 +361,12 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                 onPointerCancel: (_) => _onPointerCancel(size),
                 onPointerSignal: _onPointerSignal,
                 child: MouseRegion(
-                  cursor: SystemMouseCursors.none,
+                  // Show the local arrow over the remote video. The Windows
+                  // desktop capturer does NOT include the host cursor, so
+                  // hiding the local one (SystemMouseCursors.none) left the
+                  // Windows viewer with no visible cursor at all — you couldn't
+                  // see where you were pointing or aim clicks.
+                  cursor: SystemMouseCursors.basic,
                   // The cursor leaving the video (incl. when the window is
                   // minimized) releases any held button so the host never gets
                   // stuck — desktop lifecycle events are unreliable on minimize.
