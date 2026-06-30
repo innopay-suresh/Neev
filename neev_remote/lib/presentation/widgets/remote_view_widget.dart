@@ -33,6 +33,8 @@ class RemoteViewWidget extends StatefulWidget {
   final int uacW;
   final int uacH;
   final void Function(int button, double x, double y)? onUacClick;
+  final VoidCallback? onUacApprove;
+  final VoidCallback? onUacDecline;
 
   const RemoteViewWidget({
     super.key,
@@ -46,6 +48,8 @@ class RemoteViewWidget extends StatefulWidget {
     this.uacW = 0,
     this.uacH = 0,
     this.onUacClick,
+    this.onUacApprove,
+    this.onUacDecline,
   });
 
   @override
@@ -465,7 +469,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: const Text(
-                    'Windows admin prompt — click Yes or No',
+                    'Windows admin prompt — use the buttons below',
                     style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,
@@ -474,7 +478,53 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                 ),
               ),
             ),
+            // Reliable Approve/Decline buttons (keyboard injection on the host).
+            Positioned(
+              bottom: 28,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _uacActionButton('Approve (Yes)', Icons.check_circle,
+                        const Color(0xFF16A34A), widget.onUacApprove),
+                    const SizedBox(width: AppSpacing.lg),
+                    _uacActionButton('Decline (No)', Icons.cancel,
+                        const Color(0xFFDC2626), widget.onUacDecline),
+                  ],
+                ),
+              ),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _uacActionButton(
+      String label, IconData icon, Color color, VoidCallback? onTap) {
+    return Material(
+      color: color,
+      borderRadius: BorderRadius.circular(12),
+      elevation: 6,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: Colors.white, size: 22),
+              const SizedBox(width: 10),
+              Text(label,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16)),
+            ],
+          ),
         ),
       ),
     );

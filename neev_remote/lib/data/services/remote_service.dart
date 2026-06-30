@@ -543,6 +543,21 @@ class RemoteService extends ChangeNotifier {
     _viewerPeer?.sendData(jsonEncode({'k': 'uacin', 'a': 'key', 'vk': vk}));
   }
 
+  /// Viewer: APPROVE the UAC prompt. Uses the proven keyboard path — Left moves
+  /// focus from the default No to Yes, then Enter activates it (200ms apart so
+  /// the focus change registers). More reliable than a coordinate mouse click.
+  void sendUacApprove() {
+    _viewerPeer?.sendData(jsonEncode({'k': 'uacin', 'a': 'key', 'vk': 0x25})); // VK_LEFT
+    Future.delayed(const Duration(milliseconds: 220), () {
+      _viewerPeer?.sendData(jsonEncode({'k': 'uacin', 'a': 'key', 'vk': 0x0D})); // VK_RETURN
+    });
+  }
+
+  /// Viewer: DECLINE the UAC prompt (Esc).
+  void sendUacDecline() {
+    _viewerPeer?.sendData(jsonEncode({'k': 'uacin', 'a': 'key', 'vk': 0x1B})); // VK_ESCAPE
+  }
+
   // Host: wire the helper-agent UAC stream to all connected viewers.
   void _setupUacBridge() {
     if (!_uac.isSupported) return;
