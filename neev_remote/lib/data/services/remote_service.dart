@@ -91,6 +91,13 @@ class RemoteService extends ChangeNotifier {
   Uint8List? uacFrame;
   int uacW = 0;
   int uacH = 0;
+  // A secure-desktop frame is base64'd and split into ordered chunks so it fits
+  // the WebRTC data-channel per-message limit (a full-res frame base64s to
+  // ~300 KB, over the ~256 KB cap, and was being silently dropped). Reassembled
+  // here in order; the reliable/ordered channel guarantees no gaps.
+  final StringBuffer _uacChunkBuf = StringBuffer();
+  int _uacChunkNext = 0;
+  int _uacChunkTotal = 0;
   final Map<String, WebRTCService> _hostPeers = {};
   HostStatus _hostStatus = HostStatus.offline;
   String? _agentId;
@@ -534,11 +541,43 @@ class RemoteService extends ChangeNotifier {
       uacH = (m['h'] as int?) ?? 0;
     } else if (t == 'frame') {
       final d = m['d'] as String?;
-      if (d != null) uacFrame = base64Decode(d);
-      uacActive = true;
+      if (d == null) return;
+      final idx = m['i'] as int?;
+      final total = m['n'] as int?;
+      if (idx == null || total == null) {
+        // Legacy single-message frame.
+        uacFrame = base64Decode(d);
+        uacActive = true;
+      } else {
+        if (idx == 0) {
+          _uacChunkBuf.clear();
+          _uacChunkNext = 0;
+          _uacChunkTotal = total;
+        }
+        if (idx == _uacChunkNext && total == _uacChunkTotal) {
+          _uacChunkBuf.write(d);
+          _uacChunkNext++;
+          if (_uacChunkNext == _uacChunkTotal) {
+            try {
+              uacFrame = base64Decode(_uacChunkBuf.toString());
+              uacActive = true;
+            } catch (_) {}
+            _uacChunkBuf.clear();
+            _uacChunkNext = 0;
+          }
+        } else {
+          // A chunk arrived out of sequence — drop this partial frame and wait
+          // for the next one to start fresh at idx 0.
+          _uacChunkBuf.clear();
+          _uacChunkNext = 0;
+        }
+        if (idx != _uacChunkTotal - 1) return; // no repaint mid-frame
+      }
     } else if (t == 'gone') {
       uacActive = false;
       uacFrame = null;
+      _uacChunkBuf.clear();
+      _uacChunkNext = 0;
     }
     notifyListeners();
   }
@@ -585,10 +624,30 @@ class RemoteService extends ChangeNotifier {
     if (!_uac.isSupported) return;
     _uac.onActive = (w, h) => _broadcastToPeers(
         jsonEncode({'k': 'uac', 't': 'active', 'w': w, 'h': h}));
-    _uac.onFrame = (png) => _broadcastToPeers(
-        jsonEncode({'k': 'uac', 't': 'frame', 'd': base64Encode(png)}));
+    _uac.onFrame = _broadcastUacFrame;
     _uac.onGone = () => _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
     _uac.start();
+  }
+
+  // Base64 a secure-desktop frame and send it in ordered chunks small enough for
+  // one WebRTC data-channel message. A full-res frame base64s to ~300 KB, which
+  // overran the ~256 KB per-message limit and was dropped whole — so a high-DPI
+  // host's UAC prompt never appeared in the viewer.
+  void _broadcastUacFrame(Uint8List png) {
+    final b64 = base64Encode(png);
+    const chunkLen = 48 * 1024; // 48 KB/message — safely under the DC limit
+    final total = (b64.length / chunkLen).ceil().clamp(1, 1 << 20);
+    for (var i = 0; i < total; i++) {
+      final start = i * chunkLen;
+      final end = start + chunkLen < b64.length ? start + chunkLen : b64.length;
+      _broadcastToPeers(jsonEncode({
+        'k': 'uac',
+        't': 'frame',
+        'i': i,
+        'n': total,
+        'd': b64.substring(start, end),
+      }));
+    }
   }
 
   void _broadcastToPeers(String msg) {
