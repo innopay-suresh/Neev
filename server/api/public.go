@@ -179,15 +179,15 @@ func (s *Server) downloadInstaller(c *fiber.Ctx) error {
 func installerPlatform(name string) string {
 	lower := strings.ToLower(name)
 	switch {
-	case strings.HasSuffix(lower, ".zip") && (strings.Contains(lower, "desktop") || strings.Contains(lower, ".app")):
-		return "macos-desktop"
-	case strings.HasSuffix(lower, ".exe"):
+	// Prefer an explicit platform token in the filename over the extension, so
+	// e.g. a Windows portable .zip isn't mislabelled as macOS.
+	case strings.Contains(lower, "windows") || strings.HasSuffix(lower, ".exe"):
 		return "windows"
+	case strings.Contains(lower, "linux") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".deb"):
+		return "linux"
 	case strings.HasSuffix(lower, ".pkg"):
 		return "macos-agent"
-	case strings.HasSuffix(lower, ".deb"):
-		return "linux"
-	case strings.HasSuffix(lower, ".dmg"):
+	case strings.HasSuffix(lower, ".dmg") || strings.Contains(lower, "macos") || strings.Contains(lower, ".app"):
 		return "macos-desktop"
 	case strings.HasSuffix(lower, ".zip"):
 		return "macos"
