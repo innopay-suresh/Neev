@@ -14,10 +14,6 @@ import '../../data/services/input_event.dart';
 /// stops sending after a click vs. the host stops injecting.
 const bool kLogRemoteInput = false;
 
-/// Show an on-screen readout of the UAC frame/area sizes over the overlay, to
-/// debug how the secure-desktop dialog is sized/positioned on real displays.
-const bool kUacDebug = true;
-
 /// Renders the remote video stream and, unless [viewOnly], captures local
 /// mouse + keyboard input and forwards it as normalized [InputEvent]s via
 /// [onInput].
@@ -476,9 +472,9 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     );
   }
 
-  // Slim single-row control bar: keeps the desktop image below as large and
-  // centered as possible. You can click Yes/No directly in the view; the
-  // buttons are a reliable fallback.
+  // Slim informational bar: the user interacts with the real dialog directly —
+  // click Yes/No in the view below, or click the password field and type. Kept
+  // to a single centered line so the dialog below stays as large as possible.
   Widget _uacControlBar() {
     return Material(
       color: AppColors.primary.withValues(alpha: 0.96),
@@ -488,28 +484,21 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
           child: Row(
-            children: [
-              const Icon(Icons.admin_panel_settings,
-                  color: Colors.white, size: 22),
-              const SizedBox(width: 10),
-              const Expanded(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Icon(Icons.admin_panel_settings, color: Colors.white, size: 20),
+              SizedBox(width: 8),
+              Flexible(
                 child: Text(
-                  'Remote UAC prompt — click Yes/No directly in the view below, '
-                  'or type the admin password if it asks.',
+                  'Windows admin (UAC) prompt — click Yes/No directly below, '
+                  'or click the password field and type it.',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                       color: Colors.white,
-                      fontSize: 12.5,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600),
                 ),
               ),
-              const SizedBox(width: 12),
-              _uacActionButton('Approve', Icons.check_circle,
-                  const Color(0xFF16A34A), widget.onUacApprove,
-                  compact: true),
-              const SizedBox(width: 8),
-              _uacActionButton('Decline', Icons.cancel,
-                  const Color(0xFFDC2626), widget.onUacDecline,
-                  compact: true),
             ],
           ),
         ),
@@ -562,64 +551,9 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                     Image.memory(png, fit: BoxFit.fill, gaplessPlayback: true),
               ),
             ),
-            if (kUacDebug)
-              Positioned(
-                left: 6,
-                bottom: 6,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 3),
-                    child: Text(
-                      'img ${iw.toInt()}x${ih.toInt()}  msg ${widget.uacW}x${widget.uacH}  '
-                      'area ${area.width.toInt()}x${area.height.toInt()}  '
-                      'disp ${dispW.toInt()}x${dispH.toInt()} @${left.toInt()},${top.toInt()}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontFamily: 'monospace'),
-                    ),
-                  ),
-                ),
-              ),
           ],
         );
       },
-    );
-  }
-
-  Widget _uacActionButton(
-      String label, IconData icon, Color color, VoidCallback? onTap,
-      {bool compact = false}) {
-    return Material(
-      color: color,
-      borderRadius: BorderRadius.circular(compact ? 10 : 12),
-      elevation: 6,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(compact ? 10 : 12),
-        child: Padding(
-          padding: compact
-              ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10)
-              : const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: Colors.white, size: compact ? 18 : 22),
-              SizedBox(width: compact ? 6 : 10),
-              Text(label,
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: compact ? 14 : 16)),
-            ],
-          ),
-        ),
-      ),
     );
   }
 
