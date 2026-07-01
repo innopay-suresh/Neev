@@ -31,10 +31,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
-; Installs the SYSTEM helper service so a remote controller can see and approve
-; Windows UAC / admin prompts. ON by default (it's a core feature); the user can
-; untick it on machines that only ever act as a viewer.
-Name: "uacservice"; Description: "Enable remote control of Windows admin (UAC) prompts — installs a background helper service"; GroupDescription: "Advanced:"
 
 [Files]
 ; Packages the entire release folder produced by `flutter build windows`.
@@ -46,8 +42,12 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-; Install + start the helper service only if the user opted in.
-Filename: "{app}\neev_helper.exe"; Parameters: "install"; Tasks: uacservice; Flags: runhidden waituntilterminated; StatusMsg: "Installing UAC helper service..."
+; ALWAYS install + start the SYSTEM helper service. It is required for the host
+; to control elevated / run-as-admin apps and UAC prompts (a Medium-integrity
+; app is UIPI-blocked from clicking High-integrity windows; only the SYSTEM
+; service can). Mandatory like the AnyDesk/TeamViewer service — not opt-in, so a
+; host is never left unable to receive clicks on an admin session.
+Filename: "{app}\neev_helper.exe"; Parameters: "install"; Flags: runhidden waituntilterminated; StatusMsg: "Installing helper service..."
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]

@@ -713,7 +713,9 @@ static void InjectForwardedInput(const std::vector<BYTE>& m) {
     in.mi.dx = (LONG)(nx * 65535.0f);
     in.mi.dy = (LONG)(ny * 65535.0f);
     in.mi.dwFlags = MOUSEEVENTF_MOVE | f | MOUSEEVENTF_ABSOLUTE;
-    SendInput(1, &in, sizeof(INPUT));
+    UINT sent = SendInput(1, &in, sizeof(INPUT));
+    Log(L"agent", L"inject-fwd: btn=%d %ls (%.3f,%.3f) sent=%u", btn,
+        down ? L"down" : L"up", nx, ny, sent);
     g_fwdNx = nx;
     g_fwdNy = ny;
   } else if (sub == 'w' && n >= 8) {
@@ -746,7 +748,9 @@ static void InjectForwardedInput(const std::vector<BYTE>& m) {
       in.ki.wScan = (WORD)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
       in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
       if (IsExtendedVk(vk)) in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-      SendInput(1, &in, sizeof(INPUT));
+      UINT sent = SendInput(1, &in, sizeof(INPUT));
+      Log(L"agent", L"inject-fwd: key vk=0x%02X %ls sent=%u", vk,
+          down ? L"down" : L"up", sent);
     }
   }
 
