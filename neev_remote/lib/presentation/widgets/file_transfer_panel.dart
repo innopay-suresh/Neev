@@ -25,18 +25,43 @@ Future<void> pickAndSendFile(BuildContext context, RemoteService service) async 
   }
 }
 
-/// Compact "Send file" button.
-class SendFileButton extends StatelessWidget {
+/// Export (send a file to the other computer) + Import (ask the other computer
+/// to send you a file) buttons.
+class FileShareButtons extends StatelessWidget {
   final RemoteService service;
   final bool dense;
-  const SendFileButton({super.key, required this.service, this.dense = false});
+  const FileShareButtons({super.key, required this.service, this.dense = false});
 
   @override
   Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: () => pickAndSendFile(context, service),
-      icon: const Icon(Icons.upload_file, size: 18),
-      label: Text(dense ? 'Send' : 'Send file'),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: 'Send a file to the connected computer',
+          child: OutlinedButton.icon(
+            onPressed: () => pickAndSendFile(context, service),
+            icon: const Icon(Icons.upload_file, size: 18),
+            label: const Text('Export'),
+          ),
+        ),
+        SizedBox(width: dense ? 6 : 8),
+        Tooltip(
+          message: 'Ask the connected computer to send you a file',
+          child: OutlinedButton.icon(
+            onPressed: () {
+              service.requestFileFromPeer();
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text(
+                    'Import requested — the other computer picks a file to send'),
+                duration: Duration(seconds: 3),
+              ));
+            },
+            icon: const Icon(Icons.download_for_offline_outlined, size: 18),
+            label: const Text('Import'),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -54,6 +54,7 @@ class FileTransferManager {
     required this.buffered,
     required this.store,
     required this.onChange,
+    this.onRequest,
   });
 
   /// Sends one JSON message on the peer's file channel.
@@ -64,6 +65,10 @@ class FileTransferManager {
 
   final FileStore store;
   final void Function() onChange;
+
+  /// Called when the peer asks us to share a file (their "Import") — should open
+  /// a picker and send the chosen file back.
+  final Future<void> Function()? onRequest;
 
   /// Raw bytes per 'data' message; base64 inflates 36 KB → 48 KB, well under
   /// the ~256 KB channel limit.
@@ -125,6 +130,10 @@ class FileTransferManager {
   /// Handle an inbound {k:'ft', ...} message.
   void handleMessage(Map<String, dynamic> m) {
     final t = m['t'] as String?;
+    if (t == 'request') {
+      onRequest?.call();
+      return;
+    }
     final id = m['id'] as String?;
     if (id == null) return;
     switch (t) {

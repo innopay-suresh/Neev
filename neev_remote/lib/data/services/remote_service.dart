@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -94,14 +95,31 @@ class RemoteService extends ChangeNotifier {
     buffered: _fileBuffered,
     store: FileStore(),
     onChange: notifyListeners,
+    onRequest: _onFileRequest,
   );
 
   /// Active + recent file transfers (for the session UI).
   List<FileTransfer> get fileTransfers => _files.transfers;
 
-  /// Send a picked file to the connected peer (viewer→host or host→viewers).
+  /// Export: send a picked file to the connected peer (viewer→host or
+  /// host→viewers).
   Future<FileTransfer?> sendFile(String name, Uint8List bytes) =>
       _files.sendFile(name, bytes);
+
+  /// Import: ask the connected peer to pick a file and send it to us.
+  void requestFileFromPeer() {
+    _sendFileData(jsonEncode({'k': 'ft', 't': 'request'}));
+  }
+
+  // The peer sent an import request — open a picker here and send the choice.
+  Future<void> _onFileRequest() async {
+    try {
+      final f = await openFile();
+      if (f == null) return;
+      final bytes = await f.readAsBytes();
+      await _files.sendFile(f.name, bytes);
+    } catch (_) {}
+  }
 
   void clearFinishedTransfers() => _files.clearFinished();
 

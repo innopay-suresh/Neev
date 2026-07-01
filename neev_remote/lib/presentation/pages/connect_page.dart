@@ -421,7 +421,7 @@ class _ShareCard extends ConsumerWidget {
               const SizedBox(height: AppSpacing.md),
               Align(
                 alignment: Alignment.centerLeft,
-                child: SendFileButton(service: service),
+                child: FileShareButtons(service: service),
               ),
             ],
             if (service.fileTransfers.isNotEmpty) ...[
@@ -711,7 +711,7 @@ class _ConnectedSession extends ConsumerWidget {
                 _StatChip(Icons.movie, stats.codec ?? '—'),
                 _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
                 const Spacer(),
-                SendFileButton(service: service, dense: true),
+                FileShareButtons(service: service, dense: true),
                 const SizedBox(width: AppSpacing.sm),
                 OutlinedButton.icon(
                   onPressed: () =>
