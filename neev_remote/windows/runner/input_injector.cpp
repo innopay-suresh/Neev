@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -75,6 +76,43 @@ bool IsExtendedVk(WORD vk) {
     default:
       return false;
   }
+}
+
+// Integrity level (SECURITY_MANDATORY_*_RID) of a process, or 0 on failure.
+DWORD ProcessIntegrityLevel(HANDLE hProc) {
+  HANDLE hTok = nullptr;
+  if (!OpenProcessToken(hProc, TOKEN_QUERY, &hTok)) return 0;
+  DWORD size = 0;
+  GetTokenInformation(hTok, TokenIntegrityLevel, nullptr, 0, &size);
+  DWORD il = 0;
+  if (size) {
+    std::vector<BYTE> buf(size);
+    if (GetTokenInformation(hTok, TokenIntegrityLevel, buf.data(), size,
+                            &size)) {
+      auto* label = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buf.data());
+      DWORD count = *GetSidSubAuthorityCount(label->Label.Sid);
+      il = *GetSidSubAuthority(label->Label.Sid, count - 1);
+    }
+  }
+  CloseHandle(hTok);
+  return il;
+}
+
+// Is the foreground window's process at a higher integrity level than us? If so
+// UIPI blocks our SendInput from reaching it, and the caller must route input
+// through the SYSTEM agent instead.
+bool IsForegroundElevated() {
+  HWND hwnd = GetForegroundWindow();
+  if (!hwnd) return false;
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  if (!pid) return false;
+  HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!hProc) return true;  // can't even open it => higher IL than us
+  DWORD fgIl = ProcessIntegrityLevel(hProc);
+  CloseHandle(hProc);
+  DWORD selfIl = ProcessIntegrityLevel(GetCurrentProcess());
+  return fgIl > selfIl;
 }
 
 template <typename T>
@@ -230,6 +268,8 @@ void RegisterInputInjector(flutter::FlutterEngine* engine) {
             return;
           }
           result->Success();
+        } else if (call.method_name() == "isForegroundElevated") {
+          result->Success(flutter::EncodableValue(IsForegroundElevated()));
         } else {
           result->NotImplemented();
         }

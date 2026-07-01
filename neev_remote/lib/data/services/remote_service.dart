@@ -127,6 +127,14 @@ class RemoteService extends ChangeNotifier {
   int _lastInputMs = 0;
   Timer? _hostInputWatchdog;
 
+  // When the host's foreground window is elevated, our Medium-integrity injector
+  // can't reach it (UIPI) — route input through the SYSTEM agent instead. Polled
+  // so the per-event hot path stays a plain bool read. [_routeToHelper] latches
+  // while buttons are held so a drag never splits across the two injectors.
+  Timer? _fgElevationPoll;
+  bool _fgElevated = false;
+  bool _routeToHelper = false;
+
   ViewerStatus get viewerStatus => _viewerStatus;
   bool get isViewing =>
       _viewerStatus == ViewerStatus.connecting ||
@@ -202,6 +210,7 @@ class RemoteService extends ChangeNotifier {
   Future<void> stopHosting() async {
     _statsTimerMaybeStop();
     _stopHostInputWatchdog();
+    _stopFgElevationPoll();
     for (final peer in _hostPeers.values) {
       await peer.close();
     }
@@ -495,10 +504,19 @@ class RemoteService extends ChangeNotifier {
     if (isHost) {
       final event = InputEvent.decode(raw);
       if (event != null) {
+        // Only re-evaluate the route while nothing is held, so a drag/press
+        // started on one injector always finishes on the same one.
+        if (_heldButtons.isEmpty) {
+          _routeToHelper = _fgElevated && _uac.isConnected;
+        }
         _trackHeldButton(event);
         _lastInputMs = _inputClock.elapsedMilliseconds;
         _logHostInput(event);
-        _injector.inject(event);
+        if (_routeToHelper) {
+          _uac.sendInput(event.data);
+        } else {
+          _injector.inject(event);
+        }
       }
     }
   }
@@ -567,6 +585,25 @@ class RemoteService extends ChangeNotifier {
         jsonEncode({'k': 'uac', 't': 'frame', 'd': base64Encode(png)}));
     _uac.onGone = () => _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
     _uac.start();
+    _startFgElevationPoll();
+  }
+
+  // Cheap background poll of whether the foreground window is elevated, so the
+  // input hot path can route to the SYSTEM agent without a per-event channel
+  // round trip. Only meaningful when the agent is connected.
+  void _startFgElevationPoll() {
+    _fgElevationPoll?.cancel();
+    _fgElevationPoll =
+        Timer.periodic(const Duration(milliseconds: 300), (_) async {
+      _fgElevated = await _injector.isForegroundElevated();
+    });
+  }
+
+  void _stopFgElevationPoll() {
+    _fgElevationPoll?.cancel();
+    _fgElevationPoll = null;
+    _fgElevated = false;
+    _routeToHelper = false;
   }
 
   void _broadcastToPeers(String msg) {

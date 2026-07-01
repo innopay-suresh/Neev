@@ -9,9 +9,16 @@ import 'package:flutter/foundation.dart';
 ///
 /// The agent streams the UAC secure desktop (which the in-app screen capture
 /// can't see) and injects clicks/keys that the in-app injector can't reach.
+/// It also injects ordinary input when the host's foreground window is elevated
+/// (High integrity): our own in-app injector runs at Medium integrity and UIPI
+/// blocks it from reaching elevated windows, but the SYSTEM agent can.
+///
 /// Wire protocol — `[uint32 LE len][uint8 type][payload]` (len = 1 + payload):
-///   agent -> us:  'A' int32 w,h (UAC active)   'F' png bytes   'G' (UAC gone)
+///   agent -> us:  'A' int32 w,h (UAC active)   'F' jpeg bytes  'G' (UAC gone)
 ///   us -> agent:  'C' uint8 btn, f32 x, f32 y (click)   'K' uint16 vk (key)
+///                 'I' uint8 sub, ... (forwarded normal-desktop input; sub is
+///                     'm' move f32 x,y | 'b' button u8 btn,down,hasPos,f32 x,y
+///                     | 'w' wheel f32 dx,dy | 'k' key u16 hidUsage,u8 down)
 class UacBridge {
   static const int _port = 47921;
   static const int _kActive = 0x41; // 'A'
@@ -19,6 +26,7 @@ class UacBridge {
   static const int _kGone = 0x47; // 'G'
   static const int _kClick = 0x43; // 'C'
   static const int _kKey = 0x4B; // 'K'
+  static const int _kInput = 0x49; // 'I'
 
   Socket? _sock;
   Uint8List _pending = Uint8List(0);
@@ -81,7 +89,10 @@ class UacBridge {
     while (_pending.length - off >= 4) {
       final len = ByteData.sublistView(_pending, off, off + 4)
           .getUint32(0, Endian.little);
-      if (len == 0 || len > (1 << 20)) {
+      // Cap generously: a secure-desktop frame of a standard-user credential
+      // prompt (undimmed wallpaper) is far bigger than the old 1 MB limit, which
+      // silently dropped those frames so the prompt never reached the viewer.
+      if (len == 0 || len > (16 << 20)) {
         _pending = Uint8List(0); // corrupt stream; resync by dropping
         return;
       }
@@ -143,6 +154,58 @@ class UacBridge {
   void sendKey(int vk) {
     final p = ByteData(2)..setUint16(0, vk, Endian.little);
     _send(_kKey, p.buffer.asUint8List());
+  }
+
+  /// Forward one ordinary [InputEvent] payload (the `{'k': ...}` map) to the
+  /// SYSTEM agent so it can inject it into an elevated foreground window that
+  /// our own Medium-integrity injector can't reach. Mirrors the binary layout
+  /// the agent decodes in `InjectForwardedInput`.
+  void sendInput(Map<String, dynamic> e) {
+    final k = e['k'] as String?;
+    final b = BytesBuilder();
+    switch (k) {
+      case 'mv':
+        b.addByte(0x6D); // 'm'
+        b.add((ByteData(8)
+              ..setFloat32(0, (e['x'] as num?)?.toDouble() ?? 0, Endian.little)
+              ..setFloat32(4, (e['y'] as num?)?.toDouble() ?? 0, Endian.little))
+            .buffer
+            .asUint8List());
+        break;
+      case 'btn':
+        final x = (e['x'] as num?)?.toDouble();
+        final y = (e['y'] as num?)?.toDouble();
+        final hasPos = x != null && y != null;
+        b.addByte(0x62); // 'b'
+        b.add((ByteData(11)
+              ..setUint8(0, (e['b'] as int?) ?? 0)
+              ..setUint8(1, e['d'] == true ? 1 : 0)
+              ..setUint8(2, hasPos ? 1 : 0)
+              ..setFloat32(3, x ?? 0, Endian.little)
+              ..setFloat32(7, y ?? 0, Endian.little))
+            .buffer
+            .asUint8List());
+        break;
+      case 'whl':
+        b.addByte(0x77); // 'w'
+        b.add((ByteData(8)
+              ..setFloat32(0, (e['dx'] as num?)?.toDouble() ?? 0, Endian.little)
+              ..setFloat32(4, (e['dy'] as num?)?.toDouble() ?? 0, Endian.little))
+            .buffer
+            .asUint8List());
+        break;
+      case 'key':
+        b.addByte(0x6B); // 'k'
+        b.add((ByteData(3)
+              ..setUint16(0, (e['u'] as int?) ?? 0, Endian.little)
+              ..setUint8(2, e['d'] == true ? 1 : 0))
+            .buffer
+            .asUint8List());
+        break;
+      default:
+        return;
+    }
+    _send(_kInput, b.toBytes());
   }
 
   void dispose() {

@@ -478,18 +478,34 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                 ),
               ),
             ),
-            // Reliable Approve/Decline buttons (keyboard injection on the host).
+            // Reliable Approve/Decline buttons in a solid bottom bar so they're
+            // always clearly visible over whatever the captured desktop shows,
+            // wrap on narrow screens, and clear the device safe area.
             Positioned(
-              bottom: 28,
               left: 0,
               right: 0,
-              child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+              bottom: 0,
+              child: Container(
+                padding: EdgeInsets.only(
+                  top: AppSpacing.lg,
+                  bottom: AppSpacing.lg + MediaQuery.of(context).padding.bottom,
+                  left: AppSpacing.md,
+                  right: AppSpacing.md,
+                ),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xF20B1220)],
+                  ),
+                ),
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: AppSpacing.lg,
+                  runSpacing: AppSpacing.md,
                   children: [
                     _uacActionButton('Approve (Yes)', Icons.check_circle,
                         const Color(0xFF16A34A), widget.onUacApprove),
-                    const SizedBox(width: AppSpacing.lg),
                     _uacActionButton('Decline (No)', Icons.cancel,
                         const Color(0xFFDC2626), widget.onUacDecline),
                   ],

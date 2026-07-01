@@ -13,5 +13,6 @@ class UacBridge {
   void start() {}
   void sendClick(int button, double x, double y) {}
   void sendKey(int vk) {}
+  void sendInput(Map<String, dynamic> e) {}
   void dispose() {}
 }

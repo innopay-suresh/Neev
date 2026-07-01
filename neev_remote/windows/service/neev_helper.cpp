@@ -402,13 +402,50 @@ static int GetEncoderClsid(const WCHAR* mime, CLSID* clsid) {
   return -1;
 }
 
-static bool EncodeHBitmapToPng(HBITMAP hbm, std::vector<BYTE>& out) {
-  Gdiplus::Bitmap bmp(hbm, (HPALETTE) nullptr);
+// Encode the captured desktop as JPEG, downscaled so the longest side is
+// <= kMaxDim. PNG of a UAC *credential* prompt (standard-user login: the full
+// wallpaper shows behind it, undimmed) ran 1.5-7 MB — too big for the viewer's
+// TCP framer AND for a single WebRTC data-channel message, so those frames were
+// silently dropped and the prompt never appeared in the viewer. JPEG + downscale
+// keeps every frame to ~100-150 KB; the dialog stays perfectly legible and the
+// viewer's normalized-coordinate clicks are unaffected by the scale.
+static bool EncodeHBitmapToJpeg(HBITMAP hbm, std::vector<BYTE>& out) {
+  Gdiplus::Bitmap src(hbm, (HPALETTE) nullptr);
+  UINT sw = src.GetWidth(), sh = src.GetHeight();
+  if (sw == 0 || sh == 0) return false;
+
+  const UINT kMaxDim = 1366;
+  UINT mx = sw > sh ? sw : sh;
+  double scale = (mx > kMaxDim) ? (double)kMaxDim / (double)mx : 1.0;
+  UINT dw = (UINT)(sw * scale + 0.5), dh = (UINT)(sh * scale + 0.5);
+  if (dw == 0) dw = 1;
+  if (dh == 0) dh = 1;
+
   CLSID clsid;
-  if (GetEncoderClsid(L"image/png", &clsid) < 0) return false;
+  if (GetEncoderClsid(L"image/jpeg", &clsid) < 0) return false;
+
+  ULONG quality = 80;
+  Gdiplus::EncoderParameters params;
+  params.Count = 1;
+  params.Parameter[0].Guid = Gdiplus::EncoderQuality;
+  params.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+  params.Parameter[0].NumberOfValues = 1;
+  params.Parameter[0].Value = &quality;
+
   IStream* stream = nullptr;
   if (CreateStreamOnHGlobal(nullptr, TRUE, &stream) != S_OK) return false;
-  bool ok = (bmp.Save(stream, &clsid, nullptr) == Gdiplus::Ok);
+
+  bool ok;
+  if (scale < 1.0) {
+    Gdiplus::Bitmap scaled(dw, dh, PixelFormat24bppRGB);
+    Gdiplus::Graphics g(&scaled);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    g.DrawImage(&src, 0, 0, (INT)dw, (INT)dh);
+    ok = (scaled.Save(stream, &clsid, &params) == Gdiplus::Ok);
+  } else {
+    ok = (src.Save(stream, &clsid, &params) == Gdiplus::Ok);
+  }
+
   if (ok) {
     HGLOBAL hg = nullptr;
     if (GetHGlobalFromStream(stream, &hg) == S_OK && hg) {
@@ -474,13 +511,13 @@ static bool CaptureSecureDesktopToPng(std::vector<BYTE>& png, int& outW,
 
   bool ok = false;
   if (hbm) {
-    ok = EncodeHBitmapToPng(hbm, png);
+    ok = EncodeHBitmapToJpeg(hbm, png);
     DeleteObject(hbm);
     outW = w;
     outH = h;
   }
   DWORD t2 = GetTickCount();
-  Log(L"agent", L"capture-png: blt=%lums encode=%lums size=%u%ls", t1 - t0,
+  Log(L"agent", L"capture-img: blt=%lums encode=%lums size=%u%ls", t1 - t0,
       t2 - t1, (unsigned)png.size(), ok ? L"" : L"  (FAILED)");
   return ok;
 }
@@ -519,6 +556,24 @@ static void InjectClickOnSecureDesktop(int button, float nx, float ny) {
   CloseDesktop(hDesk);
 }
 
+// Arrow keys, Home/End, Insert/Delete, etc. are "extended" keys. Injected
+// without KEYEVENTF_EXTENDEDKEY they collapse to their numpad location — e.g.
+// VK_LEFT becomes numpad-4, which does NOT move UAC focus. That silently broke
+// Approve's Left->Yes step, so Approve only worked when Yes was already the
+// default. Mirror the runner injector (input_injector.cpp): set scan + ext.
+static bool IsExtendedVk(WORD vk) {
+  switch (vk) {
+    case VK_RIGHT: case VK_LEFT: case VK_UP: case VK_DOWN:
+    case VK_HOME: case VK_END: case VK_PRIOR: case VK_NEXT:
+    case VK_INSERT: case VK_DELETE:
+    case VK_RCONTROL: case VK_RMENU:
+    case VK_LWIN: case VK_RWIN:
+      return true;
+    default:
+      return false;
+  }
+}
+
 static void InjectKeyOnSecureDesktop(WORD vk) {
   HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
   if (!hDesk) return;
@@ -527,14 +582,166 @@ static void InjectKeyOnSecureDesktop(WORD vk) {
     CloseDesktop(hDesk);
     return;
   }
+  WORD scan = (WORD)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+  DWORD ext = IsExtendedVk(vk) ? KEYEVENTF_EXTENDEDKEY : 0;
   INPUT in[2] = {0};
   in[0].type = INPUT_KEYBOARD;
   in[0].ki.wVk = vk;
+  in[0].ki.wScan = scan;
+  in[0].ki.dwFlags = ext;
   in[1].type = INPUT_KEYBOARD;
   in[1].ki.wVk = vk;
-  in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+  in[1].ki.wScan = scan;
+  in[1].ki.dwFlags = ext | KEYEVENTF_KEYUP;
   UINT sent = SendInput(2, in, sizeof(INPUT));
-  Log(L"agent", L"inject: key vk=0x%02X sent=%u", vk, sent);
+  Log(L"agent", L"inject: key vk=0x%02X ext=%lu sent=%u", vk, ext, sent);
+  SetThreadDesktop(hPrev);
+  CloseDesktop(hDesk);
+}
+
+// USB HID usage -> Win32 VK. Mirrors input_injector.cpp's HidToVk so forwarded
+// keyboard input maps identically whether it goes through the app or the agent.
+static WORD HidToVk(int usage) {
+  if (usage >= 0x04 && usage <= 0x1D) return (WORD)('A' + (usage - 0x04));
+  if (usage >= 0x1E && usage <= 0x26) return (WORD)('1' + (usage - 0x1E));
+  if (usage == 0x27) return (WORD)'0';
+  if (usage >= 0x3A && usage <= 0x45) return (WORD)(VK_F1 + (usage - 0x3A));
+  switch (usage) {
+    case 0x28: return VK_RETURN;
+    case 0x29: return VK_ESCAPE;
+    case 0x2A: return VK_BACK;
+    case 0x2B: return VK_TAB;
+    case 0x2C: return VK_SPACE;
+    case 0x2D: return VK_OEM_MINUS;
+    case 0x2E: return VK_OEM_PLUS;
+    case 0x2F: return VK_OEM_4;
+    case 0x30: return VK_OEM_6;
+    case 0x31: return VK_OEM_5;
+    case 0x33: return VK_OEM_1;
+    case 0x34: return VK_OEM_7;
+    case 0x35: return VK_OEM_3;
+    case 0x36: return VK_OEM_COMMA;
+    case 0x37: return VK_OEM_PERIOD;
+    case 0x38: return VK_OEM_2;
+    case 0x39: return VK_CAPITAL;
+    case 0x49: return VK_INSERT;
+    case 0x4A: return VK_HOME;
+    case 0x4B: return VK_PRIOR;
+    case 0x4C: return VK_DELETE;
+    case 0x4D: return VK_END;
+    case 0x4E: return VK_NEXT;
+    case 0x4F: return VK_RIGHT;
+    case 0x50: return VK_LEFT;
+    case 0x51: return VK_DOWN;
+    case 0x52: return VK_UP;
+    case 0xE0: return VK_LCONTROL;
+    case 0xE1: return VK_LSHIFT;
+    case 0xE2: return VK_LMENU;
+    case 0xE3: return VK_LWIN;
+    case 0xE4: return VK_RCONTROL;
+    case 0xE5: return VK_RSHIFT;
+    case 0xE6: return VK_RMENU;
+    case 0xE7: return VK_RWIN;
+    default: return 0;
+  }
+}
+
+// Last forwarded pointer position (normalized). Only ever touched on the single
+// PipeServer reader thread, so no locking is needed — same rule as the runner's
+// gLastNx/gLastNy.
+static float g_fwdNx = 0.0f;
+static float g_fwdNy = 0.0f;
+
+// Inject one ordinary input event (forwarded from the app when the foreground
+// window is elevated) onto the current input desktop. Runs as SYSTEM, so it
+// reaches High-integrity windows the app's own injector can't. Mirrors the
+// runner injector (input_injector.cpp) so behavior is identical.
+static void InjectForwardedInput(const std::vector<BYTE>& m) {
+  if (m.size() < 2) return;
+  BYTE sub = m[1];
+  const BYTE* p = m.data() + 2;
+  size_t n = m.size() - 2;
+
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) return;
+  HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
+  if (!SetThreadDesktop(hDesk)) {
+    CloseDesktop(hDesk);
+    return;
+  }
+
+  if (sub == 'm' && n >= 8) {
+    float nx, ny;
+    memcpy(&nx, p, 4);
+    memcpy(&ny, p + 4, 4);
+    INPUT in = {0};
+    in.type = INPUT_MOUSE;
+    in.mi.dx = (LONG)(nx * 65535.0f);
+    in.mi.dy = (LONG)(ny * 65535.0f);
+    // ABSOLUTE over the primary monitor (no VIRTUALDESK) to match the app's own
+    // injector exactly, so the cursor lands identically when routing switches.
+    in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+    SendInput(1, &in, sizeof(INPUT));
+    g_fwdNx = nx;
+    g_fwdNy = ny;
+  } else if (sub == 'b' && n >= 11) {
+    BYTE btn = p[0], down = p[1], hasPos = p[2];
+    float nx, ny;
+    memcpy(&nx, p + 3, 4);
+    memcpy(&ny, p + 7, 4);
+    if (!hasPos) {
+      nx = g_fwdNx;
+      ny = g_fwdNy;
+    }
+    DWORD f;
+    if (btn == 1)
+      f = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+    else if (btn == 2)
+      f = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+    else
+      f = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+    INPUT in = {0};
+    in.type = INPUT_MOUSE;
+    in.mi.dx = (LONG)(nx * 65535.0f);
+    in.mi.dy = (LONG)(ny * 65535.0f);
+    in.mi.dwFlags = MOUSEEVENTF_MOVE | f | MOUSEEVENTF_ABSOLUTE;
+    SendInput(1, &in, sizeof(INPUT));
+    g_fwdNx = nx;
+    g_fwdNy = ny;
+  } else if (sub == 'w' && n >= 8) {
+    float dx, dy;
+    memcpy(&dx, p, 4);
+    memcpy(&dy, p + 4, 4);
+    if (dy != 0.0f) {
+      INPUT in = {0};
+      in.type = INPUT_MOUSE;
+      in.mi.mouseData = (DWORD)(int)(-dy);
+      in.mi.dwFlags = MOUSEEVENTF_WHEEL;
+      SendInput(1, &in, sizeof(INPUT));
+    }
+    if (dx != 0.0f) {
+      INPUT in = {0};
+      in.type = INPUT_MOUSE;
+      in.mi.mouseData = (DWORD)(int)(dx);
+      in.mi.dwFlags = MOUSEEVENTF_HWHEEL;
+      SendInput(1, &in, sizeof(INPUT));
+    }
+  } else if (sub == 'k' && n >= 3) {
+    WORD usage;
+    memcpy(&usage, p, 2);
+    BYTE down = p[2];
+    WORD vk = HidToVk(usage);
+    if (vk) {
+      INPUT in = {0};
+      in.type = INPUT_KEYBOARD;
+      in.ki.wVk = vk;
+      in.ki.wScan = (WORD)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+      in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+      if (IsExtendedVk(vk)) in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+      SendInput(1, &in, sizeof(INPUT));
+    }
+  }
+
   SetThreadDesktop(hPrev);
   CloseDesktop(hDesk);
 }
@@ -600,6 +807,8 @@ static void HandleClientMessage(const std::vector<BYTE>& m) {
     WORD vk;
     memcpy(&vk, &m[1], 2);
     InjectKeyOnSecureDesktop(vk);
+  } else if (m[0] == 'I' && m.size() >= 2) {
+    InjectForwardedInput(m);
   }
 }
 
