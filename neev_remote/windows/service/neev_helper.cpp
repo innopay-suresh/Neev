@@ -646,11 +646,14 @@ static WORD HidToVk(int usage) {
   }
 }
 
-// Last forwarded pointer position (normalized). Only ever touched on the single
-// PipeServer reader thread, so no locking is needed — same rule as the runner's
-// gLastNx/gLastNy.
+// Last forwarded pointer position (normalized) and which mouse buttons are held
+// via the forwarded path. Only ever touched on the single PipeServer reader
+// thread, so no locking is needed — same rule as the runner's gLastNx/gLastNy.
+// The held-buttons mask lets us auto-release on client disconnect so a drag
+// interrupted by a dropped connection never leaves the host cursor stuck down.
 static float g_fwdNx = 0.0f;
 static float g_fwdNy = 0.0f;
+static int g_fwdHeld = 0;  // bit0=left, bit1=right, bit2=middle
 
 // Inject one ordinary input event (forwarded from the app when the foreground
 // window is elevated) onto the current input desktop. Runs as SYSTEM, so it
@@ -694,12 +697,18 @@ static void InjectForwardedInput(const std::vector<BYTE>& m) {
       ny = g_fwdNy;
     }
     DWORD f;
-    if (btn == 1)
+    int bit;
+    if (btn == 1) {
       f = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
-    else if (btn == 2)
+      bit = 2;
+    } else if (btn == 2) {
       f = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
-    else
+      bit = 4;
+    } else {
       f = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+      bit = 1;
+    }
+    if (down) g_fwdHeld |= bit; else g_fwdHeld &= ~bit;
     INPUT in = {0};
     in.type = INPUT_MOUSE;
     in.mi.dx = (LONG)(nx * 65535.0f);
@@ -744,6 +753,36 @@ static void InjectForwardedInput(const std::vector<BYTE>& m) {
 
   SetThreadDesktop(hPrev);
   CloseDesktop(hDesk);
+}
+
+// Release any mouse button still held via the forwarded path — called when the
+// app disconnects, so a drag cut off by a dropped connection never leaves the
+// host's button stuck down (which would freeze its cursor).
+static void ReleaseForwardedButtons() {
+  if (!g_fwdHeld) return;
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) { g_fwdHeld = 0; return; }
+  HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
+  if (SetThreadDesktop(hDesk)) {
+    const int bits[3] = {1, 2, 4};
+    const DWORD ups[3] = {MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP,
+                          MOUSEEVENTF_MIDDLEUP};
+    for (int i = 0; i < 3; i++) {
+      if (g_fwdHeld & bits[i]) {
+        INPUT in = {0};
+        in.type = INPUT_MOUSE;
+        in.mi.dx = (LONG)(g_fwdNx * 65535.0f);
+        in.mi.dy = (LONG)(g_fwdNy * 65535.0f);
+        in.mi.dwFlags = ups[i] | MOUSEEVENTF_ABSOLUTE;
+        SendInput(1, &in, sizeof(INPUT));
+      }
+    }
+    SetThreadDesktop(hPrev);
+  }
+  CloseDesktop(hDesk);
+  Log(L"agent", L"inject: released held buttons on disconnect (mask=%d)",
+      g_fwdHeld);
+  g_fwdHeld = 0;
 }
 
 static bool RecvAll(SOCKET s, void* buf, int n) {
@@ -857,6 +896,7 @@ static DWORD WINAPI PipeServerThread(LPVOID) {
     if (g_client == c) g_client = INVALID_SOCKET;
     LeaveCriticalSection(&g_clientLock);
     closesocket(c);
+    ReleaseForwardedButtons();  // never leave a drag stuck after a disconnect
     Log(L"agent", L"tcp: client disconnected");
   }
 }

@@ -417,28 +417,100 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     );
   }
 
-  // The host's secure desktop (UAC) shown over the video; taps are mapped to
-  // normalized coords and injected into consent.exe on the host.
+  // The host's secure desktop (UAC) shown over the video. Laid out as a solid
+  // control bar on TOP of the desktop image (never overlapping it), so the
+  // Approve/Decline buttons can't cover the dialog. Taps on the image map to
+  // normalized coords and are injected on the host's secure desktop; typing is
+  // forwarded through the normal keyboard path (which the SYSTEM helper injects
+  // on the secure desktop), so a standard-user credential prompt can be filled.
   Widget _buildUacOverlay(Size size) {
+    return Positioned.fill(
+      child: ColoredBox(
+        color: const Color(0xFF0B1220),
+        child: Column(
+          children: [
+            _uacControlBar(),
+            Expanded(child: _uacImageArea()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _uacControlBar() {
+    return Material(
+      color: AppColors.primary,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.admin_panel_settings,
+                      color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'Windows admin (UAC) prompt on the remote PC',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Click Approve, or — if it asks for an admin password — click the '
+                'field below, type it, then Approve.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: AppSpacing.lg,
+                runSpacing: AppSpacing.sm,
+                children: [
+                  _uacActionButton('Approve (Yes)', Icons.check_circle,
+                      const Color(0xFF16A34A), widget.onUacApprove),
+                  _uacActionButton('Decline (No)', Icons.cancel,
+                      const Color(0xFFDC2626), widget.onUacDecline),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // The secure-desktop frame, letterboxed within whatever space is left below
+  // the control bar. Taps forward normalized coords to the host.
+  Widget _uacImageArea() {
     final png = widget.uacFrame!;
     final iw = widget.uacW > 0 ? widget.uacW.toDouble() : 16.0;
     final ih = widget.uacH > 0 ? widget.uacH.toDouble() : 9.0;
     final ar = iw / ih;
-    double dispW, dispH;
-    if (size.width / size.height > ar) {
-      dispH = size.height;
-      dispW = dispH * ar;
-    } else {
-      dispW = size.width;
-      dispH = dispW / ar;
-    }
-    final left = (size.width - dispW) / 2;
-    final top = (size.height - dispH) / 2;
-
-    return Positioned.fill(
-      child: ColoredBox(
-        color: const Color(0xCC0B1220),
-        child: Stack(
+    return LayoutBuilder(
+      builder: (context, c) {
+        final area = c.biggest;
+        double dispW, dispH;
+        if (area.width / area.height > ar) {
+          dispH = area.height;
+          dispW = dispH * ar;
+        } else {
+          dispW = area.width;
+          dispH = dispW / ar;
+        }
+        final left = (area.width - dispW) / 2;
+        final top = (area.height - dispH) / 2;
+        return Stack(
           children: [
             Positioned(
               left: left,
@@ -454,67 +526,13 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                 },
                 // The rect already has the image's aspect ratio, so fill = no
                 // distortion and tap math maps 1:1 to the host desktop.
-                child: Image.memory(png, fit: BoxFit.fill, gaplessPlayback: true),
-              ),
-            ),
-            Positioned(
-              top: AppSpacing.md,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.95),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text(
-                    'Windows admin prompt — use the buttons below',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13),
-                  ),
-                ),
-              ),
-            ),
-            // Reliable Approve/Decline buttons in a solid bottom bar so they're
-            // always clearly visible over whatever the captured desktop shows,
-            // wrap on narrow screens, and clear the device safe area.
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: Container(
-                padding: EdgeInsets.only(
-                  top: AppSpacing.lg,
-                  bottom: AppSpacing.lg + MediaQuery.of(context).padding.bottom,
-                  left: AppSpacing.md,
-                  right: AppSpacing.md,
-                ),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Color(0xF20B1220)],
-                  ),
-                ),
-                child: Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: AppSpacing.lg,
-                  runSpacing: AppSpacing.md,
-                  children: [
-                    _uacActionButton('Approve (Yes)', Icons.check_circle,
-                        const Color(0xFF16A34A), widget.onUacApprove),
-                    _uacActionButton('Decline (No)', Icons.cancel,
-                        const Color(0xFFDC2626), widget.onUacDecline),
-                  ],
-                ),
+                child:
+                    Image.memory(png, fit: BoxFit.fill, gaplessPlayback: true),
               ),
             ),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
 

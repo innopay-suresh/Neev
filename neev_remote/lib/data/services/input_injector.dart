@@ -31,18 +31,4 @@ class InputInjector {
       // Permission not granted yet, or platform handler missing.
     }
   }
-
-  /// Whether the host's foreground window runs at a higher integrity level than
-  /// us (i.e. an elevated / run-as-admin app). When true, UIPI blocks our own
-  /// `inject` from reaching it and input must be routed through the SYSTEM
-  /// agent instead. Windows-only; false (and cheap) elsewhere.
-  Future<bool> isForegroundElevated() async {
-    if (!isSupported) return false;
-    try {
-      final r = await _channel.invokeMethod('isForegroundElevated');
-      return r == true;
-    } catch (_) {
-      return false;
-    }
-  }
 }

@@ -127,12 +127,12 @@ class RemoteService extends ChangeNotifier {
   int _lastInputMs = 0;
   Timer? _hostInputWatchdog;
 
-  // When the host's foreground window is elevated, our Medium-integrity injector
-  // can't reach it (UIPI) — route input through the SYSTEM agent instead. Polled
-  // so the per-event hot path stays a plain bool read. [_routeToHelper] latches
-  // while buttons are held so a drag never splits across the two injectors.
-  Timer? _fgElevationPoll;
-  bool _fgElevated = false;
+  // AnyDesk/TeamViewer model: when the SYSTEM helper agent is connected, ALL
+  // input is injected by it (it runs at SYSTEM integrity, so UIPI never blocks
+  // it — it reaches elevated windows, the UAC secure desktop, and the login
+  // screen alike). Our own Medium-integrity injector is only the fallback for
+  // when the helper isn't installed/running. [_routeToHelper] latches while a
+  // button is held so a drag never splits across the two injectors.
   bool _routeToHelper = false;
 
   ViewerStatus get viewerStatus => _viewerStatus;
@@ -210,7 +210,7 @@ class RemoteService extends ChangeNotifier {
   Future<void> stopHosting() async {
     _statsTimerMaybeStop();
     _stopHostInputWatchdog();
-    _stopFgElevationPoll();
+    _routeToHelper = false;
     for (final peer in _hostPeers.values) {
       await peer.close();
     }
@@ -504,20 +504,24 @@ class RemoteService extends ChangeNotifier {
     if (isHost) {
       final event = InputEvent.decode(raw);
       if (event != null) {
-        // Only re-evaluate the route while nothing is held, so a drag/press
-        // started on one injector always finishes on the same one.
-        if (_heldButtons.isEmpty) {
-          _routeToHelper = _fgElevated && _uac.isConnected;
-        }
         _trackHeldButton(event);
         _lastInputMs = _inputClock.elapsedMilliseconds;
         _logHostInput(event);
-        if (_routeToHelper) {
-          _uac.sendInput(event.data);
-        } else {
-          _injector.inject(event);
-        }
+        _routeInput(event);
       }
+    }
+  }
+
+  // Inject one host-side input event. Routes through the SYSTEM helper whenever
+  // it's connected (so elevated windows / the secure desktop are reachable),
+  // else falls back to the in-app injector. The route is only re-evaluated while
+  // nothing is held, so a press/drag started on one injector finishes on it.
+  void _routeInput(InputEvent event) {
+    if (_heldButtons.isEmpty) _routeToHelper = _uac.isConnected;
+    if (_routeToHelper) {
+      _uac.sendInput(event.data);
+    } else {
+      _injector.inject(event);
     }
   }
 
@@ -585,25 +589,6 @@ class RemoteService extends ChangeNotifier {
         jsonEncode({'k': 'uac', 't': 'frame', 'd': base64Encode(png)}));
     _uac.onGone = () => _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
     _uac.start();
-    _startFgElevationPoll();
-  }
-
-  // Cheap background poll of whether the foreground window is elevated, so the
-  // input hot path can route to the SYSTEM agent without a per-event channel
-  // round trip. Only meaningful when the agent is connected.
-  void _startFgElevationPoll() {
-    _fgElevationPoll?.cancel();
-    _fgElevationPoll =
-        Timer.periodic(const Duration(milliseconds: 300), (_) async {
-      _fgElevated = await _injector.isForegroundElevated();
-    });
-  }
-
-  void _stopFgElevationPoll() {
-    _fgElevationPoll?.cancel();
-    _fgElevationPoll = null;
-    _fgElevated = false;
-    _routeToHelper = false;
   }
 
   void _broadcastToPeers(String msg) {
@@ -628,9 +613,11 @@ class RemoteService extends ChangeNotifier {
       if (_heldButtons.isEmpty) return;
       if (_inputClock.elapsedMilliseconds - _lastInputMs < 1500) return;
       // Input went silent while a button was held — release it so the host's
-      // mouse doesn't stay stuck (fixes the minimize/maximize freeze).
+      // mouse doesn't stay stuck (fixes the minimize/maximize freeze). Route it
+      // the same way live input goes so the release reaches whichever injector
+      // is holding the button.
       for (final b in _heldButtons.toList()) {
-        _injector.inject(InputEvent.button(b, false));
+        _routeInput(InputEvent.button(b, false));
       }
       _heldButtons.clear();
     });
