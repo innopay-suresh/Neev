@@ -417,20 +417,22 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     );
   }
 
-  // The host's secure desktop (UAC) shown over the video. Laid out as a solid
-  // control bar on TOP of the desktop image (never overlapping it), so the
-  // Approve/Decline buttons can't cover the dialog. Taps on the image map to
-  // normalized coords and are injected on the host's secure desktop; typing is
-  // forwarded through the normal keyboard path (which the SYSTEM helper injects
-  // on the secure desktop), so a standard-user credential prompt can be filled.
+  // The host's secure desktop (UAC) shown over the video. The desktop image
+  // fills the WHOLE area (so the centered UAC dialog is as large and visible as
+  // possible), with the slim control bar floated over the empty top strip — the
+  // dialog is vertically centered on the primary monitor, so the bar never
+  // covers it. Taps on the image map to normalized coords and are injected on
+  // the host's secure desktop; typing is forwarded through the normal keyboard
+  // path (the SYSTEM helper injects it there too), so a standard-user credential
+  // prompt can be filled.
   Widget _buildUacOverlay(Size size) {
     return Positioned.fill(
       child: ColoredBox(
         color: const Color(0xFF0B1220),
-        child: Column(
+        child: Stack(
           children: [
-            _uacControlBar(),
-            Expanded(child: _uacImageArea()),
+            Positioned.fill(child: _uacImageArea()),
+            Positioned(top: 0, left: 0, right: 0, child: _uacControlBar()),
           ],
         ),
       ),
@@ -442,7 +444,8 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   // buttons are a reliable fallback.
   Widget _uacControlBar() {
     return Material(
-      color: AppColors.primary,
+      color: AppColors.primary.withValues(alpha: 0.96),
+      elevation: 4,
       child: SafeArea(
         bottom: false,
         child: Padding(
