@@ -480,17 +480,15 @@ static bool CaptureSecureDesktopToPng(std::vector<BYTE>& png, int& outW,
     return false;
   }
 
+  // Capture the PRIMARY monitor only (origin 0,0). The UAC secure desktop is
+  // drawn on the primary, so this frames the dialog centered and large instead
+  // of losing it in a whole multi-monitor virtual desktop. Injection below uses
+  // ABSOLUTE-over-primary (no VIRTUALDESK) to match.
   HBITMAP hbm = nullptr;
-  int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-  int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-  int w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-  int h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-  if (w <= 0 || h <= 0) {
-    w = GetSystemMetrics(SM_CXSCREEN);
-    h = GetSystemMetrics(SM_CYSCREEN);
-    x = 0;
-    y = 0;
-  }
+  int x = 0;
+  int y = 0;
+  int w = GetSystemMetrics(SM_CXSCREEN);
+  int h = GetSystemMetrics(SM_CYSCREEN);
   HDC hScreen = GetDC(nullptr);
   if (hScreen) {
     HDC hMem = CreateCompatibleDC(hScreen);
@@ -522,8 +520,10 @@ static bool CaptureSecureDesktopToPng(std::vector<BYTE>& png, int& outW,
   return ok;
 }
 
-// Inject a mouse click at normalized (nx,ny) over the virtual desktop on the
+// Inject a mouse click at normalized (nx,ny) over the PRIMARY monitor on the
 // current (secure) input desktop. Runs as SYSTEM, so it reaches consent.exe.
+// ABSOLUTE without VIRTUALDESK maps 0..65535 to the primary monitor, matching
+// the primary-only secure-desktop capture — so a click lands on the dialog.
 static void InjectClickOnSecureDesktop(int button, float nx, float ny) {
   HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
   if (!hDesk) return;
@@ -539,16 +539,15 @@ static void InjectClickOnSecureDesktop(int button, float nx, float ny) {
   in[0].type = INPUT_MOUSE;
   in[0].mi.dx = ax;
   in[0].mi.dy = ay;
-  in[0].mi.dwFlags =
-      MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+  in[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
   in[1].type = INPUT_MOUSE;
   in[1].mi.dx = ax;
   in[1].mi.dy = ay;
-  in[1].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | dn;
+  in[1].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | dn;
   in[2].type = INPUT_MOUSE;
   in[2].mi.dx = ax;
   in[2].mi.dy = ay;
-  in[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | up;
+  in[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | up;
   UINT sent = SendInput(3, in, sizeof(INPUT));
   Log(L"agent", L"inject: click btn=%d (%.3f,%.3f) sent=%u", button, nx, ny,
       sent);

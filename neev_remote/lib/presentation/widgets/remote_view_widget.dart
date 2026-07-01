@@ -437,52 +437,39 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     );
   }
 
+  // Slim single-row control bar: keeps the desktop image below as large and
+  // centered as possible. You can click Yes/No directly in the view; the
+  // buttons are a reliable fallback.
   Widget _uacControlBar() {
     return Material(
       color: AppColors.primary,
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Row(
             children: [
-              const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.admin_panel_settings,
-                      color: Colors.white, size: 20),
-                  SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      'Windows admin (UAC) prompt on the remote PC',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14),
-                    ),
-                  ),
-                ],
+              const Icon(Icons.admin_panel_settings,
+                  color: Colors.white, size: 22),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Remote UAC prompt — click Yes/No directly in the view below, '
+                  'or type the admin password if it asks.',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600),
+                ),
               ),
-              const SizedBox(height: 4),
-              const Text(
-                'Click Approve, or — if it asks for an admin password — click the '
-                'field below, type it, then Approve.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: AppSpacing.lg,
-                runSpacing: AppSpacing.sm,
-                children: [
-                  _uacActionButton('Approve (Yes)', Icons.check_circle,
-                      const Color(0xFF16A34A), widget.onUacApprove),
-                  _uacActionButton('Decline (No)', Icons.cancel,
-                      const Color(0xFFDC2626), widget.onUacDecline),
-                ],
-              ),
+              const SizedBox(width: 12),
+              _uacActionButton('Approve', Icons.check_circle,
+                  const Color(0xFF16A34A), widget.onUacApprove,
+                  compact: true),
+              const SizedBox(width: 8),
+              _uacActionButton('Decline', Icons.cancel,
+                  const Color(0xFFDC2626), widget.onUacDecline,
+                  compact: true),
             ],
           ),
         ),
@@ -537,26 +524,29 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   }
 
   Widget _uacActionButton(
-      String label, IconData icon, Color color, VoidCallback? onTap) {
+      String label, IconData icon, Color color, VoidCallback? onTap,
+      {bool compact = false}) {
     return Material(
       color: color,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(compact ? 10 : 12),
       elevation: 6,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(compact ? 10 : 12),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
+          padding: compact
+              ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10)
+              : const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white, size: 22),
-              const SizedBox(width: 10),
+              Icon(icon, color: Colors.white, size: compact ? 18 : 22),
+              SizedBox(width: compact ? 6 : 10),
               Text(label,
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
-                      fontSize: 16)),
+                      fontSize: compact ? 14 : 16)),
             ],
           ),
         ),
