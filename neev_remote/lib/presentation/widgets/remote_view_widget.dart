@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/gestures.dart';
@@ -12,6 +13,10 @@ import '../../data/services/input_event.dart';
 /// heartbeat) to the console / app log. Used to pinpoint whether the *viewer*
 /// stops sending after a click vs. the host stops injecting.
 const bool kLogRemoteInput = false;
+
+/// Show an on-screen readout of the UAC frame/area sizes over the overlay, to
+/// debug how the secure-desktop dialog is sized/positioned on real displays.
+const bool kUacDebug = true;
 
 /// Renders the remote video stream and, unless [viewOnly], captures local
 /// mouse + keyboard input and forwards it as normalized [InputEvent]s via
@@ -75,11 +80,40 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   Timer? _frameWatchdog;
   int _frameKicks = 0;
 
+  // Real pixel size of the current UAC frame, decoded from the bytes so the
+  // letterbox aspect is always correct even if the size (`A`) message was missed
+  // (e.g. the viewer connected after the secure desktop was already up).
+  int _uacImgW = 0;
+  int _uacImgH = 0;
+  int _uacFrameHash = 0;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initRenderer();
+    if (widget.uacFrame != null) _measureUacFrame(widget.uacFrame!);
+  }
+
+  // Decode just enough to read the frame's width/height. Cheap at UAC frame
+  // rates (~1/s) and skipped when the bytes are unchanged.
+  Future<void> _measureUacFrame(Uint8List bytes) async {
+    final hash = Object.hash(bytes.length, bytes.isEmpty ? 0 : bytes[0]);
+    if (hash == _uacFrameHash) return;
+    _uacFrameHash = hash;
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final w = frame.image.width, h = frame.image.height;
+      frame.image.dispose();
+      codec.dispose();
+      if (mounted && (w != _uacImgW || h != _uacImgH)) {
+        setState(() {
+          _uacImgW = w;
+          _uacImgH = h;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _initRenderer() async {
@@ -161,6 +195,9 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     if (widget.remoteStream != oldWidget.remoteStream) {
       _renderer.srcObject = widget.remoteStream;
       if (widget.remoteStream != null) _startFrameWatchdog();
+    }
+    if (widget.uacFrame != null && widget.uacFrame != oldWidget.uacFrame) {
+      _measureUacFrame(widget.uacFrame!);
     }
   }
 
@@ -484,8 +521,13 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   // the control bar. Taps forward normalized coords to the host.
   Widget _uacImageArea() {
     final png = widget.uacFrame!;
-    final iw = widget.uacW > 0 ? widget.uacW.toDouble() : 16.0;
-    final ih = widget.uacH > 0 ? widget.uacH.toDouble() : 9.0;
+    // Prefer the real decoded size; fall back to the size message, then 16:9.
+    final iw = _uacImgW > 0
+        ? _uacImgW.toDouble()
+        : (widget.uacW > 0 ? widget.uacW.toDouble() : 16.0);
+    final ih = _uacImgH > 0
+        ? _uacImgH.toDouble()
+        : (widget.uacH > 0 ? widget.uacH.toDouble() : 9.0);
     final ar = iw / ih;
     return LayoutBuilder(
       builder: (context, c) {
@@ -520,6 +562,30 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                     Image.memory(png, fit: BoxFit.fill, gaplessPlayback: true),
               ),
             ),
+            if (kUacDebug)
+              Positioned(
+                left: 6,
+                bottom: 6,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 3),
+                    child: Text(
+                      'img ${iw.toInt()}x${ih.toInt()}  msg ${widget.uacW}x${widget.uacH}  '
+                      'area ${area.width.toInt()}x${area.height.toInt()}  '
+                      'disp ${dispW.toInt()}x${dispH.toInt()} @${left.toInt()},${top.toInt()}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontFamily: 'monospace'),
+                    ),
+                  ),
+                ),
+              ),
           ],
         );
       },
