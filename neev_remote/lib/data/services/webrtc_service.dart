@@ -37,6 +37,7 @@ class WebRTCService {
   RTCPeerConnection? _pc;
   RTCDataChannel? _dataChannel;
   RTCDataChannel? _cursorChannel;
+  RTCDataChannel? _fileChannel;
   MediaStream? _remoteStream;
 
   bool _remoteDescriptionSet = false;
@@ -107,10 +108,21 @@ class WebRTCService {
         ..id = 2;
       _cursorChannel = await _pc!.createDataChannel('cursor', curInit);
       _bindDataChannel(_cursorChannel!, isControl: false);
+
+      // Reliable, ordered channel dedicated to file transfer, so large file
+      // chunks never head-of-line-block latency-sensitive input on 'control'.
+      final fileInit = RTCDataChannelInit()
+        ..ordered = true
+        ..id = 3;
+      _fileChannel = await _pc!.createDataChannel('file', fileInit);
+      _bindDataChannel(_fileChannel!, isControl: false);
     } else {
       _pc!.onDataChannel = (channel) {
         if (channel.label == 'cursor') {
           _cursorChannel = channel;
+          _bindDataChannel(channel, isControl: false);
+        } else if (channel.label == 'file') {
+          _fileChannel = channel;
           _bindDataChannel(channel, isControl: false);
         } else {
           _dataChannel = channel;
@@ -291,6 +303,24 @@ class WebRTCService {
     return true;
   }
 
+  bool get isFileChannelOpen =>
+      _fileChannel?.state == RTCDataChannelState.RTCDataChannelOpen;
+
+  /// Buffered bytes queued on the file channel — used to pace file sends so we
+  /// don't overrun the send buffer. 0 if unknown/unsupported.
+  int get fileChannelBufferedAmount => _fileChannel?.bufferedAmount ?? 0;
+
+  /// Sends a file-transfer message on the dedicated 'file' channel (falls back
+  /// to control if that channel isn't up), keeping file bytes off 'control'.
+  bool sendFileData(String data) {
+    final c = _fileChannel;
+    if (c != null && c.state == RTCDataChannelState.RTCDataChannelOpen) {
+      c.send(RTCDataChannelMessage(data));
+      return true;
+    }
+    return sendData(data);
+  }
+
   /// Sends a low-latency cursor move on the unreliable channel, falling back to
   /// the reliable control channel if the cursor channel isn't open yet.
   bool sendCursor(String data) {
@@ -371,9 +401,11 @@ class WebRTCService {
     _lastStatsAt = null;
     await _dataChannel?.close();
     await _cursorChannel?.close();
+    await _fileChannel?.close();
     await _pc?.close();
     _dataChannel = null;
     _cursorChannel = null;
+    _fileChannel = null;
     _pc = null;
     // The capture service owns the local stream's lifecycle.
     _remoteStream = null;

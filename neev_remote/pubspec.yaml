@@ -20,6 +20,9 @@ dependencies:
   web_socket_channel: ^3.0.0
   uuid: ^4.5.1
 
+  # File transfer (native open dialog, desktop + web)
+  file_selector: ^1.0.3
+
   # State Management
   flutter_riverpod: ^2.6.1
   riverpod_annotation: ^2.6.1

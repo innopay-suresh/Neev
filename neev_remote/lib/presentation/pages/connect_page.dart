@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
+import '../widgets/file_transfer_panel.dart';
 import '../widgets/remote_view_widget.dart';
 import 'settings_page.dart';
 
@@ -416,6 +417,20 @@ class _ShareCard extends ConsumerWidget {
                 side: const BorderSide(color: AppColors.error),
               ),
             ),
+            if (service.connectedViewers > 0) ...[
+              const SizedBox(height: AppSpacing.md),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SendFileButton(service: service),
+              ),
+            ],
+            if (service.fileTransfers.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.md),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FileTransferList(service: service),
+              ),
+            ],
           ] else
             ElevatedButton.icon(
               onPressed: busy
@@ -643,25 +658,35 @@ class _ConnectedSession extends ConsumerWidget {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.sm),
-              child: RemoteViewWidget(
-                isConnected: true,
-                remoteStream: service.remoteStream,
-                viewOnly: viewOnly,
-                hostOs: service.remoteHostOs,
-                onInput: viewOnly
-                    ? null
-                    : (event) =>
-                        ref.read(remoteServiceProvider).sendViewerInput(event),
-                uacActive: service.uacActive,
-                uacFrame: service.uacFrame,
-                uacW: service.uacW,
-                uacH: service.uacH,
-                onUacClick: (b, x, y) =>
-                    ref.read(remoteServiceProvider).sendUacClick(b, x, y),
-                onUacApprove: () =>
-                    ref.read(remoteServiceProvider).sendUacApprove(),
-                onUacDecline: () =>
-                    ref.read(remoteServiceProvider).sendUacDecline(),
+              child: Stack(
+                children: [
+                  RemoteViewWidget(
+                    isConnected: true,
+                    remoteStream: service.remoteStream,
+                    viewOnly: viewOnly,
+                    hostOs: service.remoteHostOs,
+                    onInput: viewOnly
+                        ? null
+                        : (event) => ref
+                            .read(remoteServiceProvider)
+                            .sendViewerInput(event),
+                    uacActive: service.uacActive,
+                    uacFrame: service.uacFrame,
+                    uacW: service.uacW,
+                    uacH: service.uacH,
+                    onUacClick: (b, x, y) =>
+                        ref.read(remoteServiceProvider).sendUacClick(b, x, y),
+                    onUacApprove: () =>
+                        ref.read(remoteServiceProvider).sendUacApprove(),
+                    onUacDecline: () =>
+                        ref.read(remoteServiceProvider).sendUacDecline(),
+                  ),
+                  Positioned(
+                    right: AppSpacing.md,
+                    bottom: AppSpacing.md,
+                    child: FileTransferList(service: service),
+                  ),
+                ],
               ),
             ),
           ),
@@ -686,6 +711,8 @@ class _ConnectedSession extends ConsumerWidget {
                 _StatChip(Icons.movie, stats.codec ?? '—'),
                 _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
                 const Spacer(),
+                SendFileButton(service: service, dense: true),
+                const SizedBox(width: AppSpacing.sm),
                 OutlinedButton.icon(
                   onPressed: () =>
                       ref.read(remoteServiceProvider).disconnectViewer(),

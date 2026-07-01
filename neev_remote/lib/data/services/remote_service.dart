@@ -11,6 +11,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/app_constants.dart';
 import 'auth_service.dart';
+import 'file_store.dart';
+import 'file_transfer_service.dart';
 import 'input_event.dart';
 import 'input_injector.dart';
 import 'screen_capture_service.dart';
@@ -85,6 +87,38 @@ class RemoteService extends ChangeNotifier {
   // Privileged UAC helper bridge (Windows host only; no-op elsewhere). Streams
   // the secure desktop to viewers and injects their Yes/No into consent.exe.
   final UacBridge _uac = UacBridge();
+
+  // Bidirectional file transfer over the peer's dedicated 'file' data channel.
+  late final FileTransferManager _files = FileTransferManager(
+    send: _sendFileData,
+    buffered: _fileBuffered,
+    store: FileStore(),
+    onChange: notifyListeners,
+  );
+
+  /// Active + recent file transfers (for the session UI).
+  List<FileTransfer> get fileTransfers => _files.transfers;
+
+  /// Send a picked file to the connected peer (viewer→host or host→viewers).
+  Future<FileTransfer?> sendFile(String name, Uint8List bytes) =>
+      _files.sendFile(name, bytes);
+
+  void clearFinishedTransfers() => _files.clearFinished();
+
+  // Route file bytes to the active peer: the host if we're viewing, else all
+  // connected viewers if we're hosting.
+  void _sendFileData(String data) {
+    final v = _viewerPeer;
+    if (v != null) {
+      v.sendFileData(data);
+      return;
+    }
+    for (final p in _hostPeers.values) {
+      p.sendFileData(data);
+    }
+  }
+
+  int _fileBuffered() => _viewerPeer?.fileChannelBufferedAmount ?? 0;
 
   // ---- Viewer-side UAC overlay state (driven by host 'uac' messages) ----
   bool uacActive = false;
@@ -505,6 +539,11 @@ class RemoteService extends ChangeNotifier {
     // UAC viewer input (viewer -> host) -> inject via the helper agent.
     if (m['k'] == 'uacin') {
       if (isHost) _onUacInput(m);
+      return;
+    }
+    // File transfer (either direction).
+    if (m['k'] == 'ft') {
+      _files.handleMessage(m);
       return;
     }
 
