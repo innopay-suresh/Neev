@@ -491,6 +491,18 @@ static bool CaptureSecureDesktopToPng(std::vector<BYTE>& png, int& outW,
   int h = GetSystemMetrics(SM_CYSCREEN);
   HDC hScreen = GetDC(nullptr);
   if (hScreen) {
+    // Use the TRUE physical resolution. On a high-DPI display GetSystemMetrics
+    // can return the DPI-scaled (logical) size (e.g. 1707x1067 for a 2560x1600
+    // panel at 150%) while the screen DC is physical — BitBlt then grabs only
+    // the top-left region, so the centered UAC dialog landed in the bottom-right
+    // and got cut off. DESKTOPHORZRES/VERTRES report physical pixels regardless
+    // of the process's DPI-awareness, so the whole screen is captured.
+    int pw = GetDeviceCaps(hScreen, DESKTOPHORZRES);
+    int ph = GetDeviceCaps(hScreen, DESKTOPVERTRES);
+    if (pw > 0 && ph > 0) {
+      w = pw;
+      h = ph;
+    }
     HDC hMem = CreateCompatibleDC(hScreen);
     hbm = CreateCompatibleBitmap(hScreen, w, h);
     if (hMem && hbm) {
@@ -909,7 +921,23 @@ static DWORD WINAPI PipeServerThread(LPVOID) {
 // to a connected app and let it inject the viewer's Yes/No. With no app
 // connected it just logs + keeps a debug BMP (NO auto-decline anymore).
 // --------------------------------------------------------------------------
+// Make the agent per-monitor DPI aware so GetSystemMetrics / GDI report physical
+// pixels — otherwise captures on a scaled high-DPI display are wrong (see the
+// DESKTOPHORZRES note in CaptureSecureDesktopToPng). Loaded dynamically so it
+// still links/runs on older Windows, falling back to the legacy call.
+static void MakeDpiAware() {
+  HMODULE u = GetModuleHandleW(L"user32.dll");
+  if (u) {
+    typedef BOOL(WINAPI * SetCtxFn)(HANDLE);
+    auto fn = (SetCtxFn)GetProcAddress(u, "SetProcessDpiAwarenessContext");
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4
+    if (fn && fn((HANDLE)-4)) return;
+  }
+  SetProcessDPIAware();  // Vista+ fallback (system-DPI aware)
+}
+
 static int RunAgent() {
+  MakeDpiAware();
   InitializeCriticalSection(&g_clientLock);
   WSADATA wsa;
   WSAStartup(MAKEWORD(2, 2), &wsa);
