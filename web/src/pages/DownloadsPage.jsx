@@ -177,14 +177,14 @@ export function DownloadsPage() {
                           <strong>macOS Gatekeeper:</strong> If Apple blocks opening, open <em>System Settings ➔ Privacy &amp; Security</em> and click <strong>Open Anyway</strong>.
                           {platform === 'macos-desktop' && installer.filename.endsWith('.dmg') && (
                             <div className={styles.hintText}>
-                              <strong>DMG installer (recommended):</strong> Open the <code>.dmg</code> file and drag <code>RemoteAgent.app</code> to the <strong>Applications</strong> folder.
-                              If Gatekeeper blocks, run: <code>xattr -dr com.apple.quarantine /Applications/RemoteAgent.app</code>
+                              <strong>DMG installer (recommended):</strong> Open the <code>.dmg</code> file and drag <code>neev_remote.app</code> to the <strong>Applications</strong> folder (choose <strong>Replace</strong> if an older version is already there).
+                              If Gatekeeper blocks, run: <code>xattr -dr com.apple.quarantine /Applications/neev_remote.app</code>
                             </div>
                           )}
                           {platform === 'macos-desktop' && installer.filename.endsWith('.zip') && (
                             <div className={styles.hintText}>
                               <strong>ZIP package:</strong> Unzip, then double-click <code>Install.command</code> to automatically install to <strong>/Applications</strong> and launch.
-                              Or manually: <code>xattr -dr com.apple.quarantine RemoteAgent.app</code> then drag to Applications.
+                              Or manually: <code>xattr -dr com.apple.quarantine neev_remote.app</code> then drag to Applications.
                             </div>
                           )}
                           {platform === 'macos-agent' && (
