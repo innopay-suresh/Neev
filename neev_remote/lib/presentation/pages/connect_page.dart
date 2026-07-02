@@ -714,6 +714,31 @@ class _ConnectedSession extends ConsumerWidget {
                 _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
                 const Spacer(),
                 IconButton(
+                  tooltip: 'Restart the remote PC',
+                  icon: const Icon(Icons.restart_alt, size: 20),
+                  onPressed: () async {
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Restart remote PC?'),
+                        content: const Text(
+                            'The remote computer will reboot now. Neev Remote '
+                            'will keep trying to reconnect for a few minutes once '
+                            "it's back (the host must be set to start on boot)."),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('Cancel')),
+                          FilledButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: const Text('Restart')),
+                        ],
+                      ),
+                    );
+                    if (ok == true) service.rebootHost();
+                  },
+                ),
+                IconButton(
                   tooltip: service.viewerViewOnly
                       ? 'View only — click to take control'
                       : 'Controlling — click for view only',

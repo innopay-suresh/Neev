@@ -18,6 +18,7 @@ import 'input_event.dart';
 import 'input_injector.dart';
 import 'screen_capture_service.dart';
 import 'signaling_service.dart';
+import 'system_command.dart';
 import 'uac_bridge.dart';
 import 'webrtc_service.dart';
 
@@ -179,6 +180,17 @@ class RemoteService extends ChangeNotifier {
   ViewerStatus _viewerStatus = ViewerStatus.idle;
   String? _targetId;
   String? _viewerError;
+
+  // Auto-reconnect: after a remote reboot (or any unexpected drop) keep re-dialing
+  // the same host for a while. Params persist across disconnectViewer so a retry
+  // can reuse them. NOTE: for the host to reappear after a reboot it must be set
+  // to auto-start + share on boot (unattended access — a later feature).
+  String? _lastRelayUrl;
+  String? _lastTargetId;
+  String? _lastPassword;
+  bool autoReconnect = false;
+  Timer? _reconnectTimer;
+  int _reconnectTries = 0;
   String? _remoteHostOs;
   MediaStream? _remoteStream;
   SessionStats _stats = const SessionStats();
@@ -385,8 +397,13 @@ class RemoteService extends ChangeNotifier {
     required String targetId,
     required String password,
   }) async {
-    await disconnectViewer();
+    await disconnectViewer(keepAutoReconnect: true);
     _resolvedIce = await _resolveIceServers(relayUrl);
+
+    // Remember for auto-reconnect.
+    _lastRelayUrl = relayUrl;
+    _lastTargetId = targetId;
+    _lastPassword = password;
 
     _targetId = targetId;
     _viewerStatus = ViewerStatus.connecting;
@@ -405,6 +422,7 @@ class RemoteService extends ChangeNotifier {
           _viewerStatus = ViewerStatus.failed;
           _viewerError = 'Disconnected from signaling server';
           notifyListeners();
+          _maybeScheduleReconnect();
         }
       },
     );
@@ -416,6 +434,7 @@ class RemoteService extends ChangeNotifier {
       _viewerStatus = ViewerStatus.failed;
       _viewerError = 'Cannot reach signaling server: $e';
       notifyListeners();
+      _maybeScheduleReconnect();
     }
   }
 
@@ -446,7 +465,12 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
-  Future<void> disconnectViewer() async {
+  Future<void> disconnectViewer({bool keepAutoReconnect = false}) async {
+    // A user-initiated disconnect cancels any pending auto-reconnect.
+    if (!keepAutoReconnect) {
+      autoReconnect = false;
+      _reconnectTimer?.cancel();
+    }
     _statsTimerMaybeStop();
     final id = _targetId;
     if (id != null) _viewerSignaling?.sendBye(id);
@@ -459,6 +483,47 @@ class RemoteService extends ChangeNotifier {
     _stats = const SessionStats();
     _viewerStatus = ViewerStatus.idle;
     notifyListeners();
+    if (keepAutoReconnect) _maybeScheduleReconnect();
+  }
+
+  /// Viewer: reboot the remote host and keep re-dialing until it's back.
+  void rebootHost() {
+    _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': 'reboot'}));
+    autoReconnect = true;
+    _reconnectTries = 0;
+  }
+
+  // Re-dial the same host after an unexpected drop while auto-reconnect is on.
+  void _maybeScheduleReconnect() {
+    if (!autoReconnect) return;
+    if (_lastRelayUrl == null || _lastTargetId == null || _lastPassword == null) {
+      return;
+    }
+    if (_reconnectTimer?.isActive ?? false) return;
+    _reconnectTries++;
+    if (_reconnectTries > 60) {
+      autoReconnect = false; // give up after ~5 min
+      return;
+    }
+    _reconnectTimer = Timer(const Duration(seconds: 5), () async {
+      if (!autoReconnect || _viewerStatus == ViewerStatus.connected) return;
+      try {
+        await connectToHost(
+          relayUrl: _lastRelayUrl!,
+          targetId: _lastTargetId!,
+          password: _lastPassword!,
+        );
+      } catch (_) {
+        _maybeScheduleReconnect();
+      }
+    });
+  }
+
+  // Host: run a command sent by the controlling viewer.
+  void _onHostCommand(Map<String, dynamic> m) {
+    if (m['c'] == 'reboot') {
+      rebootMachine();
+    }
   }
 
   Future<void> _onViewerMessage(SignalingMessage msg) async {
@@ -504,10 +569,15 @@ class RemoteService extends ChangeNotifier {
     peer.onIceCandidate = (c) =>
         _viewerSignaling?.sendCandidate(hostId, _candidateMap(c));
     peer.onConnectionStateChange = (state) {
-      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        _viewerStatus = ViewerStatus.failed;
-        _viewerError = 'Connection failed';
-        notifyListeners();
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
+          state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+        if (_viewerStatus != ViewerStatus.idle) {
+          _viewerStatus = ViewerStatus.failed;
+          _viewerError = 'Connection failed';
+          notifyListeners();
+          // After a remote reboot this keeps re-dialing until the host is back.
+          _maybeScheduleReconnect();
+        }
       }
     };
 
@@ -586,6 +656,11 @@ class RemoteService extends ChangeNotifier {
     // File transfer (either direction).
     if (m['k'] == 'ft') {
       _files.handleMessage(m);
+      return;
+    }
+    // Host command (viewer -> host), e.g. reboot.
+    if (m['k'] == 'cmd') {
+      if (isHost) _onHostCommand(m);
       return;
     }
 
