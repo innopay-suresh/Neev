@@ -191,6 +191,10 @@ class RemoteService extends ChangeNotifier {
   bool autoReconnect = false;
   Timer? _reconnectTimer;
   int _reconnectTries = 0;
+
+  /// Host monitors available to switch between (viewer side; empty if the host
+  /// has a single monitor). Each entry: {'id':..., 'n': name}.
+  List<Map<String, String>> hostMonitors = const [];
   String? _remoteHostOs;
   MediaStream? _remoteStream;
   SessionStats _stats = const SessionStats();
@@ -356,10 +360,22 @@ class RemoteService extends ChangeNotifier {
 
     final peer = WebRTCService();
     peer.onDataMessage = (raw) => _handleData(raw, isHost: true);
-    // Announce our OS so the viewer can translate its primary command modifier
-    // (⌘ on macOS ↔ Ctrl on Windows/Linux) for copy/paste and other shortcuts.
-    peer.onDataChannelOpen = () =>
-        peer.sendData(jsonEncode({'k': 'os', 'v': _osName()}));
+    // Announce our OS (so the viewer can translate ⌘↔Ctrl) and, if there's more
+    // than one monitor, the monitor list so the viewer can switch between them.
+    peer.onDataChannelOpen = () async {
+      peer.sendData(jsonEncode({'k': 'os', 'v': _osName()}));
+      try {
+        final mons = await _capture.getSources();
+        if (mons.length > 1) {
+          peer.sendData(jsonEncode({
+            'k': 'mons',
+            'l': [
+              for (final s in mons) {'id': s.id, 'n': s.name}
+            ],
+          }));
+        }
+      } catch (_) {}
+    };
     peer.onIceCandidate = (c) =>
         _hostSignaling?.sendCandidate(controllerId, _candidateMap(c));
     peer.onConnectionStateChange = (state) {
@@ -526,6 +542,28 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
+  /// Viewer: ask the host to stream a different monitor.
+  void setMonitor(String id) {
+    _viewerPeer?.sendData(jsonEncode({'k': 'setmon', 'id': id}));
+  }
+
+  // Host: re-capture the chosen monitor and hot-swap the video track on every
+  // connected viewer (no renegotiation).
+  Future<void> _switchMonitor(String? id) async {
+    if (id == null) return;
+    try {
+      final stream = await _capture.startCapture(
+          sourceId: id, fps: 30, maxWidth: 1920, maxHeight: 1200);
+      final track = stream?.getVideoTracks().isNotEmpty == true
+          ? stream!.getVideoTracks().first
+          : _capture.videoTrack;
+      if (track == null) return;
+      for (final peer in _hostPeers.values) {
+        await peer.replaceVideoTrack(track);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _onViewerMessage(SignalingMessage msg) async {
     switch (msg.type) {
       case SignalingMessageType.connect:
@@ -661,6 +699,24 @@ class RemoteService extends ChangeNotifier {
     // Host command (viewer -> host), e.g. reboot.
     if (m['k'] == 'cmd') {
       if (isHost) _onHostCommand(m);
+      return;
+    }
+    // Host's monitor list (host -> viewer).
+    if (m['k'] == 'mons') {
+      if (!isHost) {
+        final l = (m['l'] as List?) ?? const [];
+        hostMonitors = [
+          for (final e in l)
+            if (e is Map)
+              {'id': '${e['id']}', 'n': '${e['n']}'}
+        ];
+        notifyListeners();
+      }
+      return;
+    }
+    // Viewer asked to switch the streamed monitor (viewer -> host).
+    if (m['k'] == 'setmon') {
+      if (isHost) _switchMonitor(m['id'] as String?);
       return;
     }
 

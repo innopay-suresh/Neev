@@ -713,6 +713,25 @@ class _ConnectedSession extends ConsumerWidget {
                 _StatChip(Icons.movie, stats.codec ?? '—'),
                 _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
                 const Spacer(),
+                if (service.hostMonitors.length > 1)
+                  PopupMenuButton<String>(
+                    tooltip: 'Switch monitor',
+                    icon: const Icon(Icons.monitor, size: 20),
+                    position: PopupMenuPosition.under,
+                    onSelected: service.setMonitor,
+                    itemBuilder: (_) => [
+                      for (var i = 0; i < service.hostMonitors.length; i++)
+                        PopupMenuItem<String>(
+                          value: service.hostMonitors[i]['id'],
+                          child: Text(
+                            (service.hostMonitors[i]['n'] ?? '').isNotEmpty
+                                ? service.hostMonitors[i]['n']!
+                                : 'Monitor ${i + 1}',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                    ],
+                  ),
                 IconButton(
                   tooltip: 'Restart the remote PC',
                   icon: const Icon(Icons.restart_alt, size: 20),

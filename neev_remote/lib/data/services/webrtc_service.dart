@@ -150,13 +150,22 @@ class WebRTCService {
     }
   }
 
+  RTCRtpSender? _videoSender;
+
   /// Adds the captured screen stream (host side) to the connection, then
   /// restricts the video transceiver to VP8 so the generated offer is VP8-only.
   Future<void> addLocalStream(MediaStream stream) async {
     for (final track in stream.getTracks()) {
-      await _pc!.addTrack(track, stream);
+      final sender = await _pc!.addTrack(track, stream);
+      if (track.kind == 'video') _videoSender = sender;
     }
     await _forceVp8();
+  }
+
+  /// Swaps the streamed video track without renegotiating — used to switch which
+  /// host monitor is being sent mid-session.
+  Future<void> replaceVideoTrack(MediaStreamTrack track) async {
+    await _videoSender?.replaceTrack(track);
   }
 
   Future<RTCSessionDescription> createOffer() async {
