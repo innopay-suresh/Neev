@@ -27,6 +27,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   final _idController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _autoStarted = false;
+  int _section = 0; // selected sidebar section
 
   @override
   void initState() {
@@ -99,60 +100,22 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: Column(
+      body: Row(
         children: [
-          _TopBar(service: service, onSettings: () => _openSettings(context)),
+          _Sidebar(
+            selected: _section,
+            online: service.hostStatus == HostStatus.online,
+            onSelect: (i) => setState(() => _section = i),
+          ),
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final wide = c.maxWidth > 940;
-                final left = Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _ConnectOutCard(
-                      service: service,
-                      idController: _idController,
-                      passwordController: _passwordController,
-                      onConnect: _connect,
-                    ),
-                    const SizedBox(height: AppSpacing.lg),
-                    _RecentConnectionsCard(onPick: _fillId),
-                  ],
-                );
-                final right = Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _ThisComputerCard(service: service),
-                    const SizedBox(height: AppSpacing.lg),
-                    const _SecurityCard(),
-                  ],
-                );
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.all(AppSpacing.xl),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 1080),
-                      child: wide
-                          ? Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(flex: 6, child: left),
-                                const SizedBox(width: AppSpacing.lg),
-                                Expanded(flex: 5, child: right),
-                              ],
-                            )
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                right,
-                                const SizedBox(height: AppSpacing.lg),
-                                left,
-                              ],
-                            ),
-                    ),
-                  ),
-                );
-              },
+            child: Column(
+              children: [
+                _TopBar(
+                  service: service,
+                  onSettings: () => setState(() => _section = 6),
+                ),
+                Expanded(child: _sectionContent(service)),
+              ],
             ),
           ),
         ],
@@ -160,18 +123,27 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     );
   }
 
-  void _openSettings(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(
-            backgroundColor: AppColors.surface,
-            title: const Text('Settings'),
-          ),
-          body: const SettingsPage(),
-        ),
-      ),
-    );
+  Widget _sectionContent(RemoteService service) {
+    switch (_section) {
+      case 6: // Settings
+        return const SettingsPage();
+      case 2: // Recent
+      case 3: // Favorites
+        return _RecentPage(onPick: (id) {
+          _fillId(id);
+          setState(() => _section = 0);
+        });
+      case 0: // Home
+        return _HomeDashboard(
+          service: service,
+          idController: _idController,
+          passwordController: _passwordController,
+          onConnect: _connect,
+          onPick: _fillId,
+        );
+      default: // Address book / Discovery / Chat — coming soon
+        return _ComingSoon(item: _navItems[_section]);
+    }
   }
 
   // Quick-connect from a recent: drop the id into the field and focus password.
@@ -209,7 +181,7 @@ class _Card extends StatelessWidget {
       padding: padding ?? const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         border: Border.all(color: AppColors.border),
         boxShadow: AppShadows.card,
       ),
@@ -220,6 +192,232 @@ class _Card extends StatelessWidget {
 
 /// Shared search text for filtering Recent connections (top bar -> list).
 final _homeSearchProvider = StateProvider<String>((_) => '');
+
+// --- App shell: left icon sidebar ---------------------------------------
+
+class _NavItem {
+  final IconData icon;
+  final String label;
+  const _NavItem(this.icon, this.label);
+}
+
+const List<_NavItem> _navItems = [
+  _NavItem(Icons.home_rounded, 'Home'),
+  _NavItem(Icons.contacts_outlined, 'Contacts'),
+  _NavItem(Icons.history_rounded, 'Recent'),
+  _NavItem(Icons.star_border_rounded, 'Favorites'),
+  _NavItem(Icons.radar_rounded, 'Discovery'),
+  _NavItem(Icons.chat_bubble_outline_rounded, 'Chat'),
+  _NavItem(Icons.settings_outlined, 'Settings'),
+];
+
+class _Sidebar extends StatelessWidget {
+  final int selected;
+  final bool online;
+  final ValueChanged<int> onSelect;
+  const _Sidebar(
+      {required this.selected, required this.online, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 76,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(right: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: AppSpacing.md),
+          for (var i = 0; i < _navItems.length; i++)
+            _SidebarItem(
+              item: _navItems[i],
+              active: i == selected,
+              onTap: () => onSelect(i),
+            ),
+          const Spacer(),
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: online ? AppColors.success : AppColors.textTertiary,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(online ? 'Online' : 'Offline',
+                    style: AppTypography.label.copyWith(fontSize: 10)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SidebarItem extends StatefulWidget {
+  final _NavItem item;
+  final bool active;
+  final VoidCallback onTap;
+  const _SidebarItem(
+      {required this.item, required this.active, required this.onTap});
+  @override
+  State<_SidebarItem> createState() => _SidebarItemState();
+}
+
+class _SidebarItemState extends State<_SidebarItem> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.active;
+    final fg = active ? AppColors.accentDark : AppColors.textSecondary;
+    final bg = active
+        ? AppColors.primarySoft
+        : (_hover ? AppColors.surfaceLight : Colors.transparent);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: widget.item.label,
+          waitDuration: const Duration(milliseconds: 500),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(widget.item.icon, size: 21, color: fg),
+                const SizedBox(height: 3),
+                Text(
+                  widget.item.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.label.copyWith(
+                      fontSize: 10,
+                      color: fg,
+                      fontWeight:
+                          active ? FontWeight.w600 : FontWeight.w500),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Home section: the connect + share + recents + security cards.
+class _HomeDashboard extends StatelessWidget {
+  final RemoteService service;
+  final TextEditingController idController;
+  final TextEditingController passwordController;
+  final VoidCallback onConnect;
+  final void Function(String id) onPick;
+  const _HomeDashboard({
+    required this.service,
+    required this.idController,
+    required this.passwordController,
+    required this.onConnect,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final wide = c.maxWidth > 860;
+      final left = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _ConnectOutCard(
+            service: service,
+            idController: idController,
+            passwordController: passwordController,
+            onConnect: onConnect,
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          _RecentConnectionsCard(onPick: onPick),
+        ],
+      );
+      final right = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _ThisComputerCard(service: service),
+          const SizedBox(height: AppSpacing.lg),
+          const _SecurityCard(),
+        ],
+      );
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: wide
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 6, child: left),
+                  const SizedBox(width: AppSpacing.lg),
+                  Expanded(flex: 5, child: right),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [right, const SizedBox(height: AppSpacing.lg), left],
+              ),
+      );
+    });
+  }
+}
+
+/// Recent / Favorites section — a full-width recent connections list.
+class _RecentPage extends StatelessWidget {
+  final void Function(String id) onPick;
+  const _RecentPage({required this.onPick});
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: _RecentConnectionsCard(onPick: onPick),
+        ),
+      ),
+    );
+  }
+}
+
+/// Placeholder for sections not yet built (Address book / Discovery / Chat).
+class _ComingSoon extends StatelessWidget {
+  final _NavItem item;
+  const _ComingSoon({required this.item});
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: _EmptyState(
+          icon: item.icon,
+          title: '${item.label} is coming soon',
+          body: 'This section is on the roadmap and will light up in an '
+              'upcoming update.',
+        ),
+      ),
+    );
+  }
+}
 
 /// Top application toolbar: logo, connection status, search, notifications,
 /// settings, user chip.

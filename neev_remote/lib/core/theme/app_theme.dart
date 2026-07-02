@@ -1,37 +1,38 @@
 import 'package:flutter/material.dart';
 
-/// Violet & Indigo design system — minimal, enterprise, Windows-11 native
-/// (Fluent + Linear inspiration). No gradients; spacing over separators.
+/// "Coral" design system (v2) — minimal, enterprise, Windows-11 native
+/// (AnyDesk workflow + Fluent 2 + Linear). One accent, no gradients.
 class AppColors {
-  // Brand
-  static const Color primary = Color(0xFF6D5EF9);
-  static const Color primaryDark = Color(0xFF5B4FE0); // pressed
-  static const Color primarySoft = Color(0xFFEEEBFF); // tint (hover/active bg)
-  static const Color accent = Color(0xFF8B5CF6);
-  static const Color accentDark = Color(0xFF6D28D9); // readable on white
-  static const Color accentSoft = Color(0xFFF2ECFF);
+  // Brand — coral
+  static const Color primary = Color(0xFFFF5A4E);
+  static const Color primaryHover = Color(0xFFFF6B60);
+  static const Color primaryDark = Color(0xFFE94D42); // pressed
+  static const Color primarySoft = Color(0xFFFFF1EF); // coral tint
+  static const Color accent = Color(0xFFFF5A4E);
+  static const Color accentDark = Color(0xFFC0442F); // readable coral on white
+  static const Color accentSoft = Color(0xFFFFF4F2);
 
   static const Color secondary = Color(0xFF6B7280);
 
   // Surfaces
-  static const Color background = Color(0xFFF7F6FE);
+  static const Color background = Color(0xFFF8F8F9);
   static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceLight = Color(0xFFF1F0FA);
-  static const Color surfaceAlt = Color(0xFFFAFAFE);
+  static const Color surfaceLight = Color(0xFFF2F2F2);
+  static const Color surfaceAlt = Color(0xFFFAFAFA);
 
   // Text
-  static const Color textPrimary = Color(0xFF1F1F2E);
-  static const Color textSecondary = Color(0xFF6B6B7B);
-  static const Color textTertiary = Color(0xFF9A9AAB);
+  static const Color textPrimary = Color(0xFF1D1D1F);
+  static const Color textSecondary = Color(0xFF6B7280);
+  static const Color textTertiary = Color(0xFFA8A8A8);
 
   // Status
-  static const Color success = Color(0xFF22C55E);
-  static const Color warning = Color(0xFFF59E0B);
-  static const Color error = Color(0xFFEF4444);
+  static const Color success = Color(0xFF30C56A);
+  static const Color warning = Color(0xFFF5A623);
+  static const Color error = Color(0xFFF44336);
 
   // Lines
-  static const Color border = Color(0xFFE7E8EC);
-  static const Color borderStrong = Color(0xFFD7D8DE);
+  static const Color border = Color(0xFFECECEC);
+  static const Color borderStrong = Color(0xFFDADADA);
 }
 
 /// Very light, consistent shadows — "expensive" but restrained.
@@ -104,12 +105,14 @@ class AppSpacing {
   static const double xxl = 32;
 }
 
-/// Border radius.
+/// Border radius. v2: inputs 10, buttons 12, cards 18.
 class AppRadius {
   static const double xs = 6;
   static const double sm = 8;
-  static const double md = 12;
+  static const double input = 10;
+  static const double md = 12; // buttons
   static const double lg = 16;
+  static const double card = 18;
   static const double xl = 20;
   static const double pill = 999;
 }
@@ -162,7 +165,7 @@ ThemeData lightTheme() {
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadius.lg),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         side: const BorderSide(color: AppColors.border, width: 1),
       ),
     ),
