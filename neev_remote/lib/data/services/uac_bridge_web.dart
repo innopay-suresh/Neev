@@ -23,5 +23,8 @@ class UacBridge {
   /// Set the machine-wide password. No-op off Windows.
   void setMachinePassword(String password) {}
 
+  /// Type [text] into the focused field on the host. No-op off Windows.
+  void sendTypeText(String text, {bool tab = false, bool enter = false}) {}
+
   void dispose() {}
 }

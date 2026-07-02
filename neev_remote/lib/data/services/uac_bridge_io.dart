@@ -31,6 +31,7 @@ class UacBridge {
   static const int _kGetCreds = 0x4D; // 'M' us->agent: request machine creds
   static const int _kSetCreds = 0x4E; // 'N' us->agent: set machine password
   static const int _kCreds = 0x6D; // 'm' agent->us: id\npassword reply
+  static const int _kType = 0x54; // 'T' us->agent: type text into focused field
 
   Socket? _sock;
   Uint8List _pending = Uint8List(0);
@@ -255,6 +256,19 @@ class UacBridge {
     if (!isSupported) return;
     start();
     _send(_kSetCreds, Uint8List.fromList(utf8.encode(password)));
+  }
+
+  /// Type [text] into the focused field on the (secure) input desktop, then
+  /// optionally Tab (next field) / Enter (submit). Used to transmit credentials
+  /// to a UAC / login prompt. Wire: 'T' [u8 flags][utf8 text], flags bit0=Enter,
+  /// bit1=Tab.
+  void sendTypeText(String text, {bool tab = false, bool enter = false}) {
+    if (!isSupported) return;
+    start();
+    final body = BytesBuilder();
+    body.addByte((enter ? 0x01 : 0) | (tab ? 0x02 : 0));
+    body.add(utf8.encode(text));
+    _send(_kType, body.toBytes());
   }
 
   void dispose() {

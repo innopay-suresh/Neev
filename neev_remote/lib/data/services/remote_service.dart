@@ -584,6 +584,16 @@ class RemoteService extends ChangeNotifier {
     if (_hostPeers.isEmpty) PrivacyMode.set(false);
   }
 
+  /// Viewer: transmit text to be typed into the host's currently-focused field
+  /// (e.g. a UAC / Windows login credential prompt). [tab] presses Tab after
+  /// (to jump to the next field), [enter] submits. The host injects it through
+  /// the SYSTEM helper so it reaches the secure desktop / elevated windows.
+  void transmitText(String text, {bool tab = false, bool enter = false}) {
+    if (text.isEmpty && !tab && !enter) return;
+    _viewerPeer?.sendData(jsonEncode(
+        {'k': 'type', 't': text, 'tab': tab, 'enter': enter}));
+  }
+
   /// Viewer: toggle privacy mode on the host (blank its screen + block its
   /// local input while you control it).
   bool privacyMode = false;
@@ -784,6 +794,19 @@ class RemoteService extends ChangeNotifier {
     // Viewer asked to switch the streamed monitor (viewer -> host).
     if (m['k'] == 'setmon') {
       if (isHost) _switchMonitor(m['id'] as String?);
+      return;
+    }
+    // Transmit credentials: viewer sends text to type into the host's focused
+    // field (UAC / login prompt). Routed through the SYSTEM helper so it reaches
+    // the secure desktop / elevated windows.
+    if (m['k'] == 'type') {
+      if (isHost) {
+        _uac.sendTypeText(
+          (m['t'] as String?) ?? '',
+          tab: m['tab'] == true,
+          enter: m['enter'] == true,
+        );
+      }
       return;
     }
 

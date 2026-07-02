@@ -943,6 +943,14 @@ class _SessionToolbar extends ConsumerWidget {
                 // --- Session group ---
                 if (win)
                   _ToolButton(
+                    icon: Icons.password_rounded,
+                    label: 'Login',
+                    tooltip: 'Transmit a username + password to the remote '
+                        'UAC / login prompt',
+                    onPressed: () => _showTransmitCredentials(context, service),
+                  ),
+                if (win)
+                  _ToolButton(
                     icon: Icons.blur_on,
                     label: 'Privacy',
                     tooltip: service.privacyMode
@@ -993,6 +1001,95 @@ class _SessionToolbar extends ConsumerWidget {
       ),
     );
     if (ok == true) service.rebootHost();
+  }
+
+  Future<void> _showTransmitCredentials(
+      BuildContext context, RemoteService service) async {
+    final userCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    void toast(String msg) => ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 1)));
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          const Icon(Icons.password_rounded,
+              color: AppColors.primary, size: 20),
+          const SizedBox(width: AppSpacing.sm),
+          const Text('Transmit login'),
+        ]),
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Sends your typed username / password to the remote so you '
+                'never reveal them on screen. Click the target field on the '
+                'remote first, then type or send both.',
+                style: AppTypography.caption,
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              TextField(
+                controller: userCtrl,
+                decoration: const InputDecoration(
+                    labelText: 'Username',
+                    prefixIcon: Icon(Icons.person_outline)),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              TextField(
+                controller: passCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon: Icon(Icons.lock_outline)),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        service.transmitText(userCtrl.text);
+                        toast('Username sent');
+                      },
+                      child: const Text('Type username'),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        service.transmitText(passCtrl.text);
+                        toast('Password sent');
+                      },
+                      child: const Text('Type password'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          FilledButton.icon(
+            onPressed: () {
+              // Username ⇥ then password ⏎ — ordered/reliable channel keeps the
+              // two type messages in sequence.
+              service.transmitText(userCtrl.text, tab: true);
+              service.transmitText(passCtrl.text, enter: true);
+              Navigator.pop(ctx);
+              toast('Login transmitted');
+            },
+            icon: const Icon(Icons.send_rounded, size: 18),
+            label: const Text('Send user ⇥ pass ⏎'),
+          ),
+        ],
+      ),
+    );
   }
 }
 

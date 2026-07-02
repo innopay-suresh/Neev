@@ -683,6 +683,57 @@ static void InjectKeyOnSecureDesktop(WORD vk) {
   CloseDesktop(hDesk);
 }
 
+static std::wstring WidenUtf8(const std::string& s) {
+  if (s.empty()) return std::wstring();
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+  std::wstring w(n, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+  return w;
+}
+
+// Type a unicode string into whatever field is focused on the current (secure)
+// input desktop — used to transmit credentials to a UAC / login prompt. Each
+// char goes in via KEYEVENTF_UNICODE (no VK mapping, so any character/layout
+// works), then optional Tab / Enter as real key events to move fields / submit.
+static void InjectTextOnSecureDesktop(const std::wstring& text, bool tab,
+                                      bool enter) {
+  HDESK hDesk = OpenInputDesktop(0, FALSE, GENERIC_ALL);
+  if (!hDesk) return;
+  HDESK hPrev = GetThreadDesktop(GetCurrentThreadId());
+  if (!SetThreadDesktop(hDesk)) {
+    CloseDesktop(hDesk);
+    return;
+  }
+  for (wchar_t ch : text) {
+    INPUT in[2] = {0};
+    in[0].type = INPUT_KEYBOARD;
+    in[0].ki.wScan = ch;
+    in[0].ki.dwFlags = KEYEVENTF_UNICODE;
+    in[1].type = INPUT_KEYBOARD;
+    in[1].ki.wScan = ch;
+    in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+    SendInput(2, in, sizeof(INPUT));
+  }
+  auto vkTap = [](WORD vk) {
+    WORD scan = (WORD)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+    INPUT in[2] = {0};
+    in[0].type = INPUT_KEYBOARD;
+    in[0].ki.wVk = vk;
+    in[0].ki.wScan = scan;
+    in[1].type = INPUT_KEYBOARD;
+    in[1].ki.wVk = vk;
+    in[1].ki.wScan = scan;
+    in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(2, in, sizeof(INPUT));
+  };
+  if (tab) vkTap(VK_TAB);
+  if (enter) vkTap(VK_RETURN);
+  Log(L"agent", L"inject: text len=%d tab=%d enter=%d", (int)text.size(),
+      tab ? 1 : 0, enter ? 1 : 0);
+  SetThreadDesktop(hPrev);
+  CloseDesktop(hDesk);
+}
+
 // USB HID usage -> Win32 VK. Mirrors input_injector.cpp's HidToVk so forwarded
 // keyboard input maps identically whether it goes through the app or the agent.
 static WORD HidToVk(int usage) {
@@ -946,6 +997,13 @@ static void HandleClientMessage(const std::vector<BYTE>& m) {
     InjectKeyOnSecureDesktop(vk);
   } else if (m[0] == 'I' && m.size() >= 2) {
     InjectForwardedInput(m);
+  } else if (m[0] == 'T' && m.size() >= 2) {
+    // Transmit credentials: type a unicode string into the focused field.
+    // Payload: [u8 flags][utf8 text]; flags bit0 = Enter after, bit1 = Tab.
+    BYTE flags = m[1];
+    std::string s(m.begin() + 2, m.end());
+    InjectTextOnSecureDesktop(WidenUtf8(s), (flags & 0x02) != 0,
+                              (flags & 0x01) != 0);
   } else if (m[0] == 'M') {
     // getcreds: host asks for the machine-wide id + password.
     SendMachineCreds();
