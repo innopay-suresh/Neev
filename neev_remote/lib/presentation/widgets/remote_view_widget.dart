@@ -486,12 +486,12 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: const [
-              Icon(Icons.admin_panel_settings, color: Colors.white, size: 20),
+              Icon(Icons.lock_outline, color: Colors.white, size: 20),
               SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  'Windows admin (UAC) prompt — click Yes/No directly below, '
-                  'or click the password field and type it.',
+                  'Windows secure screen (UAC or sign-in) — click and type '
+                  'directly below: approve, pick a user, or enter the password.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       color: Colors.white,

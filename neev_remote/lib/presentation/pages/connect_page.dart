@@ -769,6 +769,20 @@ class _ConnectedSession extends ConsumerWidget {
                   onPressed: () =>
                       service.setViewOnly(!service.viewerViewOnly),
                 ),
+                if (service.keyboardCaptureSupported)
+                  IconButton(
+                    tooltip: service.keyboardCapture
+                        ? 'Keyboard capture ON — Win+R, Alt+Tab etc. go to the '
+                            'remote. Click away to stop.'
+                        : 'Capture keyboard — send Win+R, Alt+Tab etc. by '
+                            'pressing them',
+                    isSelected: service.keyboardCapture,
+                    icon: const Icon(Icons.keyboard_alt_outlined, size: 20),
+                    selectedIcon: const Icon(Icons.keyboard_alt,
+                        size: 20, color: AppColors.primary),
+                    onPressed: () =>
+                        service.setKeyboardCapture(!service.keyboardCapture),
+                  ),
                 ShortcutsMenu(service: service),
                 const SizedBox(width: AppSpacing.xs),
                 FileShareButtons(service: service, dense: true),

@@ -15,6 +15,7 @@ import 'auth_service.dart';
 import 'file_store.dart';
 import 'file_transfer_service.dart';
 import 'input_event.dart';
+import 'keyboard_hook.dart';
 import 'input_injector.dart';
 import 'screen_capture_service.dart';
 import 'signaling_service.dart';
@@ -487,6 +488,10 @@ class RemoteService extends ChangeNotifier {
       autoReconnect = false;
       _reconnectTimer?.cancel();
     }
+    if (keyboardCapture) {
+      keyboardCapture = false;
+      _keyHook.setCapture(false);
+    }
     _statsTimerMaybeStop();
     final id = _targetId;
     if (id != null) _viewerSignaling?.sendBye(id);
@@ -540,6 +545,18 @@ class RemoteService extends ChangeNotifier {
     if (m['c'] == 'reboot') {
       rebootMachine();
     }
+  }
+
+  // Windows viewer: seamless capture of OS-reserved key combos (Win+R, Alt+Tab…)
+  // and forward them to the host. Only active while the app is focused.
+  late final KeyboardHook _keyHook =
+      KeyboardHook((hid, down) => sendViewerInput(InputEvent.key(hid, down)));
+  bool keyboardCapture = false;
+  bool get keyboardCaptureSupported => KeyboardHook.supported;
+  void setKeyboardCapture(bool on) {
+    keyboardCapture = on;
+    _keyHook.setCapture(on);
+    notifyListeners();
   }
 
   /// Viewer: ask the host to stream a different monitor.
