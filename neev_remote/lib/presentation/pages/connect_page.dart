@@ -778,35 +778,38 @@ class _ConnectedSession extends ConsumerWidget {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.sm),
-              child: Stack(
-                children: [
-                  RemoteViewWidget(
-                    isConnected: true,
-                    remoteStream: service.remoteStream,
-                    viewOnly: viewOnly,
-                    hostOs: service.remoteHostOs,
-                    onInput: viewOnly
-                        ? null
-                        : (event) => ref
-                            .read(remoteServiceProvider)
-                            .sendViewerInput(event),
-                    uacActive: service.uacActive,
-                    uacFrame: service.uacFrame,
-                    uacW: service.uacW,
-                    uacH: service.uacH,
-                    onUacClick: (b, x, y) =>
-                        ref.read(remoteServiceProvider).sendUacClick(b, x, y),
-                    onUacApprove: () =>
-                        ref.read(remoteServiceProvider).sendUacApprove(),
-                    onUacDecline: () =>
-                        ref.read(remoteServiceProvider).sendUacDecline(),
-                  ),
-                  Positioned(
-                    right: AppSpacing.md,
-                    bottom: AppSpacing.md,
-                    child: FileTransferList(service: service),
-                  ),
-                ],
+              child: DropToSend(
+                service: service,
+                child: Stack(
+                  children: [
+                    RemoteViewWidget(
+                      isConnected: true,
+                      remoteStream: service.remoteStream,
+                      viewOnly: viewOnly,
+                      hostOs: service.remoteHostOs,
+                      onInput: viewOnly
+                          ? null
+                          : (event) => ref
+                              .read(remoteServiceProvider)
+                              .sendViewerInput(event),
+                      uacActive: service.uacActive,
+                      uacFrame: service.uacFrame,
+                      uacW: service.uacW,
+                      uacH: service.uacH,
+                      onUacClick: (b, x, y) =>
+                          ref.read(remoteServiceProvider).sendUacClick(b, x, y),
+                      onUacApprove: () =>
+                          ref.read(remoteServiceProvider).sendUacApprove(),
+                      onUacDecline: () =>
+                          ref.read(remoteServiceProvider).sendUacDecline(),
+                    ),
+                    Positioned(
+                      right: AppSpacing.md,
+                      bottom: AppSpacing.md,
+                      child: FileTransferList(service: service),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
