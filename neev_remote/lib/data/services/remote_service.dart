@@ -422,6 +422,21 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
+  /// Sends a system key combo to the host by explicit HID usage codes (e.g.
+  /// [0xE3, 0x15] = Win+R). Used for shortcuts the LOCAL OS would otherwise
+  /// intercept (Win+*, Alt+Tab, …). Codes are sent verbatim — no ⌘↔Ctrl remap
+  /// and independent of the local keyboard layout/brand. Press in order,
+  /// release in reverse.
+  Future<void> sendKeyCombo(List<int> hidUsages) async {
+    for (final u in hidUsages) {
+      sendViewerInput(InputEvent.key(u, true));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    for (final u in hidUsages.reversed) {
+      sendViewerInput(InputEvent.key(u, false));
+    }
+  }
+
   Future<void> disconnectViewer() async {
     _statsTimerMaybeStop();
     final id = _targetId;

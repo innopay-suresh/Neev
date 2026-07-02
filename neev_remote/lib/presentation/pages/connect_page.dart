@@ -8,6 +8,7 @@ import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
 import '../widgets/file_transfer_panel.dart';
 import '../widgets/remote_view_widget.dart';
+import '../widgets/shortcuts_menu.dart';
 import 'settings_page.dart';
 
 /// Single-screen hub: "Share my screen" (host) on the left, "Connect to a
@@ -711,6 +712,8 @@ class _ConnectedSession extends ConsumerWidget {
                 _StatChip(Icons.movie, stats.codec ?? '—'),
                 _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
                 const Spacer(),
+                ShortcutsMenu(service: service),
+                const SizedBox(width: AppSpacing.xs),
                 FileShareButtons(service: service, dense: true),
                 const SizedBox(width: AppSpacing.sm),
                 OutlinedButton.icon(
