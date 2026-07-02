@@ -2,6 +2,8 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <algorithm>
+
 #include "flutter_window.h"
 #include "utils.h"
 
@@ -22,9 +24,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
+  // Phase 3: the SYSTEM helper launches us with --service-host so we can run at
+  // the cold login screen (no user). There we must NOT pop a visible window on
+  // the (non-interactive) desktop — run "headless": the engine + Dart isolate
+  // (WebRTC brain) run, but the window is never shown.
+  const bool service_host =
+      std::find(command_line_arguments.begin(), command_line_arguments.end(),
+                std::string("--service-host")) != command_line_arguments.end();
+
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project);
+  FlutterWindow window(project, service_host);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"Neev Remote", origin, size)) {

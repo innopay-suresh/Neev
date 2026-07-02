@@ -1,5 +1,8 @@
 #include "flutter_window.h"
 
+#include <windows.h>
+
+#include <cstdio>
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -7,8 +10,24 @@
 #include "keyboard_hook.h"
 #include "privacy_mode.h"
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+// Minimal diagnostic log (headless mode only) so a login-screen launch can be
+// debugged without a visible window. Shares the helper's ProgramData folder.
+static void HostLog(const char* msg) {
+  ::CreateDirectoryW(L"C:\\ProgramData\\NeevRemote", nullptr);
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, L"C:\\ProgramData\\NeevRemote\\host.log", L"a+") != 0 ||
+      !f) {
+    return;
+  }
+  SYSTEMTIME st;
+  ::GetLocalTime(&st);
+  fprintf(f, "[%04d-%02d-%02d %02d:%02d:%02d] %s\n", st.wYear, st.wMonth,
+          st.wDay, st.wHour, st.wMinute, st.wSecond, msg);
+  fclose(f);
+}
+
+FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool headless)
+    : project_(project), headless_(headless) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -16,6 +35,8 @@ bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
     return false;
   }
+
+  if (headless_) HostLog("service-host: creating Flutter view controller");
 
   RECT frame = GetClientArea();
 
@@ -25,6 +46,11 @@ bool FlutterWindow::OnCreate() {
       frame.right - frame.left, frame.bottom - frame.top, project_);
   // Ensure that basic setup of the controller was successful.
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
+    if (headless_) {
+      HostLog(
+          "service-host: FlutterViewController failed (engine/view null) — "
+          "likely GPU/ANGLE init on the login desktop");
+    }
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
@@ -33,9 +59,15 @@ bool FlutterWindow::OnCreate() {
   RegisterPrivacyMode(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
-  });
+  // In headless (login-screen) mode never show the window — the engine + Dart
+  // isolate run, driving WebRTC/signaling, with no visible surface.
+  if (!headless_) {
+    flutter_controller_->engine()->SetNextFrameCallback([&]() {
+      this->Show();
+    });
+  } else {
+    HostLog("service-host: engine up, running headless (window hidden)");
+  }
 
   // Flutter can complete the first frame before the "show window" callback is
   // registered. The following call ensures a frame is pending to ensure the
