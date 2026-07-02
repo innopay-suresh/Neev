@@ -358,7 +358,10 @@ class _HomeDashboard extends StatelessWidget {
               duration: const Duration(seconds: 2)));
       return SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.xl),
-        child: Column(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1160),
+            child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (wide)
@@ -414,6 +417,8 @@ class _HomeDashboard extends StatelessWidget {
             const SizedBox(height: AppSpacing.lg),
             _RecentConnectionsCard(onPick: onPick),
           ],
+            ),
+          ),
         ),
       );
     });
@@ -1321,12 +1326,13 @@ class _ConnectedSession extends ConsumerWidget {
                       ref.read(_chatOpenProvider.notifier).state = false,
                 ),
               ),
-            // Floating command bar, centered along the bottom.
+            // Floating command bar along the bottom (full width, scrolls if the
+            // controls exceed the window so nothing is ever clipped).
             Positioned(
-              left: 0,
-              right: 0,
+              left: AppSpacing.lg,
+              right: AppSpacing.lg,
               bottom: AppSpacing.lg,
-              child: Center(child: _SessionToolbar(service: service)),
+              child: _SessionToolbar(service: service),
             ),
           ],
         ),
@@ -1525,15 +1531,18 @@ class _SessionToolbar extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.md, vertical: AppSpacing.xs),
             child: Row(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.max,
               children: [
                 _ConnectionBadge(id: service.targetId ?? '—'),
                 const SizedBox(width: AppSpacing.sm),
                 _StatsStrip(stats: stats),
                 const _ToolDivider(),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                 // --- Control group ---
                 _ToolButton(
                   icon: service.viewerViewOnly
@@ -1639,12 +1648,14 @@ class _SessionToolbar extends ConsumerWidget {
                   tooltip: 'Restart the remote PC',
                   onPressed: () => _confirmRestart(context, service),
                 ),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(width: AppSpacing.sm),
                 _DisconnectButton(
                   onPressed: () =>
                       ref.read(remoteServiceProvider).disconnectViewer(),
-                ),
-                  ],
                 ),
               ],
             ),
