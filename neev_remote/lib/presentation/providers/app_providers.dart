@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/services/remote_service.dart';
+import '../../data/services/startup.dart';
 
 /// Build-time global server URL, baked into every installer via
 ///   flutter build <platform> --dart-define=RELAY_URL=ws://YOUR_SERVER_IP:8080/ws
@@ -67,6 +68,10 @@ class AppSettings {
   final bool autoAnswer;
   final bool startOnBoot;
   final bool viewOnly;
+  // Unattended access: a fixed password (empty = rotate per session). When set
+  // together with startOnBoot, the host auto-starts sharing on launch so it can
+  // be reached after a reboot with the same id + password.
+  final String unattendedPassword;
 
   const AppSettings({
     this.relayUrl = '',
@@ -75,7 +80,10 @@ class AppSettings {
     this.autoAnswer = false,
     this.startOnBoot = false,
     this.viewOnly = false,
+    this.unattendedPassword = '',
   });
+
+  bool get unattendedEnabled => unattendedPassword.isNotEmpty;
 
   AppSettings copyWith({
     String? relayUrl,
@@ -84,6 +92,7 @@ class AppSettings {
     bool? autoAnswer,
     bool? startOnBoot,
     bool? viewOnly,
+    String? unattendedPassword,
   }) {
     return AppSettings(
       relayUrl: relayUrl ?? this.relayUrl,
@@ -92,6 +101,7 @@ class AppSettings {
       autoAnswer: autoAnswer ?? this.autoAnswer,
       startOnBoot: startOnBoot ?? this.startOnBoot,
       viewOnly: viewOnly ?? this.viewOnly,
+      unattendedPassword: unattendedPassword ?? this.unattendedPassword,
     );
   }
 }
@@ -110,6 +120,8 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   static const _kBitrate = 'videoBitrate';
   static const _kFps = 'videoFps';
   static const _kViewOnly = 'viewOnly';
+  static const _kUnattended = 'unattendedPassword';
+  static const _kStartOnBoot = 'startOnBoot';
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -118,6 +130,8 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
       videoBitrate: prefs.getInt(_kBitrate),
       videoFps: prefs.getInt(_kFps),
       viewOnly: prefs.getBool(_kViewOnly),
+      unattendedPassword: prefs.getString(_kUnattended),
+      startOnBoot: prefs.getBool(_kStartOnBoot),
     );
   }
 
@@ -127,6 +141,21 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     await prefs.setInt(_kBitrate, state.videoBitrate);
     await prefs.setInt(_kFps, state.videoFps);
     await prefs.setBool(_kViewOnly, state.viewOnly);
+    await prefs.setString(_kUnattended, state.unattendedPassword);
+    await prefs.setBool(_kStartOnBoot, state.startOnBoot);
+  }
+
+  /// Set (or clear, with '') the fixed unattended password.
+  void setUnattendedPassword(String password) {
+    state = state.copyWith(unattendedPassword: password.trim());
+    _save();
+  }
+
+  /// Enable/disable launch-at-login (writes the OS startup entry).
+  Future<void> setStartOnBoot(bool on) async {
+    state = state.copyWith(startOnBoot: on);
+    _save();
+    await setAutoStart(on);
   }
 
   void updateRelayUrl(String url) {
@@ -148,9 +177,7 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     state = state.copyWith(autoAnswer: !state.autoAnswer);
   }
 
-  void toggleStartOnBoot() {
-    state = state.copyWith(startOnBoot: !state.startOnBoot);
-  }
+  void toggleStartOnBoot() => setStartOnBoot(!state.startOnBoot);
 
   void toggleViewOnly() {
     state = state.copyWith(viewOnly: !state.viewOnly);

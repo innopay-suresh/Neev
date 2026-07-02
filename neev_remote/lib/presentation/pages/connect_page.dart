@@ -41,11 +41,18 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     if (_autoStarted || !mounted) return;
     final service = ref.read(remoteServiceProvider);
     if (service.isHosting) return;
-    final relayUrl = ref.read(settingsProvider).relayUrl;
-    if (relayUrl.isEmpty) return; // wait until the server is configured
+    final settings = ref.read(settingsProvider);
+    if (settings.relayUrl.isEmpty) return; // wait until the server is configured
     _autoStarted = true;
     try {
-      await service.startHosting(relayUrl: relayUrl);
+      await service.startHosting(
+        relayUrl: settings.relayUrl,
+        // Unattended: reuse the fixed password so the id+password stay stable
+        // across restarts; otherwise a fresh one is generated.
+        password: settings.unattendedPassword.isEmpty
+            ? null
+            : settings.unattendedPassword,
+      );
     } catch (_) {
       // Surfaced on the Share card; user can fix the relay URL in Settings.
     }
@@ -432,16 +439,22 @@ class _ShareCard extends ConsumerWidget {
                 child: FileTransferList(service: service),
               ),
             ],
+            const SizedBox(height: AppSpacing.md),
+            const Divider(height: 1),
+            const _UnattendedControls(),
           ] else
             ElevatedButton.icon(
               onPressed: busy
                   ? null
                   : () async {
-                      final relayUrl = ref.read(settingsProvider).relayUrl;
+                      final s = ref.read(settingsProvider);
                       try {
-                        await ref
-                            .read(remoteServiceProvider)
-                            .startHosting(relayUrl: relayUrl);
+                        await ref.read(remoteServiceProvider).startHosting(
+                              relayUrl: s.relayUrl,
+                              password: s.unattendedPassword.isEmpty
+                                  ? null
+                                  : s.unattendedPassword,
+                            );
                       } catch (_) {}
                     },
               icon: busy
@@ -465,6 +478,111 @@ class _ShareCard extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _UnattendedControls extends ConsumerWidget {
+  const _UnattendedControls();
+
+  Future<void> _enable(BuildContext context, WidgetRef ref) async {
+    final pw = await _askPassword(context);
+    if (pw == null || pw.trim().isEmpty) return;
+    final notifier = ref.read(settingsProvider.notifier);
+    notifier.setUnattendedPassword(pw.trim());
+    await notifier.setStartOnBoot(true);
+    // Re-share so the new fixed password takes effect immediately.
+    final service = ref.read(remoteServiceProvider);
+    final relay = ref.read(settingsProvider).relayUrl;
+    if (service.isHosting) {
+      await service.stopHosting();
+      await service.startHosting(relayUrl: relay, password: pw.trim());
+    }
+  }
+
+  Future<void> _disable(WidgetRef ref) async {
+    final notifier = ref.read(settingsProvider.notifier);
+    notifier.setUnattendedPassword('');
+    await notifier.setStartOnBoot(false);
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(settingsProvider);
+    final enabled = s.unattendedEnabled;
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.sm),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.lock_clock, size: 18),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('Unattended access',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              Switch(
+                value: enabled,
+                onChanged: (v) => v ? _enable(context, ref) : _disable(ref),
+              ),
+            ],
+          ),
+          Text(
+            enabled
+                ? (s.startOnBoot
+                    ? 'Fixed password set · starts with Windows and re-shares automatically.'
+                    : 'Fixed password set · turn on "Start with Windows" to reconnect after a reboot.')
+                : 'Set a permanent password so you can reconnect any time — no one needs to re-share, and it survives restarts.',
+            style: AppTypography.caption,
+          ),
+          if (enabled) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: () => _enable(context, ref),
+                  icon: const Icon(Icons.key, size: 16),
+                  label: const Text('Change password'),
+                ),
+                const Spacer(),
+                const Text('Start with Windows',
+                    style: TextStyle(fontSize: 12)),
+                Switch(
+                  value: s.startOnBoot,
+                  onChanged: (_) =>
+                      ref.read(settingsProvider.notifier).toggleStartOnBoot(),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+Future<String?> _askPassword(BuildContext context) {
+  final ctrl = TextEditingController();
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Set permanent password'),
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        decoration: const InputDecoration(
+            hintText: 'Password for unattended access'),
+        onSubmitted: (v) => Navigator.pop(ctx, v),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('Save')),
+      ],
+    ),
+  );
 }
 
 class _ConnectCard extends StatelessWidget {
