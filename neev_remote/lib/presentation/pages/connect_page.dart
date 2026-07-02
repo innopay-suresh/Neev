@@ -757,6 +757,19 @@ class _ConnectedSession extends ConsumerWidget {
                     if (ok == true) service.rebootHost();
                   },
                 ),
+                if (service.remoteHostOs == 'windows')
+                  IconButton(
+                    tooltip: service.privacyMode
+                        ? 'Privacy ON — host screen blanked + its input blocked'
+                        : 'Privacy mode — blank the host screen + block its '
+                            'local input',
+                    isSelected: service.privacyMode,
+                    icon: const Icon(Icons.blur_on, size: 20),
+                    selectedIcon: const Icon(Icons.blur_on,
+                        size: 20, color: AppColors.primary),
+                    onPressed: () =>
+                        service.setPrivacyMode(!service.privacyMode),
+                  ),
                 IconButton(
                   tooltip: service.viewerViewOnly
                       ? 'View only — click to take control'

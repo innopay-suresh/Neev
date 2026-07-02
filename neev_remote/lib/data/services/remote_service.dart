@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
+import 'package:pasteboard/pasteboard.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/app_constants.dart';
@@ -15,8 +16,9 @@ import 'auth_service.dart';
 import 'file_store.dart';
 import 'file_transfer_service.dart';
 import 'input_event.dart';
-import 'keyboard_hook.dart';
 import 'input_injector.dart';
+import 'keyboard_hook.dart';
+import 'privacy_mode.dart';
 import 'screen_capture_service.dart';
 import 'signaling_service.dart';
 import 'system_command.dart';
@@ -204,6 +206,12 @@ class RemoteService extends ChangeNotifier {
   // ---- Clipboard sync (shared across roles) ----
   Timer? _clipTimer;
   String? _lastClip;
+  // Clipboard image sync (chunked, since images are large).
+  int _lastClipImgHash = 0;
+  int _clipTick = 0;
+  final StringBuffer _clipImgBuf = StringBuffer();
+  int _clipImgNext = 0;
+  int _clipImgTotal = 0;
 
   // ---- Host dead-man's switch: release stuck buttons if input goes silent
   // (viewer minimized / frozen / disconnected) so the host mouse never freezes.
@@ -296,6 +304,7 @@ class RemoteService extends ChangeNotifier {
     _statsTimerMaybeStop();
     _stopHostInputWatchdog();
     _routeToHelper = false;
+    PrivacyMode.set(false); // never leave the host blanked/locked
     for (final peer in _hostPeers.values) {
       await peer.close();
     }
@@ -335,6 +344,7 @@ class RemoteService extends ChangeNotifier {
       case SignalingMessageType.bye:
         final peer = _hostPeers.remove(msg.from);
         await peer?.close();
+        _disablePrivacyIfNoViewers();
         notifyListeners();
         break;
       case SignalingMessageType.error:
@@ -384,6 +394,7 @@ class RemoteService extends ChangeNotifier {
               RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
         _hostPeers.remove(controllerId)?.close();
+        _disablePrivacyIfNoViewers();
         notifyListeners();
       }
     };
@@ -544,7 +555,23 @@ class RemoteService extends ChangeNotifier {
   void _onHostCommand(Map<String, dynamic> m) {
     if (m['c'] == 'reboot') {
       rebootMachine();
+    } else if (m['c'] == 'privacy') {
+      PrivacyMode.set(m['on'] == true);
     }
+  }
+
+  // Safety: never leave the host blanked + input-blocked with no one watching.
+  void _disablePrivacyIfNoViewers() {
+    if (_hostPeers.isEmpty) PrivacyMode.set(false);
+  }
+
+  /// Viewer: toggle privacy mode on the host (blank its screen + block its
+  /// local input while you control it).
+  bool privacyMode = false;
+  void setPrivacyMode(bool on) {
+    privacyMode = on;
+    _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': 'privacy', 'on': on}));
+    notifyListeners();
   }
 
   // Windows viewer: seamless capture of OS-reserved key combos (Win+R, Alt+Tab…)
@@ -679,6 +706,10 @@ class RemoteService extends ChangeNotifier {
     if (m == null) return;
 
     if (m['k'] == 'clip') {
+      if (m['img'] == 1) {
+        _recvClipImage(m);
+        return;
+      }
       final text = m['t'] as String?;
       if (text != null) {
         _lastClip = text; // avoid echoing it straight back
@@ -948,21 +979,92 @@ class RemoteService extends ChangeNotifier {
         _stopClipboardSync();
         return;
       }
-      String? text;
-      try {
-        final data = await Clipboard.getData('text/plain');
-        text = data?.text;
-      } catch (e) {
-        if (kRemoteVerboseLog) debugPrint('[clip] read failed: $e');
-        return;
-      }
-      if (text == null || text.isEmpty || text == _lastClip) return;
-      _lastClip = text;
-      if (kRemoteVerboseLog) {
-        debugPrint('[clip] local change ${text.length} chars -> broadcasting');
-      }
-      _broadcastClip(text);
+      await _pollClipText();
+      _clipTick++;
+      if (_clipTick.isEven) await _pollClipImage(); // images ~every 1.2s
     });
+  }
+
+  Future<void> _pollClipText() async {
+    String? text;
+    try {
+      final data = await Clipboard.getData('text/plain');
+      text = data?.text;
+    } catch (_) {
+      return;
+    }
+    if (text == null || text.isEmpty || text == _lastClip) return;
+    _lastClip = text;
+    _broadcastClip(text);
+  }
+
+  Future<void> _pollClipImage() async {
+    Uint8List? img;
+    try {
+      img = await Pasteboard.image;
+    } catch (_) {
+      return;
+    }
+    if (img == null || img.isEmpty) return;
+    final h = _imgHash(img);
+    if (h == _lastClipImgHash) return;
+    _lastClipImgHash = h;
+    _broadcastClipImage(img);
+  }
+
+  // Cheap change-detector for clipboard images (not cryptographic).
+  int _imgHash(Uint8List b) {
+    if (b.isEmpty) return 0;
+    return b.length ^ (b.first << 8) ^ (b[b.length >> 1] << 16) ^ (b.last << 24);
+  }
+
+  void _broadcastClipImage(Uint8List bytes) {
+    final b64 = base64Encode(bytes);
+    const chunk = 48 * 1024;
+    final total = (b64.length / chunk).ceil().clamp(1, 1 << 20);
+    for (var i = 0; i < total; i++) {
+      final start = i * chunk;
+      final end = start + chunk < b64.length ? start + chunk : b64.length;
+      final msg = jsonEncode({
+        'k': 'clip',
+        'img': 1,
+        'i': i,
+        'n': total,
+        'd': b64.substring(start, end),
+      });
+      for (final peer in _hostPeers.values) {
+        peer.sendData(msg);
+      }
+      _viewerPeer?.sendData(msg);
+    }
+  }
+
+  void _recvClipImage(Map<String, dynamic> m) {
+    final i = m['i'] as int?;
+    final n = m['n'] as int?;
+    final d = m['d'] as String?;
+    if (i == null || n == null || d == null) return;
+    if (i == 0) {
+      _clipImgBuf.clear();
+      _clipImgNext = 0;
+      _clipImgTotal = n;
+    }
+    if (i == _clipImgNext && n == _clipImgTotal) {
+      _clipImgBuf.write(d);
+      _clipImgNext++;
+      if (_clipImgNext == _clipImgTotal) {
+        try {
+          final bytes = base64Decode(_clipImgBuf.toString());
+          _lastClipImgHash = _imgHash(bytes); // don't echo it straight back
+          Pasteboard.writeImage(bytes);
+        } catch (_) {}
+        _clipImgBuf.clear();
+        _clipImgNext = 0;
+      }
+    } else {
+      _clipImgBuf.clear();
+      _clipImgNext = 0;
+    }
   }
 
   void _stopClipboardSync() {

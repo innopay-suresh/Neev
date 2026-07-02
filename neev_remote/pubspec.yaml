@@ -23,6 +23,9 @@ dependencies:
   # File transfer (native open dialog, desktop + web)
   file_selector: ^1.0.3
 
+  # Clipboard images (native, no Rust toolchain — unlike super_clipboard)
+  pasteboard: ^0.2.0
+
   # State Management
   flutter_riverpod: ^2.6.1
   riverpod_annotation: ^2.6.1
