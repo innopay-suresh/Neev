@@ -14,5 +14,14 @@ class UacBridge {
   void sendClick(int button, double x, double y) {}
   void sendKey(int vk) {}
   void sendInput(Map<String, dynamic> e) {}
+
+  /// Machine-wide credentials from the SYSTEM helper. Always null off Windows.
+  Future<({String id, String password})?> fetchMachineCreds(
+          {Duration timeout = const Duration(seconds: 4)}) async =>
+      null;
+
+  /// Set the machine-wide password. No-op off Windows.
+  void setMachinePassword(String password) {}
+
   void dispose() {}
 }

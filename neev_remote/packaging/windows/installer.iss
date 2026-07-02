@@ -31,6 +31,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+; Multi-user / unattended access: launch the host for EVERY user at login (an
+; all-users HKLM Run entry) so the machine is reachable with its machine-wide
+; id + password no matter which account is active. Opt-in, off by default.
+Name: "allusersstart"; Description: "Start automatically for every user (unattended access)"; GroupDescription: "Unattended access:"; Flags: unchecked
 
 [Files]
 ; Packages the entire release folder produced by `flutter build windows`.
@@ -49,6 +53,12 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; host is never left unable to receive clicks on an admin session.
 Filename: "{app}\neev_helper.exe"; Parameters: "install"; Flags: runhidden waituntilterminated; StatusMsg: "Installing helper service..."
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+
+[Registry]
+; All-users autostart (opt-in via the "allusersstart" task). Writing under HKLM
+; means the host launches for whichever user logs in, so an unattended machine
+; is reachable regardless of which account is active. Removed on uninstall.
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "NeevRemote"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: allusersstart
 
 [UninstallRun]
 ; Always remove the service on uninstall (no-op if it was never installed).

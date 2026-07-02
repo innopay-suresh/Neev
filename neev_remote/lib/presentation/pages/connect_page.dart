@@ -489,8 +489,11 @@ class _UnattendedControls extends ConsumerWidget {
     final notifier = ref.read(settingsProvider.notifier);
     notifier.setUnattendedPassword(pw.trim());
     await notifier.setStartOnBoot(true);
-    // Re-share so the new fixed password takes effect immediately.
     final service = ref.read(remoteServiceProvider);
+    // Multi-user: store the password machine-wide (via the SYSTEM helper) so
+    // every account on this PC shares it and it survives user-switching.
+    service.setMachinePassword(pw.trim());
+    // Re-share so the new fixed password takes effect immediately.
     final relay = ref.read(settingsProvider).relayUrl;
     if (service.isHosting) {
       await service.stopHosting();

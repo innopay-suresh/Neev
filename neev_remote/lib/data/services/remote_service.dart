@@ -259,14 +259,29 @@ class RemoteService extends ChangeNotifier {
     _resolvedIce = await _resolveIceServers(relayUrl);
     _setupUacBridge();  // Windows host: stream UAC to viewers (no-op elsewhere)
 
-    final pw = (password == null || password.isEmpty)
-        ? AuthService.generatePassword()
-        : password;
+    // Machine-wide identity (multi-user / cross-session): when the SYSTEM helper
+    // is installed, it owns a single id + password for the whole machine — every
+    // user account shares them, so the box is reachable with the same
+    // credentials no matter which user is logged in / active. Falls back to the
+    // per-install id + a fresh password when the helper isn't present.
+    ({String id, String password})? machine;
+    if (_uac.isSupported) {
+      machine = await _uac.fetchMachineCreds();
+    }
+
+    final pw = (password != null && password.isNotEmpty)
+        ? password
+        : (machine != null && machine.password.isNotEmpty)
+            ? machine.password
+            : AuthService.generatePassword();
     _password = pw;
-    // Stable per-install ID: generated once, persisted, and reused on every
-    // launch so the ID a user shares keeps working. The password still rotates
-    // each session. Only a reinstall (cleared prefs) yields a new ID.
-    final agentId = fixedAgentId ?? await _persistentAgentId();
+    // Prefer the machine-wide id; else a stable per-install ID (generated once,
+    // persisted, reused each launch). Only a reinstall yields a new per-install
+    // id; the machine id survives reinstalls (it lives in ProgramData).
+    final agentId = fixedAgentId ??
+        (machine != null && machine.id.isNotEmpty
+            ? machine.id
+            : await _persistentAgentId());
     _hostStatus = HostStatus.starting;
     _hostError = null;
     notifyListeners();
@@ -890,6 +905,20 @@ class RemoteService extends ChangeNotifier {
   }
 
   // Host: wire the helper-agent UAC stream to all connected viewers.
+  /// Whether the SYSTEM helper (and thus machine-wide multi-user access) is
+  /// available on this host.
+  bool get machineHelperSupported => _uac.isSupported;
+
+  /// Fetch the machine-wide id + password from the SYSTEM helper, or null when
+  /// the helper isn't reachable. Lets the UI show the shared credentials.
+  Future<({String id, String password})?> fetchMachineCreds() =>
+      _uac.fetchMachineCreds();
+
+  /// Store [password] as the machine-wide password (shared by every account on
+  /// this PC). No-op when the helper isn't present.
+  void setMachinePassword(String password) =>
+      _uac.setMachinePassword(password);
+
   void _setupUacBridge() {
     if (!_uac.isSupported) return;
     _uac.onActive = (w, h) => _broadcastToPeers(

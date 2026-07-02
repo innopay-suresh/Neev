@@ -29,6 +29,8 @@
 //   neev_helper.exe agent       — session-agent loop (the service launches this)
 //   neev_helper.exe             — service entry point (invoked by the SCM)
 
+#define _CRT_RAND_S      // enable rand_s (must precede <cstdlib>)
+#include <cstdlib>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -47,6 +49,10 @@ static const wchar_t* kServiceName = L"NeevRemoteHelper";
 static const wchar_t* kDisplayName = L"Neev Remote Helper";
 static const wchar_t* kLogDir = L"C:\\ProgramData\\NeevRemote";
 static const wchar_t* kLogPath = L"C:\\ProgramData\\NeevRemote\\helper.log";
+// Machine-wide credentials (multi-user / cross-session access). Owned by the
+// SYSTEM helper so a single ID + password work for every account on the box and
+// survive user-switching. Stored as two UTF-8 lines: "id\npassword\n".
+static const wchar_t* kCredPath = L"C:\\ProgramData\\NeevRemote\\machine.dat";
 
 // --------------------------------------------------------------------------
 // Logging (single shared file; both the service and the agent append to it).
@@ -73,6 +79,73 @@ static std::wstring SelfPath() {
   wchar_t buf[MAX_PATH] = {0};
   GetModuleFileNameW(nullptr, buf, MAX_PATH);
   return std::wstring(buf);
+}
+
+// --------------------------------------------------------------------------
+// Machine-wide credential store (multi-user / cross-session).
+//   File: C:\ProgramData\NeevRemote\machine.dat — two UTF-8 lines: id, password.
+// The SYSTEM helper is the single owner; standard-user Flutter hosts fetch/set
+// these over the localhost IPC so the ID + password are identical for every
+// account and follow whichever session is active.
+// --------------------------------------------------------------------------
+// Read the two lines. Returns false if the file is missing/empty.
+static bool LoadMachineCreds(std::string& id, std::string& pw) {
+  id.clear();
+  pw.clear();
+  HANDLE hf = CreateFileW(kCredPath, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (hf == INVALID_HANDLE_VALUE) return false;
+  char buf[512];
+  DWORD rd = 0;
+  std::string all;
+  while (ReadFile(hf, buf, sizeof(buf), &rd, nullptr) && rd > 0)
+    all.append(buf, rd);
+  CloseHandle(hf);
+  // Split on the first newline; strip CR.
+  size_t nl = all.find('\n');
+  std::string a = (nl == std::string::npos) ? all : all.substr(0, nl);
+  std::string b = (nl == std::string::npos) ? std::string() : all.substr(nl + 1);
+  size_t nl2 = b.find('\n');
+  if (nl2 != std::string::npos) b = b.substr(0, nl2);
+  auto trim = [](std::string& s) {
+    while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' '))
+      s.pop_back();
+  };
+  trim(a);
+  trim(b);
+  id = a;
+  pw = b;
+  return !id.empty();
+}
+
+static bool SaveMachineCreds(const std::string& id, const std::string& pw) {
+  CreateDirectoryW(kLogDir, nullptr);
+  HANDLE hf = CreateFileW(kCredPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                          FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (hf == INVALID_HANDLE_VALUE) return false;
+  std::string out = id + "\n" + pw + "\n";
+  DWORD wr = 0;
+  BOOL ok = WriteFile(hf, out.data(), (DWORD)out.size(), &wr, nullptr);
+  CloseHandle(hf);
+  return ok == TRUE;
+}
+
+// Generate a stable 9-digit numeric ID once, if the store has none yet.
+static std::string EnsureMachineId() {
+  std::string id, pw;
+  if (LoadMachineCreds(id, pw) && !id.empty()) return id;
+  // No id yet: mint one from a crypto-quality source.
+  unsigned int r1 = 0, r2 = 0;
+  rand_s(&r1);
+  rand_s(&r2);
+  unsigned long long v =
+      ((unsigned long long)r1 << 32 | r2) % 1000000000ULL;  // 0..1e9-1
+  char num[16];
+  sprintf(num, "%09llu", v);
+  id = num;
+  SaveMachineCreds(id, pw);  // pw may be empty until the user sets one
+  Log(L"svc", L"minted machine id %hs", id.c_str());
+  return id;
 }
 
 // --------------------------------------------------------------------------
@@ -848,6 +921,16 @@ static bool ClientConnected() {
   return c;
 }
 
+// Reply to a getcreds ('M') request with the machine-wide id + password as
+// 'm' + "id\npassword" (UTF-8). Password may be empty (none set yet).
+static void SendMachineCreds() {
+  std::string id, pw;
+  LoadMachineCreds(id, pw);
+  if (id.empty()) id = EnsureMachineId();
+  std::string out = id + "\n" + pw;
+  PipeSend('m', (const BYTE*)out.data(), (DWORD)out.size());
+}
+
 // A viewer command (click/key) -> inject onto the secure desktop.
 static void HandleClientMessage(const std::vector<BYTE>& m) {
   if (m.empty()) return;
@@ -863,6 +946,19 @@ static void HandleClientMessage(const std::vector<BYTE>& m) {
     InjectKeyOnSecureDesktop(vk);
   } else if (m[0] == 'I' && m.size() >= 2) {
     InjectForwardedInput(m);
+  } else if (m[0] == 'M') {
+    // getcreds: host asks for the machine-wide id + password.
+    SendMachineCreds();
+  } else if (m[0] == 'N') {
+    // setcreds: host sets the machine-wide password (payload = UTF-8 password).
+    // The id is never overwritten — it stays stable for the machine's lifetime.
+    std::string id, oldpw;
+    LoadMachineCreds(id, oldpw);
+    if (id.empty()) id = EnsureMachineId();
+    std::string newpw((const char*)m.data() + 1, m.size() - 1);
+    SaveMachineCreds(id, newpw);
+    Log(L"agent", L"machine password updated (%d chars)", (int)newpw.size());
+    SendMachineCreds();  // echo back so every connected host converges
   }
 }
 
@@ -938,6 +1034,7 @@ static void MakeDpiAware() {
 
 static int RunAgent() {
   MakeDpiAware();
+  EnsureMachineId();  // machine-wide id exists before any host asks for it
   InitializeCriticalSection(&g_clientLock);
   WSADATA wsa;
   WSAStartup(MAKEWORD(2, 2), &wsa);

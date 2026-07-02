@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -27,12 +28,16 @@ class UacBridge {
   static const int _kClick = 0x43; // 'C'
   static const int _kKey = 0x4B; // 'K'
   static const int _kInput = 0x49; // 'I'
+  static const int _kGetCreds = 0x4D; // 'M' us->agent: request machine creds
+  static const int _kSetCreds = 0x4E; // 'N' us->agent: set machine password
+  static const int _kCreds = 0x6D; // 'm' agent->us: id\npassword reply
 
   Socket? _sock;
   Uint8List _pending = Uint8List(0);
   Timer? _retry;
   bool _stopped = false;
   bool _started = false;
+  Completer<({String id, String password})>? _credsCompleter;
 
   /// UAC prompt appeared on the host; [w]x[h] is the captured desktop size.
   void Function(int w, int h)? onActive;
@@ -123,6 +128,17 @@ class UacBridge {
       case _kGone:
         onGone?.call();
         break;
+      case _kCreds:
+        final s = utf8.decode(payload, allowMalformed: true);
+        final nl = s.indexOf('\n');
+        final id = nl < 0 ? s : s.substring(0, nl);
+        final pw = nl < 0 ? '' : s.substring(nl + 1);
+        final c = _credsCompleter;
+        if (c != null && !c.isCompleted) {
+          _credsCompleter = null;
+          c.complete((id: id, password: pw));
+        }
+        break;
     }
   }
 
@@ -206,6 +222,39 @@ class UacBridge {
         return;
     }
     _send(_kInput, b.toBytes());
+  }
+
+  /// Ask the SYSTEM helper for the machine-wide id + password. Connects on
+  /// demand and waits up to [timeout]; returns null if the helper isn't
+  /// reachable (not installed / not running) so the caller can fall back to the
+  /// per-install id.
+  Future<({String id, String password})?> fetchMachineCreds(
+      {Duration timeout = const Duration(seconds: 4)}) async {
+    if (!isSupported) return null;
+    start(); // kick off connection if not already
+    // Wait briefly for the socket to be up.
+    final deadline = DateTime.now().add(timeout);
+    while (_sock == null && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (_sock == null) return null;
+    final completer = Completer<({String id, String password})>();
+    _credsCompleter = completer;
+    _send(_kGetCreds, Uint8List(0));
+    try {
+      return await completer.future.timeout(timeout);
+    } catch (_) {
+      if (identical(_credsCompleter, completer)) _credsCompleter = null;
+      return null;
+    }
+  }
+
+  /// Store [password] as the machine-wide password (shared by all users). The
+  /// helper keeps the id stable and only updates the password.
+  void setMachinePassword(String password) {
+    if (!isSupported) return;
+    start();
+    _send(_kSetCreds, Uint8List.fromList(utf8.encode(password)));
   }
 
   void dispose() {
