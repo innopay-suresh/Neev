@@ -779,11 +779,17 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
-  // Inject one host-side input event. Routes through the SYSTEM helper whenever
-  // it's connected (so elevated windows / the secure desktop are reachable),
-  // else falls back to the in-app injector. The route is only re-evaluated while
-  // nothing is held, so a press/drag started on one injector finishes on it.
+  // Inject one host-side input event. Mouse MOVES always go to the fast in-app
+  // injector: cursor positioning isn't integrity-blocked, and routing the
+  // high-rate move stream through the SYSTEM helper (per-event desktop switch +
+  // localhost hop) was stalling the cursor. Clicks/keys/wheel go through the
+  // helper when connected so they still reach elevated windows. The click/key
+  // route is only re-evaluated while nothing is held, so a drag doesn't split.
   void _routeInput(InputEvent event) {
+    if (event.kind == 'mv') {
+      _injector.inject(event);
+      return;
+    }
     if (_heldButtons.isEmpty) _routeToHelper = _uac.isConnected;
     if (_routeToHelper) {
       _uac.sendInput(event.data);
