@@ -111,6 +111,15 @@ class RemoteService extends ChangeNotifier {
     _sendFileData(jsonEncode({'k': 'ft', 't': 'request'}));
   }
 
+  /// In-session view-only: when true the viewer watches without sending input
+  /// (separate from the persisted view-only setting; either one disables input).
+  bool viewerViewOnly = false;
+  void setViewOnly(bool value) {
+    if (viewerViewOnly == value) return;
+    viewerViewOnly = value;
+    notifyListeners();
+  }
+
   // The peer sent an import request — open a picker here and send the choice.
   Future<void> _onFileRequest() async {
     try {

@@ -652,7 +652,8 @@ class _ConnectedSession extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final stats = service.stats;
-    final viewOnly = ref.watch(settingsProvider).viewOnly;
+    final viewOnly =
+        ref.watch(settingsProvider).viewOnly || service.viewerViewOnly;
     return Scaffold(
       body: Column(
         children: [
@@ -712,6 +713,18 @@ class _ConnectedSession extends ConsumerWidget {
                 _StatChip(Icons.movie, stats.codec ?? '—'),
                 _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
                 const Spacer(),
+                IconButton(
+                  tooltip: service.viewerViewOnly
+                      ? 'View only — click to take control'
+                      : 'Controlling — click for view only',
+                  icon: Icon(
+                      service.viewerViewOnly
+                          ? Icons.visibility_outlined
+                          : Icons.ads_click,
+                      size: 20),
+                  onPressed: () =>
+                      service.setViewOnly(!service.viewerViewOnly),
+                ),
                 ShortcutsMenu(service: service),
                 const SizedBox(width: AppSpacing.xs),
                 FileShareButtons(service: service, dense: true),
