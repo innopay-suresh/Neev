@@ -33,6 +33,8 @@ class RemoteViewWidget extends StatefulWidget {
   final Uint8List? uacFrame;
   final int uacW;
   final int uacH;
+  /// 0 = UAC prompt, 1 = login screen, 2 = locked session.
+  final int uacKind;
   final void Function(int button, double x, double y)? onUacClick;
   final VoidCallback? onUacApprove;
   final VoidCallback? onUacDecline;
@@ -48,6 +50,7 @@ class RemoteViewWidget extends StatefulWidget {
     this.uacFrame,
     this.uacW = 0,
     this.uacH = 0,
+    this.uacKind = 0,
     this.onUacClick,
     this.onUacApprove,
     this.onUacDecline,
@@ -476,8 +479,30 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   // click Yes/No in the view below, or click the password field and type. Kept
   // to a single centered line so the dialog below stays as large as possible.
   Widget _uacControlBar() {
+    // Label + colour by which secure screen this is, so the operator knows what
+    // they're looking at (a UAC request vs the Windows sign-in / lock screen).
+    final (IconData icon, String title, Color color) = switch (widget.uacKind) {
+      1 => (
+        Icons.login,
+        'Windows sign-in screen — click a user, then use "Login" in the toolbar '
+            'to send the username & password, or type directly.',
+        const Color(0xFF1E293B),
+      ),
+      2 => (
+        Icons.lock,
+        'Locked — click the account, then use "Login" in the toolbar to send the '
+            'password (or type it), and press Enter.',
+        const Color(0xFF1E293B),
+      ),
+      _ => (
+        Icons.admin_panel_settings_outlined,
+        'User Account Control — approve/decline below, or use "Login" in the '
+            'toolbar to send admin credentials.',
+        AppColors.accentDark,
+      ),
+    };
     return Material(
-      color: AppColors.primary.withValues(alpha: 0.96),
+      color: color.withValues(alpha: 0.97),
       elevation: 4,
       child: SafeArea(
         bottom: false,
@@ -485,15 +510,14 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
-            children: const [
-              Icon(Icons.lock_outline, color: Colors.white, size: 20),
-              SizedBox(width: 8),
+            children: [
+              Icon(icon, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  'Windows secure screen (UAC or sign-in) — click and type '
-                  'directly below: approve, pick a user, or enter the password.',
+                  title,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                       color: Colors.white,
                       fontSize: 13,
                       fontWeight: FontWeight.w600),

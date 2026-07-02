@@ -1165,6 +1165,41 @@ static void MakeDpiAware() {
   SetProcessDPIAware();  // Vista+ fallback (system-DPI aware)
 }
 
+// Classify the current secure (Winlogon) desktop so the viewer can label it and
+// pick the right UI: 0 = UAC prompt (user logged in, not locked), 1 = login
+// screen (no user logged in), 2 = locked session. Best-effort — defaults to UAC.
+static int DetectSecureKind() {
+  DWORD sid = GetTargetSessionId();
+  if (sid == 0xFFFFFFFF) return 1;  // no active user session -> login screen
+
+  // Empty username => nobody is logged into the active session => login screen.
+  LPWSTR user = nullptr;
+  DWORD ulen = 0;
+  bool hasUser = false;
+  if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, sid, WTSUserName,
+                                  &user, &ulen)) {
+    hasUser = (user && user[0] != L'\0');
+    WTSFreeMemory(user);
+  }
+  if (!hasUser) return 1;
+
+  // Logged in + on the secure desktop: locked session vs a UAC prompt.
+  int kind = 0;  // default: UAC
+  LPWSTR info = nullptr;
+  DWORD ilen = 0;
+  if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, sid,
+                                  WTSSessionInfoEx, &info, &ilen) &&
+      info && ilen >= sizeof(WTSINFOEXW)) {
+    WTSINFOEXW* ex = (WTSINFOEXW*)info;
+    if (ex->Level == 1 &&
+        ex->Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK) {
+      kind = 2;  // locked
+    }
+  }
+  if (info) WTSFreeMemory(info);
+  return kind;
+}
+
 static int RunAgent() {
   MakeDpiAware();
   EnsureMachineId();  // machine-wide id exists before any host asks for it
@@ -1179,6 +1214,7 @@ static int RunAgent() {
 
   std::wstring last;
   bool wasSecure = false;
+  int lastSecureKind = -1;
   int frameTick = 0;
   for (;;) {
     std::wstring name = L"(unknown)";
@@ -1199,22 +1235,29 @@ static int RunAgent() {
     }
 
     if (secure) {
-      if (!wasSecure) {
-        Sleep(500);  // let the dialog finish drawing
+      int kind = DetectSecureKind();
+      // Send 'A' (with dims + kind) on entering the secure desktop OR when the
+      // kind changes (e.g. login screen -> UAC after sign-in), then stream
+      // frames every tick so the sign-in / lock screen is interactive, not just
+      // a slow snapshot.
+      bool announce = (!wasSecure || kind != lastSecureKind);
+      if (announce) {
+        if (!wasSecure) Sleep(500);  // let the screen finish drawing
         std::vector<BYTE> png;
         int w = 0, h = 0;
         if (CaptureSecureDesktopToPng(png, w, h)) {
-          int32_t dims[2] = {w, h};
+          int32_t dims[3] = {w, h, kind};
           DWORD ts = GetTickCount();
           PipeSend('A', (BYTE*)dims, sizeof(dims));
           PipeSend('F', png.data(), (DWORD)png.size());
           Log(L"agent",
-              L"pipe: sent active+frame (%dx%d, %u bytes) send=%lums%ls", w, h,
-              (unsigned)png.size(), GetTickCount() - ts,
+              L"pipe: sent active+frame (%dx%d kind=%d, %u bytes) send=%lums%ls",
+              w, h, kind, (unsigned)png.size(), GetTickCount() - ts,
               ClientConnected() ? L"" : L"  (no client)");
         }
+        lastSecureKind = kind;
         frameTick = 0;
-      } else if (ClientConnected() && (++frameTick % 3 == 0)) {
+      } else if (ClientConnected()) {
         std::vector<BYTE> png;
         int w = 0, h = 0;
         if (CaptureSecureDesktopToPng(png, w, h))
@@ -1224,9 +1267,10 @@ static int RunAgent() {
     } else {
       if (wasSecure) {
         PipeSend('G', nullptr, 0);
-        Log(L"agent", L"pipe: sent UAC-gone");
+        Log(L"agent", L"pipe: sent secure-desktop gone");
       }
       wasSecure = false;
+      lastSecureKind = -1;
     }
     Sleep(400);
   }

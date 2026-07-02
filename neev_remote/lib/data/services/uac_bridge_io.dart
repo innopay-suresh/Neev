@@ -40,8 +40,9 @@ class UacBridge {
   bool _started = false;
   Completer<({String id, String password})>? _credsCompleter;
 
-  /// UAC prompt appeared on the host; [w]x[h] is the captured desktop size.
-  void Function(int w, int h)? onActive;
+  /// A secure desktop appeared on the host; [w]x[h] is the captured size and
+  /// [kind] is 0=UAC prompt, 1=login screen, 2=locked session.
+  void Function(int w, int h, int kind)? onActive;
 
   /// A new PNG frame of the secure desktop.
   void Function(Uint8List png)? onFrame;
@@ -118,9 +119,11 @@ class UacBridge {
     switch (type) {
       case _kActive:
         if (payload.length >= 8) {
-          final bd = ByteData.sublistView(payload, 0, 8);
-          onActive?.call(
-              bd.getInt32(0, Endian.little), bd.getInt32(4, Endian.little));
+          final bd = ByteData.sublistView(payload);
+          final kind =
+              payload.length >= 12 ? bd.getInt32(8, Endian.little) : 0;
+          onActive?.call(bd.getInt32(0, Endian.little),
+              bd.getInt32(4, Endian.little), kind);
         }
         break;
       case _kFrame:

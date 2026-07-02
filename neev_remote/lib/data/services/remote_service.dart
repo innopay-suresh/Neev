@@ -156,6 +156,8 @@ class RemoteService extends ChangeNotifier {
   Uint8List? uacFrame;
   int uacW = 0;
   int uacH = 0;
+  // Which secure desktop is showing: 0=UAC prompt, 1=login screen, 2=locked.
+  int uacKind = 0;
   // A secure-desktop frame is base64'd and split into ordered chunks so it fits
   // the WebRTC data-channel per-message limit (a full-res frame base64s to
   // ~300 KB, over the ~256 KB cap, and was being silently dropped). Reassembled
@@ -847,6 +849,7 @@ class RemoteService extends ChangeNotifier {
       uacActive = true;
       uacW = (m['w'] as int?) ?? 0;
       uacH = (m['h'] as int?) ?? 0;
+      uacKind = (m['kind'] as int?) ?? 0;
     } else if (t == 'frame') {
       final d = m['d'] as String?;
       if (d == null) return;
@@ -944,8 +947,8 @@ class RemoteService extends ChangeNotifier {
 
   void _setupUacBridge() {
     if (!_uac.isSupported) return;
-    _uac.onActive = (w, h) => _broadcastToPeers(
-        jsonEncode({'k': 'uac', 't': 'active', 'w': w, 'h': h}));
+    _uac.onActive = (w, h, kind) => _broadcastToPeers(
+        jsonEncode({'k': 'uac', 't': 'active', 'w': w, 'h': h, 'kind': kind}));
     _uac.onFrame = _broadcastUacFrame;
     _uac.onGone = () => _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
     _uac.start();

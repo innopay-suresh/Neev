@@ -938,6 +938,7 @@ class _ConnectedSession extends ConsumerWidget {
                       uacFrame: service.uacFrame,
                       uacW: service.uacW,
                       uacH: service.uacH,
+                      uacKind: service.uacKind,
                       onUacClick: (b, x, y) =>
                           ref.read(remoteServiceProvider).sendUacClick(b, x, y),
                       onUacApprove: () =>
