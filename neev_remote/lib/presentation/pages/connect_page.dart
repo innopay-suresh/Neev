@@ -1,4 +1,4 @@
-import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -98,99 +98,96 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        elevation: 0,
-        title: Row(
-          children: [
-            const Icon(Icons.desktop_windows, color: AppColors.accent),
-            const SizedBox(width: AppSpacing.sm),
-            Text('Neev Remote', style: AppTypography.heading2),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(
-                    backgroundColor: AppColors.surface,
-                    title: const Text('Settings'),
+      backgroundColor: AppColors.background,
+      body: Column(
+        children: [
+          _TopBar(service: service, onSettings: () => _openSettings(context)),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final wide = c.maxWidth > 940;
+                final left = Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _ConnectOutCard(
+                      service: service,
+                      idController: _idController,
+                      passwordController: _passwordController,
+                      onConnect: _connect,
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    _RecentConnectionsCard(onPick: _fillId),
+                  ],
+                );
+                final right = Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _ThisComputerCard(service: service),
+                    const SizedBox(height: AppSpacing.lg),
+                    const _SecurityCard(),
+                  ],
+                );
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.all(AppSpacing.xl),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1080),
+                      child: wide
+                          ? Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(flex: 6, child: left),
+                                const SizedBox(width: AppSpacing.lg),
+                                Expanded(flex: 5, child: right),
+                              ],
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                right,
+                                const SizedBox(height: AppSpacing.lg),
+                                left,
+                              ],
+                            ),
+                    ),
                   ),
-                  body: const SettingsPage(),
-                ),
-              ),
+                );
+              },
             ),
           ),
         ],
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFEFF1F5), Color(0xFFF7F8FA)],
+    );
+  }
+
+  void _openSettings(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(
+            backgroundColor: AppColors.surface,
+            title: const Text('Settings'),
           ),
-        ),
-        child: Stack(
-          children: [
-            const Positioned.fill(child: _AmbientBackground()),
-            LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth > 820;
-            final share = _ShareCard(service: service);
-            final connect = _ConnectCard(
-              service: service,
-              idController: _idController,
-              passwordController: _passwordController,
-              onConnect: _connect,
-            );
-            return SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.xl, vertical: AppSpacing.xxl),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 900),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _HeroBanner(service: service),
-                      const SizedBox(height: AppSpacing.xl),
-                      if (wide)
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: share),
-                            const SizedBox(width: AppSpacing.lg),
-                            Expanded(child: connect),
-                          ],
-                        )
-                      else ...[
-                        share,
-                        const SizedBox(height: AppSpacing.lg),
-                        connect,
-                      ],
-                      const SizedBox(height: AppSpacing.xl),
-                      const _HowItWorks(),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-            ),
-          ],
+          body: const SettingsPage(),
         ),
       ),
     );
+  }
+
+  // Quick-connect from a recent: drop the id into the field and focus password.
+  void _fillId(String id) {
+    _idController.text = id;
+    _passwordController.clear();
   }
 
   void _connect() {
     final id = _idController.text.trim();
     if (id.isEmpty) return;
     final relayUrl = ref.read(settingsProvider).relayUrl;
+    // Remember this machine so it shows up under Recent connections.
+    ref.read(recentConnectionsProvider.notifier).addConnection(
+          RecentConnection(id: id, name: id, lastConnected: DateTime.now()),
+        );
     ref.read(remoteServiceProvider).connectToHost(
           relayUrl: relayUrl,
           targetId: id,
@@ -212,102 +209,229 @@ class _Card extends StatelessWidget {
       padding: padding ?? const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
         border: Border.all(color: AppColors.border),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x14101828),
-            blurRadius: 28,
-            offset: Offset(0, 12),
-          ),
-          BoxShadow(
-            color: Color(0x0A101828),
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
-        ],
+        boxShadow: AppShadows.card,
       ),
       child: child,
     );
   }
 }
 
-/// Gradient welcome banner across the top — adds depth/brand and fills space.
-class _HeroBanner extends StatelessWidget {
+/// Shared search text for filtering Recent connections (top bar -> list).
+final _homeSearchProvider = StateProvider<String>((_) => '');
+
+/// Top application toolbar: logo, connection status, search, notifications,
+/// settings, user chip.
+class _TopBar extends ConsumerWidget {
   final RemoteService service;
-  const _HeroBanner({required this.service});
+  final VoidCallback onSettings;
+  const _TopBar({required this.service, required this.onSettings});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final online = service.hostStatus == HostStatus.online;
     return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.xl, vertical: AppSpacing.lg),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF273449), Color(0xFF0F172A)],
-        ),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33101828), blurRadius: 30, offset: Offset(0, 14)),
-        ],
+      height: 60,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       child: Row(
         children: [
           Container(
-            width: 46,
-            height: 46,
+            width: 34,
+            height: 34,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(12),
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
-            child: const Icon(Icons.bolt_rounded, color: AppColors.accent, size: 26),
+            child: const Icon(Icons.hub_rounded, color: Colors.white, size: 19),
           ),
-          const SizedBox(width: AppSpacing.lg),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Welcome to Neev Remote',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 21,
-                        fontWeight: FontWeight.bold)),
-                SizedBox(height: 3),
-                Text('Securely view and control any computer, anywhere.',
-                    style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
-              ],
+          const SizedBox(width: 10),
+          Text('Neev Remote', style: AppTypography.title),
+          const SizedBox(width: AppSpacing.md),
+          _StatusPill(online: online),
+          const Spacer(),
+          SizedBox(width: 260, height: 40, child: _TopSearchField()),
+          const SizedBox(width: AppSpacing.sm),
+          _TopIconButton(
+            icon: Icons.notifications_none_rounded,
+            tooltip: 'Notifications',
+            onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                  content: Text('You’re all caught up — no new notifications'),
+                  duration: Duration(seconds: 2)),
             ),
           ),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(999),
+          _TopIconButton(
+              icon: Icons.settings_outlined,
+              tooltip: 'Settings',
+              onTap: onSettings),
+          const SizedBox(width: AppSpacing.sm),
+          _UserChip(),
+        ],
+      ),
+    );
+  }
+}
+
+class _TopSearchField extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return TextField(
+      onChanged: (v) => ref.read(_homeSearchProvider.notifier).state = v,
+      textAlignVertical: TextAlignVertical.center,
+      style: AppTypography.body,
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: 'Search recent connections',
+        prefixIcon: const Icon(Icons.search, size: 18),
+        prefixIconConstraints:
+            const BoxConstraints(minWidth: 38, minHeight: 38),
+        contentPadding: const EdgeInsets.symmetric(vertical: 8),
+        fillColor: AppColors.surfaceLight,
+      ),
+    );
+  }
+}
+
+class _TopIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _TopIconButton(
+      {required this.icon, required this.tooltip, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(icon, size: 20),
+      tooltip: tooltip,
+      onPressed: onTap,
+      style: IconButton.styleFrom(
+        foregroundColor: AppColors.textSecondary,
+        hoverColor: AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.sm)),
+      ),
+    );
+  }
+}
+
+class _UserChip extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(6, 5, 12, 5),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: const BoxDecoration(
+              color: AppColors.primary, shape: BoxShape.circle),
+          alignment: Alignment.center,
+          child: const Icon(Icons.person, color: Colors.white, size: 15),
+        ),
+        const SizedBox(width: 8),
+        Text('This PC', style: AppTypography.caption),
+      ]),
+    );
+  }
+}
+
+/// Rounded connection-status pill (Online / Offline).
+class _StatusPill extends StatelessWidget {
+  final bool online;
+  const _StatusPill({required this.online});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = online ? AppColors.success : AppColors.textTertiary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 6),
+        Text(online ? 'Online' : 'Offline',
+            style: AppTypography.label.copyWith(color: color)),
+      ]),
+    );
+  }
+}
+
+/// Left column: enter a partner ID + password to control another machine.
+class _ConnectOutCard extends StatelessWidget {
+  final RemoteService service;
+  final TextEditingController idController;
+  final TextEditingController passwordController;
+  final VoidCallback onConnect;
+  const _ConnectOutCard({
+    required this.service,
+    required this.idController,
+    required this.passwordController,
+    required this.onConnect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final connecting = service.viewerStatus == ViewerStatus.connecting;
+    final failed = service.viewerStatus == ViewerStatus.failed;
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _CardHeader(
+            icon: Icons.cast_connected_rounded,
+            title: 'Connect to a computer',
+            subtitle: 'Enter the ID and password shared with you',
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          TextField(
+            controller: idController,
+            decoration: InputDecoration(
+              labelText: 'Partner ID',
+              hintText: '123 456 789',
+              prefixIcon: const Icon(Icons.link, size: 20),
+              errorText: failed ? service.viewerError : null,
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: online ? const Color(0xFF4ADE80) : Colors.white70,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 7),
-                Text(online ? 'Ready to receive' : 'Starting…',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
-              ],
+            style: AppTypography.body.copyWith(
+                fontSize: 16, letterSpacing: 1, fontWeight: FontWeight.w600),
+            onSubmitted: (_) => onConnect(),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          TextField(
+            controller: passwordController,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'Password',
+              prefixIcon: Icon(Icons.lock_outline, size: 20),
             ),
+            onSubmitted: (_) => onConnect(),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          ElevatedButton.icon(
+            onPressed: connecting ? null : onConnect,
+            icon: connecting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.arrow_forward_rounded, size: 20),
+            label: Text(connecting ? 'Connecting…' : 'Connect'),
           ),
         ],
       ),
@@ -315,91 +439,248 @@ class _HeroBanner extends StatelessWidget {
   }
 }
 
-/// Three-step explainer row that fills the lower space tastefully.
-class _HowItWorks extends StatelessWidget {
-  const _HowItWorks();
+/// Left column: recent machines, filterable from the top-bar search.
+class _RecentConnectionsCard extends ConsumerWidget {
+  final void Function(String id) onPick;
+  const _RecentConnectionsCard({required this.onPick});
 
   @override
-  Widget build(BuildContext context) {
-    const steps = [
-      (Icons.tag_rounded, 'Share your ID',
-          'Give your ID + password to whoever should connect.'),
-      (Icons.cast_connected_rounded, 'Or connect out',
-          'Enter a partner ID + password to control their screen.'),
-      (Icons.lock_rounded, 'Encrypted & direct',
-          'Sessions are peer-to-peer and end-to-end encrypted.'),
-    ];
-    return LayoutBuilder(builder: (context, c) {
-      final wide = c.maxWidth > 680;
-      final cards = [
-        for (final s in steps) _StepCard(icon: s.$1, title: s.$2, body: s.$3),
-      ];
-      if (!wide) {
-        return Column(
-          children: [
-            for (var i = 0; i < cards.length; i++) ...[
-              if (i > 0) const SizedBox(height: AppSpacing.md),
-              cards[i],
-            ],
-          ],
-        );
-      }
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final query = ref.watch(_homeSearchProvider).trim().toLowerCase();
+    final all = ref.watch(recentConnectionsProvider);
+    final recents = query.isEmpty
+        ? all
+        : all
+            .where((c) =>
+                c.id.toLowerCase().contains(query) ||
+                c.name.toLowerCase().contains(query))
+            .toList();
+    return _Card(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.xl, AppSpacing.lg, AppSpacing.lg, AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (var i = 0; i < cards.length; i++) ...[
-            if (i > 0) const SizedBox(width: AppSpacing.md),
-            Expanded(child: cards[i]),
-          ],
+          Row(
+            children: [
+              Text('Recent connections', style: AppTypography.title),
+              const Spacer(),
+              if (all.isNotEmpty)
+                TextButton(
+                  onPressed: () =>
+                      ref.read(recentConnectionsProvider.notifier).clear(),
+                  child: const Text('Clear'),
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          if (recents.isEmpty)
+            _EmptyState(
+              icon: Icons.history_rounded,
+              title: query.isEmpty
+                  ? 'No recent connections yet'
+                  : 'No matches',
+              body: query.isEmpty
+                  ? 'Machines you connect to will appear here for one-click access.'
+                  : 'Try a different ID or name.',
+            )
+          else
+            for (final c in recents) _RecentRow(conn: c, onPick: onPick),
         ],
-      );
-    });
+      ),
+    );
   }
 }
 
-class _StepCard extends StatelessWidget {
+class _RecentRow extends StatefulWidget {
+  final RecentConnection conn;
+  final void Function(String id) onPick;
+  const _RecentRow({required this.conn, required this.onPick});
+  @override
+  State<_RecentRow> createState() => _RecentRowState();
+}
+
+class _RecentRowState extends State<_RecentRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => widget.onPick(widget.conn.id),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: _hover ? AppColors.surfaceLight : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                    color: AppColors.primarySoft,
+                    borderRadius: BorderRadius.circular(AppRadius.sm)),
+                alignment: Alignment.center,
+                child: const Icon(Icons.computer,
+                    size: 18, color: AppColors.primary),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(widget.conn.id,
+                        style: AppTypography.bodyStrong.copyWith(
+                            fontFeatures: const [
+                              FontFeature.tabularFigures()
+                            ])),
+                    Text('Last connected recently',
+                        style: AppTypography.caption),
+                  ],
+                ),
+              ),
+              AnimatedOpacity(
+                opacity: _hover ? 1 : 0,
+                duration: const Duration(milliseconds: 150),
+                child: FilledButton(
+                  onPressed: () => widget.onPick(widget.conn.id),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 34),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    textStyle: AppTypography.caption
+                        .copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  child: const Text('Connect'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Right column: security + connection info.
+class _SecurityCard extends ConsumerWidget {
+  const _SecurityCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final relay = ref.watch(settingsProvider).relayUrl;
+    final server = Uri.tryParse(relay)?.host ?? relay;
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Security', style: AppTypography.title),
+          const SizedBox(height: AppSpacing.lg),
+          const _InfoRow(
+            icon: Icons.lock_rounded,
+            title: 'End-to-end encrypted',
+            value: 'DTLS-SRTP',
+            good: true,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          const _InfoRow(
+            icon: Icons.hub_outlined,
+            title: 'Peer-to-peer',
+            value: 'Direct',
+            good: true,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _InfoRow(
+            icon: Icons.dns_outlined,
+            title: 'Signaling server',
+            value: server.isEmpty ? '—' : server,
+            good: server.isNotEmpty,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+  final bool good;
+  const _InfoRow(
+      {required this.icon,
+      required this.title,
+      required this.value,
+      this.good = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+              color: AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(AppRadius.sm)),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 18, color: AppColors.textSecondary),
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(child: Text(title, style: AppTypography.body)),
+        Text(value,
+            style: AppTypography.caption.copyWith(
+                color: good ? AppColors.success : AppColors.textSecondary,
+                fontWeight: FontWeight.w600)),
+      ],
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
   final IconData icon;
   final String title;
   final String body;
-  const _StepCard(
+  const _EmptyState(
       {required this.icon, required this.title, required this.body});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 36,
-            height: 36,
+            width: 48,
+            height: 48,
             decoration: BoxDecoration(
-              color: AppColors.accentSoft,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: AppColors.accentDark, size: 18),
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(AppRadius.md)),
+            alignment: Alignment.center,
+            child: Icon(icon, color: AppColors.textTertiary, size: 24),
           ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(title,
-              style: AppTypography.body
-                  .copyWith(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 2),
-          Text(body, style: AppTypography.caption),
+          const SizedBox(height: AppSpacing.md),
+          Text(title, style: AppTypography.bodyStrong),
+          const SizedBox(height: 4),
+          Text(body,
+              textAlign: TextAlign.center, style: AppTypography.caption),
         ],
       ),
     );
   }
 }
 
-class _ShareCard extends ConsumerWidget {
+/// Right column: this machine's own ID + password for incoming connections,
+/// share state, and unattended access.
+class _ThisComputerCard extends ConsumerWidget {
   final RemoteService service;
-  const _ShareCard({required this.service});
+  const _ThisComputerCard({required this.service});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -409,36 +690,32 @@ class _ShareCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const _CardHeader(
-            icon: Icons.screen_share,
-            title: 'Share my screen',
-            subtitle: 'Let someone connect to this computer',
+          Row(
+            children: [
+              const _CardHeader(
+                icon: Icons.desktop_windows_rounded,
+                title: 'This computer',
+                subtitle: 'Share these so someone can connect to you',
+              ),
+              const Spacer(),
+              if (online)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: AppColors.success.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(AppRadius.pill)),
+                  child: Text('${service.connectedViewers} connected',
+                      style: AppTypography.label
+                          .copyWith(color: AppColors.success)),
+                ),
+            ],
           ),
           const SizedBox(height: AppSpacing.lg),
           if (online) ...[
             _Credential(label: 'ID', value: service.agentId ?? '…', big: true),
             const SizedBox(height: AppSpacing.sm),
             _Credential(label: 'Password', value: service.password ?? '…'),
-            const SizedBox(height: AppSpacing.xs),
-            Text('${service.connectedViewers} connected',
-                style: AppTypography.caption),
-            const SizedBox(height: AppSpacing.lg),
-            OutlinedButton.icon(
-              onPressed: () => ref.read(remoteServiceProvider).stopHosting(),
-              icon: const Icon(Icons.stop, size: 18),
-              label: const Text('Stop sharing'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.error,
-                side: const BorderSide(color: AppColors.error),
-              ),
-            ),
-            if (service.connectedViewers > 0) ...[
-              const SizedBox(height: AppSpacing.md),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FileShareButtons(service: service),
-              ),
-            ],
             if (service.fileTransfers.isNotEmpty) ...[
               const SizedBox(height: AppSpacing.md),
               Align(
@@ -447,34 +724,48 @@ class _ShareCard extends ConsumerWidget {
               ),
             ],
             const SizedBox(height: AppSpacing.md),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () =>
+                      ref.read(remoteServiceProvider).stopHosting(),
+                  icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                  label: const Text('Stop sharing'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.error,
+                    side: const BorderSide(color: AppColors.error),
+                  ),
+                ),
+              ),
+            ]),
+            const SizedBox(height: AppSpacing.md),
             const Divider(height: 1),
             const _UnattendedControls(),
           ] else
-            ElevatedButton.icon(
-              onPressed: busy
-                  ? null
-                  : () async {
-                      final s = ref.read(settingsProvider);
-                      try {
-                        await ref.read(remoteServiceProvider).startHosting(
-                              relayUrl: s.relayUrl,
-                              password: s.unattendedPassword.isEmpty
-                                  ? null
-                                  : s.unattendedPassword,
-                            );
-                      } catch (_) {}
-                    },
-              icon: busy
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.play_arrow),
-              label: Text(busy ? 'Starting…' : 'Start sharing'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.success,
-                padding: const EdgeInsets.all(AppSpacing.md),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        final s = ref.read(settingsProvider);
+                        try {
+                          await ref.read(remoteServiceProvider).startHosting(
+                                relayUrl: s.relayUrl,
+                                password: s.unattendedPassword.isEmpty
+                                    ? null
+                                    : s.unattendedPassword,
+                              );
+                        } catch (_) {}
+                      },
+                icon: busy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.wifi_tethering_rounded, size: 20),
+                label: Text(busy ? 'Starting…' : 'Start sharing'),
               ),
             ),
           if (service.hostError != null) ...[
@@ -595,177 +886,7 @@ Future<String?> _askPassword(BuildContext context) {
   );
 }
 
-class _ConnectCard extends StatelessWidget {
-  final RemoteService service;
-  final TextEditingController idController;
-  final TextEditingController passwordController;
-  final VoidCallback onConnect;
-
-  const _ConnectCard({
-    required this.service,
-    required this.idController,
-    required this.passwordController,
-    required this.onConnect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final connecting = service.viewerStatus == ViewerStatus.connecting;
-    final failed = service.viewerStatus == ViewerStatus.failed;
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const _CardHeader(
-            icon: Icons.cast_connected,
-            title: 'Connect to a computer',
-            subtitle: 'Enter the ID and password shared with you',
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          TextField(
-            controller: idController,
-            decoration: InputDecoration(
-              labelText: 'Partner ID',
-              hintText: '123-456-789',
-              prefixIcon: const Icon(Icons.link),
-              errorText: failed ? service.viewerError : null,
-            ),
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-                fontSize: 18, fontFamily: 'monospace', letterSpacing: 2),
-            onSubmitted: (_) => onConnect(),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          TextField(
-            controller: passwordController,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'Password',
-              prefixIcon: Icon(Icons.lock_outline),
-            ),
-            textAlign: TextAlign.center,
-            onSubmitted: (_) => onConnect(),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          ElevatedButton.icon(
-            onPressed: connecting ? null : onConnect,
-            icon: connecting
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.connect_without_contact),
-            label: Text(connecting ? 'Connecting…' : 'Connect'),
-            style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(AppSpacing.md)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Ambient home-screen backdrop: softly drifting amber/graphite glows, a faint
-/// dot grid, and a gently-breathing "connectivity" constellation — fills the
-/// empty space with subtle premium motion without distracting from the cards.
-class _AmbientBackground extends StatefulWidget {
-  const _AmbientBackground();
-  @override
-  State<_AmbientBackground> createState() => _AmbientBackgroundState();
-}
-
-class _AmbientBackgroundState extends State<_AmbientBackground>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c;
-
-  @override
-  void initState() {
-    super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(seconds: 24))
-      ..repeat();
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return RepaintBoundary(
-      child: AnimatedBuilder(
-        animation: _c,
-        builder: (_, __) =>
-            CustomPaint(painter: _AmbientPainter(_c.value), size: Size.infinite),
-      ),
-    );
-  }
-}
-
-class _AmbientPainter extends CustomPainter {
-  final double t; // 0..1 loop
-  _AmbientPainter(this.t);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width, h = size.height;
-
-    // Soft drifting colour glows.
-    void blob(double fx, double fy, double r, Color color, double phase,
-        double amp) {
-      final cx = fx * w + math.sin((t + phase) * 2 * math.pi) * amp;
-      final cy = fy * h + math.cos((t + phase * 1.3) * 2 * math.pi) * amp;
-      final p = Paint()
-        ..color = color
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 90);
-      canvas.drawCircle(Offset(cx, cy), r, p);
-    }
-
-    blob(0.82, 0.16, 150, AppColors.accent.withValues(alpha: 0.16), 0.0, 26);
-    blob(0.12, 0.80, 175, AppColors.primary.withValues(alpha: 0.10), 0.4, 30);
-    blob(0.55, 1.02, 160, AppColors.accent.withValues(alpha: 0.09), 0.7, 22);
-
-    // Faint dot grid.
-    final dot = Paint()..color = AppColors.textTertiary.withValues(alpha: 0.06);
-    const gap = 34.0;
-    for (double y = 20; y < h; y += gap) {
-      for (double x = 20; x < w; x += gap) {
-        canvas.drawCircle(Offset(x, y), 1.1, dot);
-      }
-    }
-
-    // Connectivity constellation (art) — two node clusters, gently breathing.
-    final nodes = <Offset>[
-      Offset(w * 0.15, h * 0.30),
-      Offset(w * 0.30, h * 0.19),
-      Offset(w * 0.24, h * 0.47),
-      Offset(w * 0.86, h * 0.60),
-      Offset(w * 0.73, h * 0.73),
-      Offset(w * 0.93, h * 0.80),
-    ];
-    final breathe = 0.5 + 0.5 * math.sin(t * 2 * math.pi);
-    final line = Paint()
-      ..color = AppColors.primary.withValues(alpha: 0.06 + 0.03 * breathe)
-      ..strokeWidth = 1.2;
-    void link(int a, int b) => canvas.drawLine(nodes[a], nodes[b], line);
-    link(0, 1);
-    link(0, 2);
-    link(1, 2);
-    link(3, 4);
-    link(4, 5);
-    link(3, 5);
-    final ndot = Paint()..color = AppColors.accent.withValues(alpha: 0.22);
-    for (final n in nodes) {
-      canvas.drawCircle(n, 3 + breathe * 1.2, ndot);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_AmbientPainter old) => old.t != t;
-}
-
+/// (Ambient animated background removed — the redesigned home is minimal.)
 class _CardHeader extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -911,54 +1032,47 @@ class _ConnectedSession extends ConsumerWidget {
         ref.watch(settingsProvider).viewOnly || service.viewerViewOnly;
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F1A),
-      body: Column(
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, 0),
-              child: DropToSend(
-                service: service,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                  child: Stack(
-                  children: [
-                    Positioned.fill(child: ColoredBox(color: Color(0xFF0B0F1A))),
-                    RemoteViewWidget(
-                      isConnected: true,
-                      remoteStream: service.remoteStream,
-                      viewOnly: viewOnly,
-                      hostOs: service.remoteHostOs,
-                      onInput: viewOnly
-                          ? null
-                          : (event) => ref
-                              .read(remoteServiceProvider)
-                              .sendViewerInput(event),
-                      uacActive: service.uacActive,
-                      uacFrame: service.uacFrame,
-                      uacW: service.uacW,
-                      uacH: service.uacH,
-                      uacKind: service.uacKind,
-                      onUacClick: (b, x, y) =>
-                          ref.read(remoteServiceProvider).sendUacClick(b, x, y),
-                      onUacApprove: () =>
-                          ref.read(remoteServiceProvider).sendUacApprove(),
-                      onUacDecline: () =>
-                          ref.read(remoteServiceProvider).sendUacDecline(),
-                    ),
-                    Positioned(
-                      right: AppSpacing.md,
-                      bottom: AppSpacing.md,
-                      child: FileTransferList(service: service),
-                    ),
-                  ],
-                  ),
-                ),
+      body: DropToSend(
+        service: service,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: RemoteViewWidget(
+                isConnected: true,
+                remoteStream: service.remoteStream,
+                viewOnly: viewOnly,
+                hostOs: service.remoteHostOs,
+                onInput: viewOnly
+                    ? null
+                    : (event) =>
+                        ref.read(remoteServiceProvider).sendViewerInput(event),
+                uacActive: service.uacActive,
+                uacFrame: service.uacFrame,
+                uacW: service.uacW,
+                uacH: service.uacH,
+                uacKind: service.uacKind,
+                onUacClick: (b, x, y) =>
+                    ref.read(remoteServiceProvider).sendUacClick(b, x, y),
+                onUacApprove: () =>
+                    ref.read(remoteServiceProvider).sendUacApprove(),
+                onUacDecline: () =>
+                    ref.read(remoteServiceProvider).sendUacDecline(),
               ),
             ),
-          ),
-          _SessionToolbar(service: service),
-        ],
+            Positioned(
+              right: AppSpacing.lg,
+              bottom: 96,
+              child: FileTransferList(service: service),
+            ),
+            // Floating command bar, centered along the bottom.
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: AppSpacing.lg,
+              child: Center(child: _SessionToolbar(service: service)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -977,24 +1091,32 @@ class _SessionToolbar extends ConsumerWidget {
     final win = service.remoteHostOs == 'windows';
 
     return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(top: BorderSide(color: AppColors.border)),
-        boxShadow: AppShadows.toolbar,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        boxShadow: AppShadows.float,
       ),
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
-      child: Row(
-        children: [
-          _ConnectionBadge(id: service.targetId ?? '—'),
-          const SizedBox(width: AppSpacing.md),
-          _StatsStrip(stats: stats),
-          const Spacer(),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            reverse: true,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withValues(alpha: 0.94),
+              borderRadius: BorderRadius.circular(AppRadius.xl),
+              border: Border.all(color: AppColors.border),
+            ),
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md, vertical: AppSpacing.xs),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
+                _ConnectionBadge(id: service.targetId ?? '—'),
+                const SizedBox(width: AppSpacing.sm),
+                _StatsStrip(stats: stats),
+                const _ToolDivider(),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                 // --- Control group ---
                 _ToolButton(
                   icon: service.viewerViewOnly
@@ -1075,15 +1197,17 @@ class _SessionToolbar extends ConsumerWidget {
                   tooltip: 'Restart the remote PC',
                   onPressed: () => _confirmRestart(context, service),
                 ),
-                const SizedBox(width: AppSpacing.md),
+                const SizedBox(width: AppSpacing.sm),
                 _DisconnectButton(
                   onPressed: () =>
                       ref.read(remoteServiceProvider).disconnectViewer(),
                 ),
+                  ],
+                ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
