@@ -246,9 +246,36 @@ static DWORD GetTargetSessionId() {
   return result;
 }
 
-static HANDLE LaunchAgentInSession(DWORD sid) {
+// Install directory (this exe's folder) with a trailing backslash.
+static std::wstring InstallDir() {
+  std::wstring self = SelfPath();
+  size_t slash = self.find_last_of(L"\\/");
+  return (slash == std::wstring::npos) ? L"" : self.substr(0, slash + 1);
+}
+
+// The Flutter host exe sits next to the helper in the install dir.
+static std::wstring HostExePath() { return InstallDir() + L"neev_remote.exe"; }
+
+// Opt-in "service owns the host" mode: HKLM\SOFTWARE\NeevRemote\ServiceHost=1
+// (written by the installer's unattended task). When set, the service launches
+// + follows neev_remote.exe into the active session so the machine is reachable
+// across user-switching and, later, at the login screen. Read every loop so the
+// installer toggle takes effect without a service restart.
+static bool ReadServiceHostFlag() {
+  DWORD val = 0, sz = sizeof(val);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\NeevRemote", L"ServiceHost",
+                   RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
+    return val != 0;
+  }
+  return false;
+}
+
+// Launch [cmdline] AS SYSTEM in the interactive [sid]. Used for both the helper
+// agent and (in ServiceHost mode) the Flutter host — same token-retarget trick.
+static HANDLE LaunchProcessInSession(DWORD sid, const std::wstring& cmdline,
+                                     const wchar_t* tag) {
   if (sid == 0xFFFFFFFF) {
-    Log(L"svc", L"no target session yet");
+    Log(L"svc", L"no target session yet (%ls)", tag);
     return nullptr;
   }
 
@@ -269,7 +296,7 @@ static HANDLE LaunchAgentInSession(DWORD sid) {
   }
   CloseHandle(selfTok);
 
-  // Retarget the SYSTEM token to the user's session.
+  // Retarget the SYSTEM token to the target session.
   if (!SetTokenInformation(primary, TokenSessionId, &sid, sizeof(sid))) {
     Log(L"svc", L"SetTokenInformation(session=%lu) failed: %lu", sid,
         GetLastError());
@@ -283,8 +310,7 @@ static HANDLE LaunchAgentInSession(DWORD sid) {
   si.cb = sizeof(si);
   si.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
   PROCESS_INFORMATION pi = {0};
-  std::wstring cmd = L"\"" + SelfPath() + L"\" agent";
-  std::wstring mutableCmd = cmd;  // CreateProcess may modify the buffer
+  std::wstring mutableCmd = cmdline;  // CreateProcess may modify the buffer
 
   BOOL ok = CreateProcessAsUserW(
       primary, nullptr, &mutableCmd[0], nullptr, nullptr, FALSE,
@@ -294,12 +320,22 @@ static HANDLE LaunchAgentInSession(DWORD sid) {
   CloseHandle(primary);
 
   if (!ok) {
-    Log(L"svc", L"CreateProcessAsUser(agent) failed: %lu", GetLastError());
+    Log(L"svc", L"CreateProcessAsUser(%ls) failed: %lu", tag, GetLastError());
     return nullptr;
   }
-  Log(L"svc", L"launched agent in session %lu (pid %lu)", sid, pi.dwProcessId);
+  Log(L"svc", L"launched %ls in session %lu (pid %lu)", tag, sid,
+      pi.dwProcessId);
   CloseHandle(pi.hThread);
-  return pi.hProcess;  // caller owns; used to detect agent exit
+  return pi.hProcess;  // caller owns; used to detect exit
+}
+
+static HANDLE LaunchAgentInSession(DWORD sid) {
+  return LaunchProcessInSession(sid, L"\"" + SelfPath() + L"\" agent", L"agent");
+}
+
+static HANDLE LaunchHostInSession(DWORD sid) {
+  return LaunchProcessInSession(
+      sid, L"\"" + HostExePath() + L"\" --service-host", L"host");
 }
 
 // --------------------------------------------------------------------------
@@ -333,8 +369,12 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
 
   HANDLE agent = nullptr;
   DWORD agentSession = 0xFFFFFFFF;
+  HANDLE host = nullptr;  // ServiceHost mode: the service-owned Flutter host
+  DWORD hostSession = 0xFFFFFFFF;
   for (;;) {
     DWORD target = GetTargetSessionId();
+
+    // ---- helper agent (always kept alive in the active session) ----
     bool dead = (!agent || WaitForSingleObject(agent, 0) == WAIT_OBJECT_0);
     bool moved = (agent && target != 0xFFFFFFFF && target != agentSession);
     if (dead || moved) {
@@ -352,12 +392,47 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
       agent = LaunchAgentInSession(target);
       agentSession = target;
     }
+
+    // ---- Flutter host (opt-in ServiceHost mode) ----
+    // When enabled, the service owns a single host that follows the active
+    // session — reachable across user-switching / logoff with the machine-wide
+    // id+password. When disabled, the host is user-launched as before.
+    if (ReadServiceHostFlag()) {
+      bool hDead = (!host || WaitForSingleObject(host, 0) == WAIT_OBJECT_0);
+      bool hMoved = (host && target != 0xFFFFFFFF && target != hostSession);
+      if (hDead || hMoved) {
+        if (host) {
+          if (hMoved)
+            Log(L"svc", L"active session %lu -> %lu; relaunching host",
+                hostSession, target);
+          else
+            Log(L"svc", L"host exited; relaunching");
+          if (hMoved) TerminateProcess(host, 0);
+          CloseHandle(host);
+          host = nullptr;
+        }
+        host = LaunchHostInSession(target);
+        hostSession = target;
+      }
+    } else if (host) {
+      // Mode was turned off — stop the service-owned host.
+      Log(L"svc", L"ServiceHost mode off; stopping host");
+      TerminateProcess(host, 0);
+      CloseHandle(host);
+      host = nullptr;
+      hostSession = 0xFFFFFFFF;
+    }
+
     if (WaitForSingleObject(g_stopEvent, 3000) == WAIT_OBJECT_0) break;
   }
 
   if (agent) {
     TerminateProcess(agent, 0);
     CloseHandle(agent);
+  }
+  if (host) {
+    TerminateProcess(host, 0);
+    CloseHandle(host);
   }
   Log(L"svc", L"service stopping");
   SetState(SERVICE_STOPPED);
