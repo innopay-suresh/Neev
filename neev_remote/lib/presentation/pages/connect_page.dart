@@ -340,44 +340,147 @@ class _HomeDashboard extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       final wide = c.maxWidth > 860;
-      final left = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _ConnectOutCard(
-            service: service,
-            idController: idController,
-            passwordController: passwordController,
-            onConnect: onConnect,
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          _RecentConnectionsCard(onPick: onPick),
-        ],
+      final connect = _ConnectOutCard(
+        service: service,
+        idController: idController,
+        passwordController: passwordController,
+        onConnect: onConnect,
       );
-      final right = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _ThisComputerCard(service: service),
-          const SizedBox(height: AppSpacing.lg),
-          const _SecurityCard(),
-        ],
-      );
+      final thisPc = _ThisComputerCard(service: service);
+      void soon(String f) => ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$f is coming soon'),
+              duration: const Duration(seconds: 2)));
       return SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.xl),
-        child: wide
-            ? Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(flex: 6, child: left),
-                  const SizedBox(width: AppSpacing.lg),
-                  Expanded(flex: 5, child: right),
-                ],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (wide)
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 6, child: connect),
+                    const SizedBox(width: AppSpacing.lg),
+                    Expanded(flex: 5, child: thisPc),
+                  ],
+                ),
               )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [right, const SizedBox(height: AppSpacing.lg), left],
-              ),
+            else ...[
+              connect,
+              const SizedBox(height: AppSpacing.lg),
+              thisPc,
+            ],
+            const SizedBox(height: AppSpacing.lg),
+            // Feature tiles
+            LayoutBuilder(builder: (context, fc) {
+              final cols = fc.maxWidth > 720 ? 4 : 2;
+              final tiles = [
+                const _FeatureTile(
+                    icon: Icons.lock_clock_rounded,
+                    title: 'Unattended',
+                    subtitle: 'Set a permanent password'),
+                const _FeatureTile(
+                    icon: Icons.shield_outlined,
+                    title: 'Security',
+                    subtitle: 'End-to-end encrypted'),
+                _FeatureTile(
+                    icon: Icons.radar_rounded,
+                    title: 'Discovery',
+                    subtitle: 'Find LAN devices',
+                    onTap: () => soon('Discovery')),
+                _FeatureTile(
+                    icon: Icons.send_rounded,
+                    title: 'Invite',
+                    subtitle: 'Share an invitation',
+                    onTap: () => soon('Invite')),
+              ];
+              return GridView.count(
+                crossAxisCount: cols,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: AppSpacing.md,
+                crossAxisSpacing: AppSpacing.md,
+                childAspectRatio: 2.6,
+                children: tiles,
+              );
+            }),
+            const SizedBox(height: AppSpacing.lg),
+            _RecentConnectionsCard(onPick: onPick),
+          ],
+        ),
       );
     });
+  }
+}
+
+/// Small feature tile: coral-tint icon + title + subtitle (dashboard row 2).
+class _FeatureTile extends StatefulWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+  const _FeatureTile(
+      {required this.icon,
+      required this.title,
+      required this.subtitle,
+      this.onTap});
+  @override
+  State<_FeatureTile> createState() => _FeatureTileState();
+}
+
+class _FeatureTileState extends State<_FeatureTile> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: widget.onTap != null
+          ? SystemMouseCursors.click
+          : MouseCursor.defer,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(
+                color: _hover ? AppColors.borderStrong : AppColors.border),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primarySoft,
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+                child: Icon(widget.icon, color: AppColors.accentDark, size: 20),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(widget.title, style: AppTypography.bodyStrong),
+                    const SizedBox(height: 1),
+                    Text(widget.subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.caption),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -766,80 +869,6 @@ class _RecentRowState extends State<_RecentRow> {
   }
 }
 
-/// Right column: security + connection info.
-class _SecurityCard extends ConsumerWidget {
-  const _SecurityCard();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final relay = ref.watch(settingsProvider).relayUrl;
-    final server = Uri.tryParse(relay)?.host ?? relay;
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Security', style: AppTypography.title),
-          const SizedBox(height: AppSpacing.lg),
-          const _InfoRow(
-            icon: Icons.lock_rounded,
-            title: 'End-to-end encrypted',
-            value: 'DTLS-SRTP',
-            good: true,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          const _InfoRow(
-            icon: Icons.hub_outlined,
-            title: 'Peer-to-peer',
-            value: 'Direct',
-            good: true,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          _InfoRow(
-            icon: Icons.dns_outlined,
-            title: 'Signaling server',
-            value: server.isEmpty ? '—' : server,
-            good: server.isNotEmpty,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String value;
-  final bool good;
-  const _InfoRow(
-      {required this.icon,
-      required this.title,
-      required this.value,
-      this.good = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-              color: AppColors.surfaceLight,
-              borderRadius: BorderRadius.circular(AppRadius.sm)),
-          alignment: Alignment.center,
-          child: Icon(icon, size: 18, color: AppColors.textSecondary),
-        ),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(child: Text(title, style: AppTypography.body)),
-        Text(value,
-            style: AppTypography.caption.copyWith(
-                color: good ? AppColors.success : AppColors.textSecondary,
-                fontWeight: FontWeight.w600)),
-      ],
-    );
-  }
-}
 
 class _EmptyState extends StatelessWidget {
   final IconData icon;
@@ -1308,12 +1337,12 @@ class _SessionToolbar extends ConsumerWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppRadius.xl),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             decoration: BoxDecoration(
-              color: AppColors.surface.withValues(alpha: 0.94),
+              color: const Color(0xFF181818).withValues(alpha: 0.86),
               borderRadius: BorderRadius.circular(AppRadius.xl),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
             padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.md, vertical: AppSpacing.xs),
@@ -1559,11 +1588,11 @@ class _ConnectionBadge extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text('Connected', style: AppTypography.label.copyWith(
-              color: AppColors.success, fontWeight: FontWeight.w700)),
+              color: AppColors.success, fontWeight: FontWeight.w600)),
           const SizedBox(width: 6),
           Text(id, style: AppTypography.caption.copyWith(
               fontFeatures: const [FontFeature.tabularFigures()],
-              color: AppColors.textPrimary)),
+              color: Colors.white.withValues(alpha: 0.92))),
         ],
       ),
     );
@@ -1581,10 +1610,11 @@ class _StatsStrip extends StatelessWidget {
     Widget item(IconData ic, String v) => Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(ic, size: 13, color: AppColors.textTertiary),
+            Icon(ic, size: 13, color: Colors.white.withValues(alpha: 0.45)),
             const SizedBox(width: 4),
             Text(v,
                 style: AppTypography.caption.copyWith(
+                    color: Colors.white.withValues(alpha: 0.75),
                     fontFeatures: const [FontFeature.tabularFigures()])),
           ]),
         );
@@ -1594,7 +1624,7 @@ class _StatsStrip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
         decoration: BoxDecoration(
-          color: AppColors.surfaceLight,
+          color: Colors.white.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(AppRadius.sm),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1633,10 +1663,12 @@ class _ToolButtonState extends State<_ToolButton> {
   @override
   Widget build(BuildContext context) {
     final active = widget.active;
-    final fg = active ? AppColors.accentDark : AppColors.textSecondary;
+    final fg = active
+        ? AppColors.primaryHover
+        : Colors.white.withValues(alpha: _hover ? 0.95 : 0.72);
     final bg = active
-        ? AppColors.accentSoft
-        : (_hover ? AppColors.surfaceLight : Colors.transparent);
+        ? AppColors.primary.withValues(alpha: 0.22)
+        : (_hover ? Colors.white.withValues(alpha: 0.10) : Colors.transparent);
     return Tooltip(
       message: widget.tooltip,
       waitDuration: const Duration(milliseconds: 400),
@@ -1708,12 +1740,14 @@ class _MonitorButton extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.monitor, size: 20, color: AppColors.textSecondary),
+            Icon(Icons.monitor,
+                size: 20, color: Colors.white.withValues(alpha: 0.72)),
             const SizedBox(height: 4),
             Text('Monitor',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppTypography.label),
+                style: AppTypography.label
+                    .copyWith(color: Colors.white.withValues(alpha: 0.72))),
           ],
         ),
       ),
@@ -1728,7 +1762,7 @@ class _ToolDivider extends StatelessWidget {
         width: 1,
         height: 30,
         margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-        color: AppColors.border,
+        color: Colors.white.withValues(alpha: 0.12),
       );
 }
 
