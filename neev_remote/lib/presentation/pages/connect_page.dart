@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -101,7 +103,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
         elevation: 0,
         title: Row(
           children: [
-            const Icon(Icons.desktop_windows, color: AppColors.primary),
+            const Icon(Icons.desktop_windows, color: AppColors.accent),
             const SizedBox(width: AppSpacing.sm),
             Text('Neev Remote', style: AppTypography.heading2),
           ],
@@ -129,10 +131,13 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFFEDF2FB), Color(0xFFF6F8FC)],
+            colors: [Color(0xFFEFF1F5), Color(0xFFF7F8FA)],
           ),
         ),
-        child: LayoutBuilder(
+        child: Stack(
+          children: [
+            const Positioned.fill(child: _AmbientBackground()),
+            LayoutBuilder(
           builder: (context, constraints) {
             final wide = constraints.maxWidth > 820;
             final share = _ShareCard(service: service);
@@ -175,6 +180,8 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
               ),
             );
           },
+            ),
+          ],
         ),
       ),
     );
@@ -206,7 +213,7 @@ class _Card extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE8EDF4)),
+        border: Border.all(color: AppColors.border),
         boxShadow: const [
           BoxShadow(
             color: Color(0x14101828),
@@ -241,11 +248,11 @@ class _HeroBanner extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF2D6CFF), Color(0xFF1E40AF)],
+          colors: [Color(0xFF273449), Color(0xFF0F172A)],
         ),
         boxShadow: const [
           BoxShadow(
-              color: Color(0x382D6CFF), blurRadius: 30, offset: Offset(0, 14)),
+              color: Color(0x33101828), blurRadius: 30, offset: Offset(0, 14)),
         ],
       ),
       child: Row(
@@ -257,7 +264,7 @@ class _HeroBanner extends StatelessWidget {
               color: Colors.white.withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 26),
+            child: const Icon(Icons.bolt_rounded, color: AppColors.accent, size: 26),
           ),
           const SizedBox(width: AppSpacing.lg),
           const Expanded(
@@ -364,7 +371,7 @@ class _StepCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.7),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE8EDF4)),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -373,10 +380,10 @@ class _StepCard extends StatelessWidget {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.1),
+              color: AppColors.accentSoft,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: AppColors.primary, size: 18),
+            child: Icon(icon, color: AppColors.accentDark, size: 18),
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(title,
@@ -659,6 +666,106 @@ class _ConnectCard extends StatelessWidget {
   }
 }
 
+/// Ambient home-screen backdrop: softly drifting amber/graphite glows, a faint
+/// dot grid, and a gently-breathing "connectivity" constellation — fills the
+/// empty space with subtle premium motion without distracting from the cards.
+class _AmbientBackground extends StatefulWidget {
+  const _AmbientBackground();
+  @override
+  State<_AmbientBackground> createState() => _AmbientBackgroundState();
+}
+
+class _AmbientBackgroundState extends State<_AmbientBackground>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(seconds: 24))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (_, __) =>
+            CustomPaint(painter: _AmbientPainter(_c.value), size: Size.infinite),
+      ),
+    );
+  }
+}
+
+class _AmbientPainter extends CustomPainter {
+  final double t; // 0..1 loop
+  _AmbientPainter(this.t);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+
+    // Soft drifting colour glows.
+    void blob(double fx, double fy, double r, Color color, double phase,
+        double amp) {
+      final cx = fx * w + math.sin((t + phase) * 2 * math.pi) * amp;
+      final cy = fy * h + math.cos((t + phase * 1.3) * 2 * math.pi) * amp;
+      final p = Paint()
+        ..color = color
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 90);
+      canvas.drawCircle(Offset(cx, cy), r, p);
+    }
+
+    blob(0.82, 0.16, 150, AppColors.accent.withValues(alpha: 0.16), 0.0, 26);
+    blob(0.12, 0.80, 175, AppColors.primary.withValues(alpha: 0.10), 0.4, 30);
+    blob(0.55, 1.02, 160, AppColors.accent.withValues(alpha: 0.09), 0.7, 22);
+
+    // Faint dot grid.
+    final dot = Paint()..color = AppColors.textTertiary.withValues(alpha: 0.06);
+    const gap = 34.0;
+    for (double y = 20; y < h; y += gap) {
+      for (double x = 20; x < w; x += gap) {
+        canvas.drawCircle(Offset(x, y), 1.1, dot);
+      }
+    }
+
+    // Connectivity constellation (art) — two node clusters, gently breathing.
+    final nodes = <Offset>[
+      Offset(w * 0.15, h * 0.30),
+      Offset(w * 0.30, h * 0.19),
+      Offset(w * 0.24, h * 0.47),
+      Offset(w * 0.86, h * 0.60),
+      Offset(w * 0.73, h * 0.73),
+      Offset(w * 0.93, h * 0.80),
+    ];
+    final breathe = 0.5 + 0.5 * math.sin(t * 2 * math.pi);
+    final line = Paint()
+      ..color = AppColors.primary.withValues(alpha: 0.06 + 0.03 * breathe)
+      ..strokeWidth = 1.2;
+    void link(int a, int b) => canvas.drawLine(nodes[a], nodes[b], line);
+    link(0, 1);
+    link(0, 2);
+    link(1, 2);
+    link(3, 4);
+    link(4, 5);
+    link(3, 5);
+    final ndot = Paint()..color = AppColors.accent.withValues(alpha: 0.22);
+    for (final n in nodes) {
+      canvas.drawCircle(n, 3 + breathe * 1.2, ndot);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_AmbientPainter old) => old.t != t;
+}
+
 class _CardHeader extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -678,12 +785,12 @@ class _CardHeader extends StatelessWidget {
             gradient: const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [AppColors.primary, AppColors.accent],
+              colors: [AppColors.accent, AppColors.accentDark],
             ),
             borderRadius: BorderRadius.circular(AppRadius.md),
             boxShadow: [
               BoxShadow(
-                  color: AppColors.primary.withValues(alpha: 0.28),
+                  color: AppColors.accent.withValues(alpha: 0.32),
                   blurRadius: 12,
                   offset: const Offset(0, 5)),
             ],
@@ -718,10 +825,10 @@ class _Credential extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 10, AppSpacing.sm, 10),
       decoration: BoxDecoration(
-        color: big ? AppColors.primarySoft : AppColors.surfaceAlt,
+        color: big ? AppColors.accentSoft : AppColors.surfaceAlt,
         borderRadius: BorderRadius.circular(AppRadius.md),
         border: Border.all(
-            color: big ? AppColors.primary.withValues(alpha: 0.25)
+            color: big ? AppColors.accent.withValues(alpha: 0.45)
                        : AppColors.border),
       ),
       child: Row(
@@ -740,7 +847,7 @@ class _Credential extends StatelessWidget {
                   fontSize: big ? 26 : 18,
                   fontWeight: FontWeight.w700,
                   fontFeatures: const [FontFeature.tabularFigures()],
-                  color: big ? AppColors.primary : AppColors.textPrimary,
+                  color: big ? AppColors.accentDark : AppColors.textPrimary,
                   letterSpacing: big ? 2 : 1,
                 ),
               ),
@@ -751,7 +858,7 @@ class _Credential extends StatelessWidget {
             icon: const Icon(Icons.content_copy_rounded, size: 18),
             tooltip: 'Copy $label',
             style: IconButton.styleFrom(
-              foregroundColor: AppColors.primary,
+              foregroundColor: AppColors.accentDark,
               backgroundColor: AppColors.surface,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppRadius.sm),
@@ -1014,7 +1121,7 @@ class _SessionToolbar extends ConsumerWidget {
       builder: (ctx) => AlertDialog(
         title: Row(children: [
           const Icon(Icons.password_rounded,
-              color: AppColors.primary, size: 20),
+              color: AppColors.accentDark, size: 20),
           const SizedBox(width: AppSpacing.sm),
           const Text('Transmit login'),
         ]),
@@ -1191,9 +1298,9 @@ class _ToolButtonState extends State<_ToolButton> {
   @override
   Widget build(BuildContext context) {
     final active = widget.active;
-    final fg = active ? AppColors.primary : AppColors.textSecondary;
+    final fg = active ? AppColors.accentDark : AppColors.textSecondary;
     final bg = active
-        ? AppColors.primarySoft
+        ? AppColors.accentSoft
         : (_hover ? AppColors.surfaceLight : Colors.transparent);
     return Tooltip(
       message: widget.tooltip,
@@ -1343,7 +1450,7 @@ class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.dns_outlined, color: AppColors.primary, size: 40),
+          const Icon(Icons.dns_outlined, color: AppColors.accent, size: 40),
           const SizedBox(height: AppSpacing.md),
           Text('Connect to your server', style: AppTypography.heading1),
           const SizedBox(height: AppSpacing.xs),
