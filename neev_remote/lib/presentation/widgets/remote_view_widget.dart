@@ -35,6 +35,10 @@ class RemoteViewWidget extends StatefulWidget {
   final int uacH;
   /// 0 = UAC prompt, 1 = login screen, 2 = locked session.
   final int uacKind;
+
+  /// When true, the remote video fills the window (cover); else it's letterboxed
+  /// (contain / fit).
+  final bool fillMode;
   final void Function(int button, double x, double y)? onUacClick;
   final VoidCallback? onUacApprove;
   final VoidCallback? onUacDecline;
@@ -51,6 +55,7 @@ class RemoteViewWidget extends StatefulWidget {
     this.uacW = 0,
     this.uacH = 0,
     this.uacKind = 0,
+    this.fillMode = false,
     this.onUacClick,
     this.onUacApprove,
     this.onUacDecline,
@@ -392,8 +397,9 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
           Widget video = _initialized
               ? RTCVideoView(
                   _renderer,
-                  objectFit:
-                      RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                  objectFit: widget.fillMode
+                      ? RTCVideoViewObjectFit.RTCVideoViewObjectFitCover
+                      : RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                   mirror: false,
                 )
               : const ColoredBox(color: Colors.black);

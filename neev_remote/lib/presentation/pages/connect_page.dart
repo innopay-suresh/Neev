@@ -196,6 +196,9 @@ final _homeSearchProvider = StateProvider<String>((_) => '');
 /// Whether the in-session chat panel is open.
 final _chatOpenProvider = StateProvider<bool>((_) => false);
 
+/// Remote video view mode: false = fit (letterbox), true = fill (cover).
+final _fillModeProvider = StateProvider<bool>((_) => false);
+
 // --- App shell: left icon sidebar ---------------------------------------
 
 class _NavItem {
@@ -1293,6 +1296,7 @@ class _ConnectedSession extends ConsumerWidget {
                 uacW: service.uacW,
                 uacH: service.uacH,
                 uacKind: service.uacKind,
+                fillMode: ref.watch(_fillModeProvider),
                 onUacClick: (b, x, y) =>
                     ref.read(remoteServiceProvider).sendUacClick(b, x, y),
                 onUacApprove: () =>
@@ -1572,6 +1576,18 @@ class _SessionToolbar extends ConsumerWidget {
                     ref.read(_chatOpenProvider.notifier).state = open;
                     if (open) service.markChatRead();
                   },
+                ),
+                _ToolButton(
+                  icon: ref.watch(_fillModeProvider)
+                      ? Icons.fit_screen_outlined
+                      : Icons.aspect_ratio_rounded,
+                  label: ref.watch(_fillModeProvider) ? 'Fill' : 'Fit',
+                  tooltip: ref.watch(_fillModeProvider)
+                      ? 'Filling the window — click to fit (letterbox)'
+                      : 'Fit to window — click to fill',
+                  active: ref.watch(_fillModeProvider),
+                  onPressed: () => ref.read(_fillModeProvider.notifier).state =
+                      !ref.read(_fillModeProvider),
                 ),
                 const _ToolDivider(),
                 // --- Files group ---
