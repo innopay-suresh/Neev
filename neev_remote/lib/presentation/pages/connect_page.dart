@@ -686,7 +686,7 @@ class _ThisComputerCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final online = service.hostStatus == HostStatus.online;
     final busy = service.hostStatus == HostStatus.starting;
-    return _Card(
+    final card = _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -716,6 +716,16 @@ class _ThisComputerCard extends ConsumerWidget {
             _Credential(label: 'ID', value: service.agentId ?? '…', big: true),
             const SizedBox(height: AppSpacing.sm),
             _Credential(label: 'Password', value: service.password ?? '…'),
+            if (service.connectedViewers > 0) ...[
+              const SizedBox(height: AppSpacing.md),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FileShareButtons(service: service),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text('…or drag files onto this card to send them.',
+                  style: AppTypography.caption),
+            ],
             if (service.fileTransfers.isNotEmpty) ...[
               const SizedBox(height: AppSpacing.md),
               Align(
@@ -775,6 +785,8 @@ class _ThisComputerCard extends ConsumerWidget {
         ],
       ),
     );
+    // While sharing, let the host drag files onto the card to send them.
+    return online ? DropToSend(service: service, child: card) : card;
   }
 }
 

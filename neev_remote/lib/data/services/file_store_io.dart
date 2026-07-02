@@ -15,6 +15,22 @@ class FileStore {
     try {
       base = await getDownloadsDirectory();
     } catch (_) {}
+    // When the host runs as SYSTEM (service / unattended mode),
+    // getDownloadsDirectory resolves into the SYSTEM profile
+    // (…\system32\config\systemprofile\Downloads) where no user can find the
+    // file. Redirect to the all-users Public Downloads so received files are
+    // always visible regardless of which account (or SYSTEM) is hosting.
+    if (Platform.isWindows) {
+      final p = base?.path.toLowerCase() ?? '';
+      if (base == null ||
+          p.contains('systemprofile') ||
+          p.contains('system32')) {
+        final pub = Platform.environment['PUBLIC'];
+        if (pub != null && pub.isNotEmpty) {
+          base = Directory('$pub${Platform.pathSeparator}Downloads');
+        }
+      }
+    }
     base ??= await getApplicationDocumentsDirectory();
     final dir = Directory('${base.path}${Platform.pathSeparator}NeevRemote');
     if (!await dir.exists()) await dir.create(recursive: true);
