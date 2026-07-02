@@ -193,6 +193,9 @@ class _Card extends StatelessWidget {
 /// Shared search text for filtering Recent connections (top bar -> list).
 final _homeSearchProvider = StateProvider<String>((_) => '');
 
+/// Whether the in-session chat panel is open.
+final _chatOpenProvider = StateProvider<bool>((_) => false);
+
 // --- App shell: left icon sidebar ---------------------------------------
 
 class _NavItem {
@@ -1303,6 +1306,17 @@ class _ConnectedSession extends ConsumerWidget {
               bottom: 96,
               child: FileTransferList(service: service),
             ),
+            if (ref.watch(_chatOpenProvider))
+              Positioned(
+                right: AppSpacing.lg,
+                top: AppSpacing.lg,
+                bottom: 96,
+                child: _ChatPanel(
+                  service: service,
+                  onClose: () =>
+                      ref.read(_chatOpenProvider.notifier).state = false,
+                ),
+              ),
             // Floating command bar, centered along the bottom.
             Positioned(
               left: 0,
@@ -1312,6 +1326,166 @@ class _ConnectedSession extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// In-session chat panel (dark glass), floated on the right of the video.
+class _ChatPanel extends StatefulWidget {
+  final RemoteService service;
+  final VoidCallback onClose;
+  const _ChatPanel({required this.service, required this.onClose});
+  @override
+  State<_ChatPanel> createState() => _ChatPanelState();
+}
+
+class _ChatPanelState extends State<_ChatPanel> {
+  final _ctrl = TextEditingController();
+  final _scroll = ScrollController();
+
+  void _send() {
+    final t = _ctrl.text.trim();
+    if (t.isEmpty) return;
+    widget.service.sendChat(t);
+    _ctrl.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final msgs = widget.service.chatMessages;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          width: 300,
+          decoration: BoxDecoration(
+            color: const Color(0xFF181818).withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 8, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.chat_bubble_outline_rounded,
+                        size: 16, color: Colors.white70),
+                    const SizedBox(width: 8),
+                    const Text('Chat',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      color: Colors.white54,
+                      onPressed: widget.onClose,
+                    ),
+                  ],
+                ),
+              ),
+              Container(height: 1, color: Colors.white.withValues(alpha: 0.08)),
+              Expanded(
+                child: msgs.isEmpty
+                    ? Center(
+                        child: Text('No messages yet',
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.4),
+                                fontSize: 12)),
+                      )
+                    : ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.all(10),
+                        itemCount: msgs.length,
+                        itemBuilder: (_, i) => _ChatBubble(msg: msgs[i]),
+                      ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _ctrl,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13),
+                        cursorColor: AppColors.primary,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _send(),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.08),
+                          hintText: 'Message…',
+                          hintStyle: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.4),
+                              fontSize: 13),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.input),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    IconButton(
+                      icon: const Icon(Icons.send_rounded, size: 18),
+                      color: AppColors.primaryHover,
+                      onPressed: _send,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatBubble extends StatelessWidget {
+  final ChatMessage msg;
+  const _ChatBubble({required this.msg});
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: msg.mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+        constraints: const BoxConstraints(maxWidth: 220),
+        decoration: BoxDecoration(
+          color: msg.mine
+              ? AppColors.primary
+              : Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(msg.text,
+            style: TextStyle(
+                color: msg.mine
+                    ? Colors.white
+                    : Colors.white.withValues(alpha: 0.92),
+                fontSize: 13)),
       ),
     );
   }
@@ -1386,6 +1560,19 @@ class _SessionToolbar extends ConsumerWidget {
                 ShortcutsMenu(service: service),
                 if (service.hostMonitors.length > 1)
                   _MonitorButton(service: service),
+                _ToolButton(
+                  icon: Icons.chat_bubble_outline_rounded,
+                  label: service.unreadChat > 0
+                      ? 'Chat (${service.unreadChat})'
+                      : 'Chat',
+                  tooltip: 'Chat with the other computer',
+                  active: ref.watch(_chatOpenProvider) || service.unreadChat > 0,
+                  onPressed: () {
+                    final open = !ref.read(_chatOpenProvider);
+                    ref.read(_chatOpenProvider.notifier).state = open;
+                    if (open) service.markChatRead();
+                  },
+                ),
                 const _ToolDivider(),
                 // --- Files group ---
                 _ToolButton(

@@ -33,6 +33,13 @@ enum HostStatus { offline, starting, online, error }
 
 enum ViewerStatus { idle, connecting, connected, failed }
 
+/// One in-session chat line.
+class ChatMessage {
+  final String text;
+  final bool mine;
+  ChatMessage(this.text, {required this.mine});
+}
+
 /// Central orchestrator that turns the signaling + WebRTC + capture services
 /// into a working remote-desktop session, for both roles:
 ///
@@ -586,6 +593,40 @@ class RemoteService extends ChangeNotifier {
     if (_hostPeers.isEmpty) PrivacyMode.set(false);
   }
 
+  // ---- In-session chat (works both directions over the control channel) ----
+  final List<ChatMessage> chatMessages = [];
+  int unreadChat = 0;
+
+  /// Send a chat line to the connected peer (host<->viewer).
+  void sendChat(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    chatMessages.add(ChatMessage(t, mine: true));
+    final msg = jsonEncode({'k': 'chat', 't': t});
+    if (_viewerPeer != null) {
+      _viewerPeer!.sendData(msg);
+    } else {
+      for (final p in _hostPeers.values) {
+        p.sendData(msg);
+      }
+    }
+    notifyListeners();
+  }
+
+  void markChatRead() {
+    if (unreadChat == 0) return;
+    unreadChat = 0;
+    notifyListeners();
+  }
+
+  void _onChat(Map<String, dynamic> m) {
+    final t = (m['t'] as String?)?.trim();
+    if (t == null || t.isEmpty) return;
+    chatMessages.add(ChatMessage(t, mine: false));
+    unreadChat++;
+    notifyListeners();
+  }
+
   /// Viewer: transmit text to be typed into the host's currently-focused field
   /// (e.g. a UAC / Windows login credential prompt). [tab] presses Tab after
   /// (to jump to the next field), [enter] submits. The host injects it through
@@ -796,6 +837,11 @@ class RemoteService extends ChangeNotifier {
     // Viewer asked to switch the streamed monitor (viewer -> host).
     if (m['k'] == 'setmon') {
       if (isHost) _switchMonitor(m['id'] as String?);
+      return;
+    }
+    // In-session chat (either direction).
+    if (m['k'] == 'chat') {
+      _onChat(m);
       return;
     }
     // Transmit credentials: viewer sends text to type into the host's focused
