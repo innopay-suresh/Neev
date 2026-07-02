@@ -19,7 +19,7 @@ class SettingsPage extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Settings', style: AppTypography.heading1),
+              Text('Settings', style: AppTypography.heading1),
               const SizedBox(height: AppSpacing.xl),
 
               // Connection Settings
@@ -256,9 +256,9 @@ class _RelayUrlFieldState extends ConsumerState<_RelayUrlField> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Relay Server URL', style: AppTypography.body),
+          Text('Relay Server URL', style: AppTypography.body),
           const SizedBox(height: AppSpacing.xs),
-          const Text(
+          Text(
             'Address of your signaling server, e.g. ws://192.168.1.10:8080/ws',
             style: AppTypography.caption,
           ),

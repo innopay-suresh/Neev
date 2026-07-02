@@ -81,7 +81,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
         appBar: AppBar(
           backgroundColor: AppColors.surface,
           elevation: 0,
-          title: const Text('Neev Remote', style: AppTypography.heading2),
+          title: Text('Neev Remote', style: AppTypography.heading2),
         ),
         body: Center(
           child: SingleChildScrollView(
@@ -103,7 +103,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
           children: [
             const Icon(Icons.desktop_windows, color: AppColors.primary),
             const SizedBox(width: AppSpacing.sm),
-            const Text('Neev Remote', style: AppTypography.heading2),
+            Text('Neev Remote', style: AppTypography.heading2),
           ],
         ),
         actions: [
@@ -668,26 +668,39 @@ class _CardHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(11),
-              ),
-              child: Icon(icon, color: AppColors.primary, size: 20),
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.primary, AppColors.accent],
             ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(child: Text(title, style: AppTypography.heading2)),
-          ],
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            boxShadow: [
+              BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.28),
+                  blurRadius: 12,
+                  offset: const Offset(0, 5)),
+            ],
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
         ),
-        const SizedBox(height: AppSpacing.md),
-        Text(subtitle, style: AppTypography.caption),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: AppTypography.heading2),
+              const SizedBox(height: 2),
+              Text(subtitle, style: AppTypography.caption),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -703,33 +716,48 @@ class _Credential extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 10, AppSpacing.sm, 10),
       decoration: BoxDecoration(
-        color: AppColors.surfaceLight,
+        color: big ? AppColors.primarySoft : AppColors.surfaceAlt,
         borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(
+            color: big ? AppColors.primary.withValues(alpha: 0.25)
+                       : AppColors.border),
       ),
       child: Row(
         children: [
-          SizedBox(
-            width: 78,
-            child: Text(label, style: AppTypography.caption),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label.toUpperCase(),
+                  style: AppTypography.label
+                      .copyWith(color: AppColors.textTertiary)),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: big ? 26 : 18,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: big ? AppColors.primary : AppColors.textPrimary,
+                  letterSpacing: big ? 2 : 1,
+                ),
+              ),
+            ],
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: TextStyle(
-                fontSize: big ? 24 : 18,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'monospace',
-                color: big ? AppColors.primary : AppColors.textPrimary,
-                letterSpacing: 1.5,
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.content_copy_rounded, size: 18),
+            tooltip: 'Copy $label',
+            style: IconButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+                side: const BorderSide(color: AppColors.border),
               ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 18),
-            tooltip: 'Copy',
             onPressed: () {
               Clipboard.setData(ClipboardData(text: value));
               ScaffoldMessenger.of(context).showSnackBar(
@@ -772,19 +800,23 @@ class _ConnectedSession extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final stats = service.stats;
     final viewOnly =
         ref.watch(settingsProvider).viewOnly || service.viewerViewOnly;
     return Scaffold(
+      backgroundColor: const Color(0xFF0B0F1A),
       body: Column(
         children: [
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.sm),
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, 0),
               child: DropToSend(
                 service: service,
-                child: Stack(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  child: Stack(
                   children: [
+                    Positioned.fill(child: ColoredBox(color: Color(0xFF0B0F1A))),
                     RemoteViewWidget(
                       isConnected: true,
                       remoteStream: service.remoteStream,
@@ -812,132 +844,371 @@ class _ConnectedSession extends ConsumerWidget {
                       child: FileTransferList(service: service),
                     ),
                   ],
+                  ),
                 ),
               ),
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
-            color: AppColors.surface,
+          _SessionToolbar(service: service),
+        ],
+      ),
+    );
+  }
+}
+
+/// Premium in-session control bar: a status/stats cluster on the left and
+/// clearly-labeled, grouped controls on the right so every action is trackable
+/// (the old bar was icon-only and ambiguous).
+class _SessionToolbar extends ConsumerWidget {
+  final RemoteService service;
+  const _SessionToolbar({required this.service});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final stats = service.stats;
+    final win = service.remoteHostOs == 'windows';
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.border)),
+        boxShadow: AppShadows.toolbar,
+      ),
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+      child: Row(
+        children: [
+          _ConnectionBadge(id: service.targetId ?? '—'),
+          const SizedBox(width: AppSpacing.md),
+          _StatsStrip(stats: stats),
+          const Spacer(),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            reverse: true,
             child: Row(
               children: [
-                const Icon(Icons.circle, color: AppColors.success, size: 10),
-                const SizedBox(width: AppSpacing.sm),
-                Text('Connected to ${service.targetId}',
-                    style: AppTypography.body),
-                const SizedBox(width: AppSpacing.md),
-                // Full diagnostic line (always visible) so a blank session can
-                // be pinpointed: kbps>0 + 0 frames = receiving but not decoding;
-                // 0 kbps = no media arriving (path/host); codec shows what was
-                // negotiated.
-                _StatChip(Icons.speed, '${stats.fps ?? 0} fps'),
-                _StatChip(Icons.network_ping, '${stats.latencyMs ?? 0} ms'),
-                _StatChip(Icons.bar_chart, '${stats.bitrateKbps ?? 0} kbps'),
-                _StatChip(Icons.movie, stats.codec ?? '—'),
-                _StatChip(Icons.photo_library, '${stats.framesDecoded ?? 0} frames'),
-                const Spacer(),
-                if (service.hostMonitors.length > 1)
-                  PopupMenuButton<String>(
-                    tooltip: 'Switch monitor',
-                    icon: const Icon(Icons.monitor, size: 20),
-                    position: PopupMenuPosition.under,
-                    onSelected: service.setMonitor,
-                    itemBuilder: (_) => [
-                      for (var i = 0; i < service.hostMonitors.length; i++)
-                        PopupMenuItem<String>(
-                          value: service.hostMonitors[i]['id'],
-                          child: Text(
-                            (service.hostMonitors[i]['n'] ?? '').isNotEmpty
-                                ? service.hostMonitors[i]['n']!
-                                : 'Monitor ${i + 1}',
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                        ),
-                    ],
-                  ),
-                IconButton(
-                  tooltip: 'Restart the remote PC',
-                  icon: const Icon(Icons.restart_alt, size: 20),
-                  onPressed: () async {
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Restart remote PC?'),
-                        content: const Text(
-                            'The remote computer will reboot now. Neev Remote '
-                            'will keep trying to reconnect for a few minutes once '
-                            "it's back (the host must be set to start on boot)."),
-                        actions: [
-                          TextButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              child: const Text('Cancel')),
-                          FilledButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              child: const Text('Restart')),
-                        ],
-                      ),
-                    );
-                    if (ok == true) service.rebootHost();
-                  },
-                ),
-                if (service.remoteHostOs == 'windows')
-                  IconButton(
-                    tooltip: service.privacyMode
-                        ? 'Privacy ON — host screen blanked + its input blocked'
-                        : 'Privacy mode — blank the host screen + block its '
-                            'local input',
-                    isSelected: service.privacyMode,
-                    icon: const Icon(Icons.blur_on, size: 20),
-                    selectedIcon: const Icon(Icons.blur_on,
-                        size: 20, color: AppColors.primary),
-                    onPressed: () =>
-                        service.setPrivacyMode(!service.privacyMode),
-                  ),
-                IconButton(
+                // --- Control group ---
+                _ToolButton(
+                  icon: service.viewerViewOnly
+                      ? Icons.visibility_outlined
+                      : Icons.ads_click,
+                  label: service.viewerViewOnly ? 'View only' : 'Control',
                   tooltip: service.viewerViewOnly
                       ? 'View only — click to take control'
                       : 'Controlling — click for view only',
-                  icon: Icon(
-                      service.viewerViewOnly
-                          ? Icons.visibility_outlined
-                          : Icons.ads_click,
-                      size: 20),
-                  onPressed: () =>
-                      service.setViewOnly(!service.viewerViewOnly),
+                  active: !service.viewerViewOnly,
+                  onPressed: () => service.setViewOnly(!service.viewerViewOnly),
                 ),
                 if (service.keyboardCaptureSupported)
-                  IconButton(
+                  _ToolButton(
+                    icon: service.keyboardCapture
+                        ? Icons.keyboard_alt
+                        : Icons.keyboard_alt_outlined,
+                    label: 'Keyboard',
                     tooltip: service.keyboardCapture
                         ? 'Keyboard capture ON — Win+R, Alt+Tab etc. go to the '
                             'remote. Click away to stop.'
                         : 'Capture keyboard — send Win+R, Alt+Tab etc. by '
                             'pressing them',
-                    isSelected: service.keyboardCapture,
-                    icon: const Icon(Icons.keyboard_alt_outlined, size: 20),
-                    selectedIcon: const Icon(Icons.keyboard_alt,
-                        size: 20, color: AppColors.primary),
+                    active: service.keyboardCapture,
                     onPressed: () =>
                         service.setKeyboardCapture(!service.keyboardCapture),
                   ),
                 ShortcutsMenu(service: service),
-                const SizedBox(width: AppSpacing.xs),
-                FileShareButtons(service: service, dense: true),
-                const SizedBox(width: AppSpacing.sm),
-                OutlinedButton.icon(
+                if (service.hostMonitors.length > 1)
+                  _MonitorButton(service: service),
+                const _ToolDivider(),
+                // --- Files group ---
+                _ToolButton(
+                  icon: Icons.upload_file,
+                  label: 'Export',
+                  tooltip: 'Send a file to the connected computer',
+                  onPressed: () => pickAndSendFile(context, service),
+                ),
+                _ToolButton(
+                  icon: Icons.download_for_offline_outlined,
+                  label: 'Import',
+                  tooltip: 'Ask the connected computer to send you a file',
+                  onPressed: () {
+                    service.requestFileFromPeer();
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text(
+                          'Import requested — the other computer picks a file '
+                          'to send'),
+                      duration: Duration(seconds: 3),
+                    ));
+                  },
+                ),
+                const _ToolDivider(),
+                // --- Session group ---
+                if (win)
+                  _ToolButton(
+                    icon: Icons.blur_on,
+                    label: 'Privacy',
+                    tooltip: service.privacyMode
+                        ? 'Privacy ON — host screen blanked + its input blocked'
+                        : 'Privacy mode — blank the host screen + block its '
+                            'local input',
+                    active: service.privacyMode,
+                    onPressed: () =>
+                        service.setPrivacyMode(!service.privacyMode),
+                  ),
+                _ToolButton(
+                  icon: Icons.restart_alt,
+                  label: 'Restart',
+                  tooltip: 'Restart the remote PC',
+                  onPressed: () => _confirmRestart(context, service),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                _DisconnectButton(
                   onPressed: () =>
                       ref.read(remoteServiceProvider).disconnectViewer(),
-                  icon: const Icon(Icons.close, size: 18),
-                  label: const Text('Disconnect'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.error,
-                    side: const BorderSide(color: AppColors.error),
-                  ),
                 ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _confirmRestart(
+      BuildContext context, RemoteService service) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restart remote PC?'),
+        content: const Text(
+            'The remote computer will reboot now. Neev Remote will keep trying '
+            'to reconnect for a few minutes once it\'s back (the host must be '
+            'set to start on boot).'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Restart')),
+        ],
+      ),
+    );
+    if (ok == true) service.rebootHost();
+  }
+}
+
+/// Green pulse dot + "Connected to <id>" pill.
+class _ConnectionBadge extends StatelessWidget {
+  final String id;
+  const _ConnectionBadge({required this.id});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+                color: AppColors.success, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text('Connected', style: AppTypography.label.copyWith(
+              color: AppColors.success, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 6),
+          Text(id, style: AppTypography.caption.copyWith(
+              fontFeatures: const [FontFeature.tabularFigures()],
+              color: AppColors.textPrimary)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact live-stats strip (fps · latency · bitrate). Codec + decoded frames
+/// are surfaced on hover so a blank session can still be diagnosed.
+class _StatsStrip extends StatelessWidget {
+  final dynamic stats;
+  const _StatsStrip({required this.stats});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget item(IconData ic, String v) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(ic, size: 13, color: AppColors.textTertiary),
+            const SizedBox(width: 4),
+            Text(v,
+                style: AppTypography.caption.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()])),
+          ]),
+        );
+    return Tooltip(
+      message:
+          'Codec ${stats.codec ?? '—'} · ${stats.framesDecoded ?? 0} frames decoded',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          item(Icons.speed, '${stats.fps ?? 0} fps'),
+          item(Icons.network_ping, '${stats.latencyMs ?? 0} ms'),
+          item(Icons.bar_chart, '${stats.bitrateKbps ?? 0} kbps'),
+        ]),
+      ),
+    );
+  }
+}
+
+/// A single labeled toolbar action: icon over a small caption, hover + active
+/// states. Labels make every control immediately recognisable.
+class _ToolButton extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final bool active;
+  final VoidCallback onPressed;
+  const _ToolButton({
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    required this.onPressed,
+    this.active = false,
+  });
+
+  @override
+  State<_ToolButton> createState() => _ToolButtonState();
+}
+
+class _ToolButtonState extends State<_ToolButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.active;
+    final fg = active ? AppColors.primary : AppColors.textSecondary;
+    final bg = active
+        ? AppColors.primarySoft
+        : (_hover ? AppColors.surfaceLight : Colors.transparent);
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: widget.onPressed,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: 62,
+            padding: const EdgeInsets.symmetric(vertical: 7),
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(widget.icon, size: 20, color: fg),
+                const SizedBox(height: 4),
+                Text(
+                  widget.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.label.copyWith(
+                      color: fg,
+                      fontWeight:
+                          active ? FontWeight.w700 : FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Monitor switcher styled as a [_ToolButton] with a dropdown.
+class _MonitorButton extends StatelessWidget {
+  final RemoteService service;
+  const _MonitorButton({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: 'Switch monitor',
+      position: PopupMenuPosition.under,
+      onSelected: service.setMonitor,
+      itemBuilder: (_) => [
+        for (var i = 0; i < service.hostMonitors.length; i++)
+          PopupMenuItem<String>(
+            value: service.hostMonitors[i]['id'],
+            child: Text(
+              (service.hostMonitors[i]['n'] ?? '').isNotEmpty
+                  ? service.hostMonitors[i]['n']!
+                  : 'Monitor ${i + 1}',
+              style: AppTypography.body,
+            ),
+          ),
+      ],
+      child: Container(
+        width: 62,
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.monitor, size: 20, color: AppColors.textSecondary),
+            const SizedBox(height: 4),
+            Text('Monitor',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.label),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ToolDivider extends StatelessWidget {
+  const _ToolDivider();
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 1,
+        height: 30,
+        margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+        color: AppColors.border,
+      );
+}
+
+/// Prominent red pill for the one destructive action.
+class _DisconnectButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _DisconnectButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.icon(
+      onPressed: onPressed,
+      icon: const Icon(Icons.call_end_rounded, size: 18),
+      label: const Text('Disconnect'),
+      style: FilledButton.styleFrom(
+        backgroundColor: AppColors.error,
+        foregroundColor: Colors.white,
+        padding:
+            const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: 12),
       ),
     );
   }
@@ -977,9 +1248,9 @@ class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
         children: [
           const Icon(Icons.dns_outlined, color: AppColors.primary, size: 40),
           const SizedBox(height: AppSpacing.md),
-          const Text('Connect to your server', style: AppTypography.heading1),
+          Text('Connect to your server', style: AppTypography.heading1),
           const SizedBox(height: AppSpacing.xs),
-          const Text(
+          Text(
             'Enter the address of your Neev Remote server (the one you '
             'downloaded this app from).',
             style: AppTypography.caption,
@@ -1009,32 +1280,3 @@ class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
   }
 }
 
-/// A small icon + label pill used in the connected-session status bar.
-class _StatChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  const _StatChip(this.icon, this.label);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: AppSpacing.sm),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceLight,
-          borderRadius: BorderRadius.circular(AppRadius.sm),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12, color: AppColors.textSecondary),
-            const SizedBox(width: AppSpacing.xs),
-            Text(label, style: AppTypography.caption),
-          ],
-        ),
-      ),
-    );
-  }
-}
