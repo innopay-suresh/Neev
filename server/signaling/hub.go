@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,8 @@ const (
 	MsgHeartbeat MessageType = "heartbeat" // keep-alive ping
 
 	// Controller → Server
-	MsgConnect MessageType = "connect" // controller requests to connect to agentID
+	MsgConnect  MessageType = "connect"  // controller requests to connect to agentID
+	MsgDiscover MessageType = "discover" // client asks who else is on its network
 
 	// Server → both peers (SDP / ICE exchange)
 	MsgOffer     MessageType = "offer"     // SDP offer (controller → agent via server)
@@ -36,6 +38,7 @@ const (
 	// Server → client (control messages)
 	MsgRegistered MessageType = "registered"  // response to register, carries assigned ID
 	MsgClientCert MessageType = "client_cert" // server pushes a new client cert bundle
+	MsgPeers      MessageType = "peers"       // response to discover: same-network hosts
 	MsgError      MessageType = "error"
 	MsgBye        MessageType = "bye" // session ended
 )
@@ -83,6 +86,9 @@ type client struct {
 	sessionID string
 	role      string // "agent" or "controller"
 	certFP    string
+	hostname  string // for same-network discovery
+	os        string
+	orgID     string
 	mu        sync.Mutex
 }
 
@@ -271,6 +277,8 @@ func (h *Hub) HandleWS(c *websocket.Conn) {
 			h.handleHeartbeat(ctx, cli)
 		case MsgConnect:
 			h.handleConnect(ctx, cli, msg)
+		case MsgDiscover:
+			h.handleDiscover(cli)
 		case MsgOffer, MsgAnswer, MsgCandidate:
 			h.handleRelay(ctx, cli, msg)
 		case MsgBye:
@@ -419,6 +427,9 @@ func (h *Hub) handleRegister(ctx context.Context, cli *client, msg Message) {
 	}
 
 	cli.agentID = agentID
+	cli.hostname = payload.Hostname
+	cli.os = payload.OS
+	cli.orgID = orgID
 	if isAgentRegistration {
 		cli.role = "agent"
 	} else {
@@ -592,6 +603,56 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	})
 
 	log.Info().Str("controller", controllerID).Str("target", payload.TargetID).Str("session", createdSession.ID).Msg("connect request forwarded")
+}
+
+// DiscoverPeer is one machine on the same network (shared public IP).
+type DiscoverPeer struct {
+	ID       string `json:"id"`
+	Hostname string `json:"hostname"`
+	OS       string `json:"os"`
+}
+
+// handleDiscover replies with the other registered hosts that share this
+// client's public IP (and org) — LAN-mate discovery that works even when the
+// network blocks UDP broadcast. No presence data leaves the requester's own
+// public-IP group.
+func (h *Hub) handleDiscover(cli *client) {
+	myIP := hostOnly(cli.conn.RemoteAddr().String())
+	if myIP == "" {
+		return
+	}
+	peers := make([]DiscoverPeer, 0, 4)
+	h.mu.RLock()
+	for id, other := range h.agents {
+		if other == cli || other.conn == nil {
+			continue
+		}
+		// Only registered hosts (agents) are discoverable, never controllers.
+		if other.role != "agent" || strings.HasPrefix(id, "ctrl-") {
+			continue
+		}
+		if hostOnly(other.conn.RemoteAddr().String()) != myIP {
+			continue
+		}
+		if cli.orgID != other.orgID {
+			continue
+		}
+		peers = append(peers, DiscoverPeer{ID: id, Hostname: other.hostname, OS: other.os})
+	}
+	h.mu.RUnlock()
+	payload, _ := json.Marshal(map[string]any{"peers": peers})
+	_ = cli.send(Message{Type: MsgPeers, Payload: payload})
+}
+
+// hostOnly strips the port from an "ip:port" (v4 or v6) address.
+func hostOnly(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
 }
 
 func (h *Hub) handleRelay(ctx context.Context, cli *client, msg Message) {
