@@ -597,6 +597,10 @@ class RemoteService extends ChangeNotifier {
   final List<ChatMessage> chatMessages = [];
   int unreadChat = 0;
 
+  /// True when there's a peer to chat with (viewing a host, or hosting with at
+  /// least one connected viewer).
+  bool get hasChatPeer => _viewerPeer != null || _hostPeers.isNotEmpty;
+
   /// Send a chat line to the connected peer (host<->viewer).
   void sendChat(String text) {
     final t = text.trim();

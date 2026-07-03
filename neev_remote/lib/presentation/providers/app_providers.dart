@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../data/services/discovery_service.dart';
 import '../../data/services/remote_service.dart';
 import '../../data/services/startup.dart';
 
@@ -57,6 +58,35 @@ final remoteServiceProvider = ChangeNotifierProvider<RemoteService>((ref) {
   final service = RemoteService();
   ref.onDispose(service.dispose);
   return service;
+});
+
+// --- LAN discovery ---
+
+/// Owns the UDP LAN-discovery service and re-broadcasts the current hosting id.
+class DiscoveryController extends ChangeNotifier {
+  final DiscoveryService _svc = DiscoveryService();
+  DiscoveryController() {
+    _svc.onChange = notifyListeners;
+    _svc.start();
+  }
+  bool get supported => _svc.supported;
+  List<DiscoveredDevice> get devices => _svc.devices;
+  void setId(String? id) => _svc.setId(id ?? '');
+  @override
+  void dispose() {
+    _svc.dispose();
+    super.dispose();
+  }
+}
+
+final discoveryProvider = ChangeNotifierProvider<DiscoveryController>((ref) {
+  final c = DiscoveryController();
+  // Announce whatever id the host is currently sharing, and follow changes.
+  ref.listen<RemoteService>(remoteServiceProvider, (prev, next) {
+    c.setId(next.agentId);
+  }, fireImmediately: true);
+  ref.onDispose(c.dispose);
+  return c;
 });
 
 // --- Settings ---

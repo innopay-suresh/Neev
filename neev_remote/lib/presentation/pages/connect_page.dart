@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../data/services/discovery_service.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
 import '../widgets/file_transfer_panel.dart';
@@ -123,16 +124,22 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     );
   }
 
+  void _pickAndHome(String id) {
+    _fillId(id);
+    setState(() => _section = 0);
+  }
+
   Widget _sectionContent(RemoteService service) {
     switch (_section) {
       case 6: // Settings
         return const SettingsPage();
+      case 5: // Chat
+        return _ChatSectionPage(service: service);
+      case 4: // Discovery
+        return _DiscoveryPage(onPick: _pickAndHome);
       case 2: // Recent
       case 3: // Favorites
-        return _RecentPage(onPick: (id) {
-          _fillId(id);
-          setState(() => _section = 0);
-        });
+        return _RecentPage(onPick: _pickAndHome);
       case 0: // Home
         return _HomeDashboard(
           service: service,
@@ -141,7 +148,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
           onConnect: _connect,
           onPick: _fillId,
         );
-      default: // Address book / Discovery / Chat — coming soon
+      default: // Contacts — coming soon
         return _ComingSoon(item: _navItems[_section]);
     }
   }
@@ -528,6 +535,259 @@ class _ComingSoon extends StatelessWidget {
           body: 'This section is on the roadmap and will light up in an '
               'upcoming update.',
         ),
+      ),
+    );
+  }
+}
+
+/// Discovery section — machines running Neev Remote on the local network,
+/// found over UDP broadcast. Tap Connect to drop the id into Home.
+class _DiscoveryPage extends ConsumerWidget {
+  final void Function(String id) onPick;
+  const _DiscoveryPage({required this.onPick});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final disc = ref.watch(discoveryProvider);
+    final devices = disc.devices;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: _Card(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl, AppSpacing.lg, AppSpacing.lg, AppSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(children: [
+                  const Icon(Icons.radar_rounded,
+                      color: AppColors.accentDark, size: 20),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text('Discovery', style: AppTypography.title),
+                  const Spacer(),
+                  if (devices.isNotEmpty)
+                    Text('${devices.length} found',
+                        style: AppTypography.caption),
+                ]),
+                const SizedBox(height: 2),
+                Text('Computers running Neev Remote on your network.',
+                    style: AppTypography.caption),
+                const SizedBox(height: AppSpacing.md),
+                if (!disc.supported)
+                  const _EmptyState(
+                    icon: Icons.wifi_off_rounded,
+                    title: 'Not available here',
+                    body: 'LAN discovery runs on the desktop app.',
+                  )
+                else if (devices.isEmpty)
+                  const _EmptyState(
+                    icon: Icons.radar_rounded,
+                    title: 'Searching your network…',
+                    body: 'Other computers running Neev Remote on the same '
+                        'network will appear here automatically.',
+                  )
+                else
+                  for (final d in devices)
+                    _DiscoveryRow(device: d, onConnect: () => onPick(d.id)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DiscoveryRow extends StatefulWidget {
+  final DiscoveredDevice device;
+  final VoidCallback onConnect;
+  const _DiscoveryRow({required this.device, required this.onConnect});
+  @override
+  State<_DiscoveryRow> createState() => _DiscoveryRowState();
+}
+
+class _DiscoveryRowState extends State<_DiscoveryRow> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.device;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          color: _hover ? AppColors.surfaceLight : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+        child: Row(children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+                color: AppColors.primarySoft,
+                borderRadius: BorderRadius.circular(AppRadius.sm)),
+            alignment: Alignment.center,
+            child: const Icon(Icons.computer,
+                size: 18, color: AppColors.primary),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(d.name, style: AppTypography.bodyStrong),
+                Text('${d.id}   ·   ${d.ip}',
+                    style: AppTypography.caption.copyWith(
+                        fontFeatures: const [FontFeature.tabularFigures()])),
+              ],
+            ),
+          ),
+          FilledButton(
+            onPressed: widget.onConnect,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 34),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              textStyle:
+                  AppTypography.caption.copyWith(fontWeight: FontWeight.w600),
+            ),
+            child: const Text('Connect'),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Chat section — the conversation with the currently-connected peer.
+class _ChatSectionPage extends StatefulWidget {
+  final RemoteService service;
+  const _ChatSectionPage({required this.service});
+  @override
+  State<_ChatSectionPage> createState() => _ChatSectionPageState();
+}
+
+class _ChatSectionPageState extends State<_ChatSectionPage> {
+  final _ctrl = TextEditingController();
+  final _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.service.markChatRead();
+  }
+
+  void _send() {
+    final t = _ctrl.text.trim();
+    if (t.isEmpty) return;
+    widget.service.sendChat(t);
+    _ctrl.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = widget.service;
+    if (!service.hasChatPeer) {
+      return Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: const _EmptyState(
+            icon: Icons.chat_bubble_outline_rounded,
+            title: 'No one connected',
+            body: 'Chat is available during a session — connect to a computer '
+                'or share your screen with someone.',
+          ),
+        ),
+      );
+    }
+    final msgs = service.chatMessages;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppRadius.card),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: msgs.isEmpty
+                      ? Center(
+                          child: Text('No messages yet',
+                              style: AppTypography.caption))
+                      : ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.all(AppSpacing.md),
+                          itemCount: msgs.length,
+                          itemBuilder: (_, i) =>
+                              _ChatLine(msg: msgs[i]),
+                        ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: _ctrl,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _send(),
+                    decoration: const InputDecoration(
+                        hintText: 'Type a message…'),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                FilledButton.icon(
+                  onPressed: _send,
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('Send'),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatLine extends StatelessWidget {
+  final ChatMessage msg;
+  const _ChatLine({required this.msg});
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: msg.mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        constraints: const BoxConstraints(maxWidth: 420),
+        decoration: BoxDecoration(
+          color: msg.mine ? AppColors.primary : AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Text(msg.text,
+            style: AppTypography.body.copyWith(
+                color: msg.mine ? Colors.white : AppColors.textPrimary)),
       ),
     );
   }
