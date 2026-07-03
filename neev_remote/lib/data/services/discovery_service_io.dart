@@ -21,6 +21,11 @@ class DiscoveryService {
   bool _stopped = false;
 
   final Map<String, DiscoveredDevice> _devices = {};
+  List<InternetAddress> _broadcastTargets = [InternetAddress('255.255.255.255')];
+  int _rescanTick = 0;
+
+  /// Human-readable state for the UI (bind status / announcing).
+  String status = 'Starting…';
 
   /// Called whenever the discovered-device list changes.
   void Function()? onChange;
@@ -55,25 +60,64 @@ class DiscoveryService {
       s.broadcastEnabled = true;
       _sock = s;
       s.listen(_onEvent);
-      _announceTimer =
-          Timer.periodic(_announceEvery, (_) => _announce());
+      await _refreshBroadcastTargets();
+      status = 'Listening on your network…';
+      _announceTimer = Timer.periodic(_announceEvery, (_) => _announce());
       _pruneTimer =
           Timer.periodic(const Duration(seconds: 4), (_) => _prune());
       _announce();
+      onChange?.call();
     } catch (_) {
       // Port busy / no network — retry shortly.
+      status = 'Waiting for the network…';
+      onChange?.call();
       if (!_stopped) Timer(const Duration(seconds: 5), _bind);
     }
   }
 
+  // Limited broadcast (255.255.255.255) only leaves one interface on Windows,
+  // so also target each interface's directed /24 broadcast — much more reliable
+  // on machines with VPNs / virtual adapters.
+  Future<void> _refreshBroadcastTargets() async {
+    final targets = <InternetAddress>[InternetAddress('255.255.255.255')];
+    try {
+      final ifaces = await NetworkInterface.list(
+          type: InternetAddressType.IPv4, includeLoopback: false);
+      for (final iface in ifaces) {
+        for (final addr in iface.addresses) {
+          final p = addr.address.split('.');
+          if (p.length == 4) {
+            targets.add(InternetAddress('${p[0]}.${p[1]}.${p[2]}.255'));
+          }
+        }
+      }
+    } catch (_) {}
+    _broadcastTargets = targets;
+  }
+
+  void _setStatus(String s) {
+    if (s == status) return;
+    status = s;
+    onChange?.call();
+  }
+
   void _announce() {
     final s = _sock;
-    if (s == null || _id.isEmpty) return;
-    final payload = utf8.encode(jsonEncode(
-        {'neev': 1, 'id': _id, 'name': _name, 'os': _os}));
-    try {
-      s.send(payload, InternetAddress('255.255.255.255'), _port);
-    } catch (_) {}
+    if (s == null) return;
+    if (_id.isEmpty) {
+      _setStatus('Waiting to go online (start sharing to be discoverable)…');
+      return;
+    }
+    _setStatus('Listening on your network…');
+    // Refresh interface list occasionally (adapters change: VPN up/down, Wi-Fi).
+    if (_rescanTick++ % 10 == 0) _refreshBroadcastTargets();
+    final payload = utf8.encode(
+        jsonEncode({'neev': 1, 'id': _id, 'name': _name, 'os': _os}));
+    for (final t in _broadcastTargets) {
+      try {
+        s.send(payload, t, _port);
+      } catch (_) {}
+    }
   }
 
   void _onEvent(RawSocketEvent event) {

@@ -582,8 +582,8 @@ class _DiscoveryPage extends ConsumerWidget {
                         style: AppTypography.caption),
                 ]),
                 const SizedBox(height: 2),
-                Text('Computers running Neev Remote on your network.',
-                    style: AppTypography.caption),
+                Text(disc.supported ? disc.status : 'LAN discovery runs on the '
+                    'desktop app.', style: AppTypography.caption),
                 const SizedBox(height: AppSpacing.md),
                 if (!disc.supported)
                   const _EmptyState(
@@ -592,11 +592,26 @@ class _DiscoveryPage extends ConsumerWidget {
                     body: 'LAN discovery runs on the desktop app.',
                   )
                 else if (devices.isEmpty)
-                  const _EmptyState(
-                    icon: Icons.radar_rounded,
-                    title: 'Searching your network…',
-                    body: 'Other computers running Neev Remote on the same '
-                        'network will appear here automatically.',
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
+                    child: Column(children: [
+                      const SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2.5, color: AppColors.primary),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      Text('Searching your network…',
+                          style: AppTypography.bodyStrong),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Other computers running Neev Remote on the same '
+                        'network (and sharing) appear here automatically.',
+                        textAlign: TextAlign.center,
+                        style: AppTypography.caption,
+                      ),
+                    ]),
                   )
                 else
                   for (final d in devices)
@@ -1594,8 +1609,10 @@ class _ConnectedSession extends ConsumerWidget {
                 bottom: AppSpacing.lg,
                 child: _ChatPanel(
                   service: service,
-                  onClose: () =>
-                      ref.read(_chatOpenProvider.notifier).state = false,
+                  onClose: () {
+                    ref.read(_chatOpenProvider.notifier).state = false;
+                    service.pauseKeyboardCapture(false);
+                  },
                 ),
               ),
             // Auto-hide command bar along the TOP — reveals on hover so it never
@@ -1711,6 +1728,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                     Expanded(
                       child: TextField(
                         controller: _ctrl,
+                        autofocus: true,
                         style: const TextStyle(
                             color: Colors.white, fontSize: 13),
                         cursorColor: AppColors.primary,
@@ -1931,6 +1949,7 @@ class _SessionToolbar extends ConsumerWidget {
                   onPressed: () {
                     final open = !ref.read(_chatOpenProvider);
                     ref.read(_chatOpenProvider.notifier).state = open;
+                    service.pauseKeyboardCapture(open);
                     if (open) service.markChatRead();
                   },
                 ),
@@ -2043,8 +2062,9 @@ class _SessionToolbar extends ConsumerWidget {
     final passCtrl = TextEditingController();
     void toast(String msg) => ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), duration: const Duration(seconds: 1)));
-    // Pause remote key forwarding so typing lands in the dialog fields.
+    // Pause remote key forwarding + native hook so typing lands in the fields.
     ref.read(_typingLockProvider.notifier).state = true;
+    service.pauseKeyboardCapture(true);
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2127,6 +2147,7 @@ class _SessionToolbar extends ConsumerWidget {
       ),
     );
     ref.read(_typingLockProvider.notifier).state = false;
+    service.pauseKeyboardCapture(false);
   }
 }
 

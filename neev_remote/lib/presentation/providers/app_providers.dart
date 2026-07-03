@@ -72,6 +72,7 @@ class DiscoveryController extends ChangeNotifier {
     _svc.start();
   }
   bool get supported => _svc.supported;
+  String get status => _svc.status;
   List<DiscoveredDevice> get devices => _svc.devices;
   void setId(String? id) => _svc.setId(id ?? '');
   @override

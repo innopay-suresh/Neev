@@ -221,10 +221,6 @@ class RemoteService extends ChangeNotifier {
   final StringBuffer _clipImgBuf = StringBuffer();
   int _clipImgNext = 0;
   int _clipImgTotal = 0;
-  // Clipboard file sync: when the local user copies files (Explorer/Finder
-  // Ctrl+C), push them to the peer so they land in Downloads/NeevRemote —
-  // AnyDesk-style copy/paste of files across the session.
-  List<String> _lastClipFiles = const [];
 
   // ---- Host dead-man's switch: release stuck buttons if input goes silent
   // (viewer minimized / frozen / disconnected) so the host mouse never freezes.
@@ -662,6 +658,13 @@ class RemoteService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Temporarily silence the native key hook + input forwarding while an in-app
+  /// text field needs the keyboard (chat, transmit-login dialog), WITHOUT
+  /// changing the user's keyboardCapture preference. Restores it on release.
+  void pauseKeyboardCapture(bool pause) {
+    _keyHook.setCapture(pause ? false : keyboardCapture);
+  }
+
   /// Viewer: ask the host to stream a different monitor.
   void setMonitor(String id) {
     _viewerPeer?.sendData(jsonEncode({'k': 'setmon', 'id': id}));
@@ -1097,7 +1100,9 @@ class RemoteService extends ChangeNotifier {
       await _pollClipText();
       _clipTick++;
       if (_clipTick.isEven) await _pollClipImage(); // images ~every 1.2s
-      if (_clipTick % 3 == 0) await _pollClipFiles(); // files ~every 1.8s
+      // NOTE: automatic clipboard-FILE transfer is intentionally disabled — it
+      // surprised users (copying a file silently sent it to the other machine).
+      // Files transfer only on explicit drag-drop or Export/Import.
     });
   }
 
@@ -1126,41 +1131,6 @@ class RemoteService extends ChangeNotifier {
     if (h == _lastClipImgHash) return;
     _lastClipImgHash = h;
     _broadcastClipImage(img);
-  }
-
-  Future<void> _pollClipFiles() async {
-    List<String> paths;
-    try {
-      paths = await Pasteboard.files();
-    } catch (_) {
-      return;
-    }
-    if (paths.isEmpty) {
-      _lastClipFiles = const [];
-      return;
-    }
-    // Only react to a *change* so the same clipboard isn't re-sent each tick.
-    if (paths.length == _lastClipFiles.length) {
-      var same = true;
-      for (var i = 0; i < paths.length; i++) {
-        if (paths[i] != _lastClipFiles[i]) {
-          same = false;
-          break;
-        }
-      }
-      if (same) return;
-    }
-    _lastClipFiles = List.of(paths);
-    for (final p in paths) {
-      try {
-        final bytes = await XFile(p).readAsBytes();
-        final name = p.split(RegExp(r'[\\/]')).last;
-        if (name.isEmpty) continue;
-        await sendFile(name, bytes);
-      } catch (_) {
-        // Directory or unreadable path — skip (folder copy isn't supported).
-      }
-    }
   }
 
   // Cheap change-detector for clipboard images (not cryptographic).
