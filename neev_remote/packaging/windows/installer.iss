@@ -53,6 +53,10 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; service can). Mandatory like the AnyDesk/TeamViewer service — not opt-in, so a
 ; host is never left unable to receive clicks on an admin session.
 Filename: "{app}\neev_helper.exe"; Parameters: "install"; Flags: runhidden waituntilterminated; StatusMsg: "Installing helper service..."
+; Firewall: allow the app so LAN Discovery (UDP broadcast on 47920) can send +
+; receive, and WebRTC isn't blocked. Best-effort (ignore if netsh fails).
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Neev Remote"""; Flags: runhidden; StatusMsg: "Configuring firewall..."
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Neev Remote"" dir=in action=allow program=""{app}\{#AppExe}"" enable=yes profile=any"; Flags: runhidden; StatusMsg: "Configuring firewall..."
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Registry]

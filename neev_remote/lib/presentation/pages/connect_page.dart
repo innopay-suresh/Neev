@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -73,6 +74,11 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   Widget build(BuildContext context) {
     final service = ref.watch(remoteServiceProvider);
     final relayUrl = ref.watch(settingsProvider).relayUrl;
+    // Keep LAN discovery alive for the whole app lifetime (not just while the
+    // Discovery tab is open) so this machine is announcing + listening from
+    // launch — otherwise two machines never see each other. No-op listener so
+    // this doesn't rebuild the page on every device change.
+    ref.listen(discoveryProvider, (_, __) {});
 
     // Active remote session takes the whole window.
     if (service.viewerStatus == ViewerStatus.connected) {
@@ -202,6 +208,10 @@ final _homeSearchProvider = StateProvider<String>((_) => '');
 
 /// Whether the in-session chat panel is open.
 final _chatOpenProvider = StateProvider<bool>((_) => false);
+
+/// True while an in-app text field needs the keyboard (e.g. the transmit-login
+/// dialog) — pauses remote key forwarding so typing lands in the field.
+final _typingLockProvider = StateProvider<bool>((_) => false);
 
 /// Remote video view mode: false = fit (letterbox), true = fill (cover).
 final _fillModeProvider = StateProvider<bool>((_) => false);
@@ -1562,6 +1572,8 @@ class _ConnectedSession extends ConsumerWidget {
                 uacH: service.uacH,
                 uacKind: service.uacKind,
                 fillMode: ref.watch(_fillModeProvider),
+                inputPaused: ref.watch(_chatOpenProvider) ||
+                    ref.watch(_typingLockProvider),
                 onUacClick: (b, x, y) =>
                     ref.read(remoteServiceProvider).sendUacClick(b, x, y),
                 onUacApprove: () =>
@@ -1572,27 +1584,33 @@ class _ConnectedSession extends ConsumerWidget {
             ),
             Positioned(
               right: AppSpacing.lg,
-              bottom: 96,
+              bottom: AppSpacing.lg,
               child: FileTransferList(service: service),
             ),
             if (ref.watch(_chatOpenProvider))
               Positioned(
                 right: AppSpacing.lg,
-                top: AppSpacing.lg,
-                bottom: 96,
+                top: 74,
+                bottom: AppSpacing.lg,
                 child: _ChatPanel(
                   service: service,
                   onClose: () =>
                       ref.read(_chatOpenProvider.notifier).state = false,
                 ),
               ),
-            // Floating command bar along the bottom (full width, scrolls if the
-            // controls exceed the window so nothing is ever clipped).
+            // Auto-hide command bar along the TOP — reveals on hover so it never
+            // covers the remote's own taskbar at the bottom of the screen.
             Positioned(
-              left: AppSpacing.lg,
-              right: AppSpacing.lg,
-              bottom: AppSpacing.lg,
-              child: _SessionToolbar(service: service),
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _AutoHideBar(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.lg),
+                  child: _SessionToolbar(service: service),
+                ),
+              ),
             ),
           ],
         ),
@@ -1761,6 +1779,75 @@ class _ChatBubble extends StatelessWidget {
   }
 }
 
+/// Reveals [child] (the command bar) when the pointer is near the top of the
+/// screen, then auto-hides it — so the bar never permanently covers the remote
+/// desktop (its taskbar, menus, etc.).
+class _AutoHideBar extends StatefulWidget {
+  final Widget child;
+  const _AutoHideBar({required this.child});
+  @override
+  State<_AutoHideBar> createState() => _AutoHideBarState();
+}
+
+class _AutoHideBarState extends State<_AutoHideBar> {
+  bool _show = true;
+  Timer? _hideTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleHide();
+  }
+
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _show = false);
+    });
+  }
+
+  void _reveal() {
+    if (!_show) setState(() => _show = true);
+    _scheduleHide();
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 76,
+      child: Stack(
+        children: [
+          // Full-zone hover catcher (transparent to clicks) — reveals the bar
+          // when the pointer nears the top, even after it has hidden.
+          Positioned.fill(
+            child: MouseRegion(
+              opaque: false,
+              onEnter: (_) => _reveal(),
+              onHover: (_) => _reveal(),
+              child: const SizedBox.expand(),
+            ),
+          ),
+          AnimatedSlide(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            offset: _show ? Offset.zero : const Offset(0, -1.4),
+            child: Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.md),
+              child: widget.child,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Premium in-session control bar: a status/stats cluster on the left and
 /// clearly-labeled, grouped controls on the right so every action is trackable
 /// (the old bar was icon-only and ambiguous).
@@ -1889,7 +1976,8 @@ class _SessionToolbar extends ConsumerWidget {
                     label: 'Login',
                     tooltip: 'Transmit a username + password to the remote '
                         'UAC / login prompt',
-                    onPressed: () => _showTransmitCredentials(context, service),
+                    onPressed: () =>
+                        _showTransmitCredentials(context, ref, service),
                   ),
                 if (win)
                   _ToolButton(
@@ -1950,11 +2038,13 @@ class _SessionToolbar extends ConsumerWidget {
   }
 
   Future<void> _showTransmitCredentials(
-      BuildContext context, RemoteService service) async {
+      BuildContext context, WidgetRef ref, RemoteService service) async {
     final userCtrl = TextEditingController();
     final passCtrl = TextEditingController();
     void toast(String msg) => ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), duration: const Duration(seconds: 1)));
+    // Pause remote key forwarding so typing lands in the dialog fields.
+    ref.read(_typingLockProvider.notifier).state = true;
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2036,6 +2126,7 @@ class _SessionToolbar extends ConsumerWidget {
         ],
       ),
     );
+    ref.read(_typingLockProvider.notifier).state = false;
   }
 }
 

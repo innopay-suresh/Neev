@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -238,20 +240,57 @@ final recentConnectionsProvider =
 });
 
 class RecentConnectionsNotifier extends StateNotifier<List<RecentConnection>> {
-  RecentConnectionsNotifier() : super([]);
+  RecentConnectionsNotifier() : super([]) {
+    _load();
+  }
+
+  static const _key = 'recentConnections';
+
+  Future<void> _load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getStringList(_key) ?? const [];
+      state = [
+        for (final e in raw)
+          if (jsonDecode(e) case final Map m)
+            RecentConnection(
+              id: '${m['id']}',
+              name: '${m['name'] ?? m['id']}',
+              lastConnected: DateTime.tryParse('${m['t']}') ?? DateTime.now(),
+            ),
+      ];
+    } catch (_) {}
+  }
+
+  Future<void> _save() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_key, [
+        for (final c in state)
+          jsonEncode({
+            'id': c.id,
+            'name': c.name,
+            't': c.lastConnected.toIso8601String(),
+          }),
+      ]);
+    } catch (_) {}
+  }
 
   void addConnection(RecentConnection connection) {
     state = [
       connection,
       ...state.where((c) => c.id != connection.id),
     ].take(10).toList();
+    _save();
   }
 
   void removeConnection(String id) {
     state = state.where((c) => c.id != id).toList();
+    _save();
   }
 
   void clear() {
     state = [];
+    _save();
   }
 }

@@ -39,6 +39,11 @@ class RemoteViewWidget extends StatefulWidget {
   /// When true, the remote video fills the window (cover); else it's letterboxed
   /// (contain / fit).
   final bool fillMode;
+
+  /// When true, keyboard input is NOT forwarded to the remote and the video
+  /// won't steal focus — so an in-app text field (chat, transmit-login dialog)
+  /// can receive typing.
+  final bool inputPaused;
   final void Function(int button, double x, double y)? onUacClick;
   final VoidCallback? onUacApprove;
   final VoidCallback? onUacDecline;
@@ -56,6 +61,7 @@ class RemoteViewWidget extends StatefulWidget {
     this.uacH = 0,
     this.uacKind = 0,
     this.fillMode = false,
+    this.inputPaused = false,
     this.onUacClick,
     this.onUacApprove,
     this.onUacDecline,
@@ -196,6 +202,15 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   @override
   void didUpdateWidget(RemoteViewWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // When input is paused (chat / dialog opened) release the video's focus so
+    // the text field can receive typing; re-grab it when unpaused.
+    if (widget.inputPaused != oldWidget.inputPaused) {
+      if (widget.inputPaused) {
+        _focusNode.unfocus();
+      } else if (_controlEnabled) {
+        _focusNode.requestFocus();
+      }
+    }
     if (widget.remoteStream != oldWidget.remoteStream) {
       _renderer.srcObject = widget.remoteStream;
       if (widget.remoteStream != null) _startFrameWatchdog();
@@ -259,7 +274,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     // every click rebuilds the Focus subtree, and on macOS that rebuild drops
     // the MouseRegion's hover tracking — so move/hover events silently stop
     // after the first click and the remote cursor appears frozen.
-    if (!_focusNode.hasFocus) _focusNode.requestFocus();
+    if (!widget.inputPaused && !_focusNode.hasFocus) _focusNode.requestFocus();
     _activeButton = _buttonFrom(e.buttons);
     _buttonHeld = true;
     _emit(InputEvent.move(pos.dx, pos.dy));
@@ -362,6 +377,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (widget.inputPaused) return KeyEventResult.ignored;
     final usage = event.physicalKey.usbHidUsage;
     if (usage == 0) return KeyEventResult.ignored;
     // Flutter packs the USB HID *usage page* into the upper 16 bits (the
@@ -407,7 +423,8 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
           if (_controlEnabled) {
             video = Focus(
               focusNode: _focusNode,
-              autofocus: true,
+              autofocus: !widget.inputPaused,
+              canRequestFocus: !widget.inputPaused,
               onKeyEvent: _onKey,
               child: Listener(
                 // opaque so pointer down/up fire over the (non-hit-testable)
