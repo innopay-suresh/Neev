@@ -32,7 +32,11 @@ class ShortcutsMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     return PopupMenuButton<List<int>>(
       tooltip: 'Send a keyboard shortcut to the remote PC',
-      icon: const Icon(Icons.keyboard, size: 20),
+      icon: Icon(Icons.bolt_rounded,
+          size: 20, color: Colors.white.withValues(alpha: 0.72)),
+      iconSize: 20,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 40, minHeight: 36),
       position: PopupMenuPosition.under,
       onSelected: service.sendKeyCombo,
       itemBuilder: (_) => [

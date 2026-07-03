@@ -1540,6 +1540,7 @@ class _SessionToolbar extends ConsumerWidget {
                 Expanded(
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
+                    reverse: true,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1894,29 +1895,16 @@ class _ToolButtonState extends State<_ToolButton> {
           onTap: widget.onPressed,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            width: 62,
-            padding: const EdgeInsets.symmetric(vertical: 7),
+            width: 40,
+            height: 36,
             margin: const EdgeInsets.symmetric(horizontal: 2),
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(AppRadius.md),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(widget.icon, size: 20, color: fg),
-                const SizedBox(height: 4),
-                Text(
-                  widget.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.label.copyWith(
-                      color: fg,
-                      fontWeight:
-                          active ? FontWeight.w700 : FontWeight.w600),
-                ),
-              ],
-            ),
+            child: Icon(widget.icon,
+                size: 20, color: fg, semanticLabel: widget.label),
           ),
         ),
       ),
@@ -1948,22 +1936,14 @@ class _MonitorButton extends StatelessWidget {
           ),
       ],
       child: Container(
-        width: 62,
-        padding: const EdgeInsets.symmetric(vertical: 7),
+        width: 40,
+        height: 36,
         margin: const EdgeInsets.symmetric(horizontal: 2),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.monitor,
-                size: 20, color: Colors.white.withValues(alpha: 0.72)),
-            const SizedBox(height: 4),
-            Text('Monitor',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTypography.label
-                    .copyWith(color: Colors.white.withValues(alpha: 0.72))),
-          ],
-        ),
+        alignment: Alignment.center,
+        child: Icon(Icons.monitor,
+            size: 20,
+            color: Colors.white.withValues(alpha: 0.72),
+            semanticLabel: 'Switch monitor'),
       ),
     );
   }
