@@ -2478,6 +2478,24 @@ class _SessionToolbar extends ConsumerWidget {
                   onPressed: () => ref.read(_annotateProvider.notifier).state =
                       !ref.read(_annotateProvider),
                 ),
+                // Quality preset (best quality / balanced / best performance).
+                PopupMenuButton<int>(
+                  tooltip: 'Quality',
+                  position: PopupMenuPosition.under,
+                  initialValue: service.streamQuality,
+                  onSelected: service.setStreamQuality,
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 0, child: Text('Best quality')),
+                    PopupMenuItem(value: 1, child: Text('Balanced')),
+                    PopupMenuItem(value: 2, child: Text('Best performance')),
+                  ],
+                  child: const SizedBox(
+                    width: 38,
+                    height: 40,
+                    child: Icon(Icons.hd_outlined,
+                        size: 19, color: Color(0xFF5B5B60)),
+                  ),
+                ),
                 const _ToolDivider(),
                 // --- Files group ---
                 _ToolButton(
