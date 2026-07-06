@@ -214,6 +214,11 @@ class RemoteService extends ChangeNotifier {
   bool permControl = true;
   bool permClipboard = true;
   bool permFiles = true;
+  // Defaults pushed from settings — pre-fill the consent dialog + used when
+  // accepting silently (unattended / never-ask).
+  bool defaultPermControl = true;
+  bool defaultPermClipboard = true;
+  bool defaultPermFiles = true;
 
   /// Host: accept the pending incoming connection with the chosen permissions.
   Future<void> acceptConnection(
@@ -428,11 +433,13 @@ class RemoteService extends ChangeNotifier {
         // Attended: ask the host user first (AnyDesk-style). Unattended access
         // (promptOnConnect=false) accepts immediately with full permissions.
         if (promptOnConnect) {
-          permControl = permClipboard = permFiles = true;
           _pendingConsent = ConsentRequest(controllerId);
           notifyListeners();
         } else {
-          permControl = permClipboard = permFiles = true;
+          // Silent accept (unattended / never-ask) uses the default permissions.
+          permControl = defaultPermControl;
+          permClipboard = defaultPermClipboard;
+          permFiles = defaultPermFiles;
           await _startHostOffer(controllerId);
         }
         break;

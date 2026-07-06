@@ -99,8 +99,13 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     });
 
     // Attended access: prompt on incoming connections unless unattended access
-    // is enabled (then accept silently, AnyDesk-style).
-    service.promptOnConnect = !ref.watch(settingsProvider).unattendedEnabled;
+    // is enabled or the user turned prompting off (then accept silently with
+    // the default permissions), AnyDesk-style.
+    final _s = ref.watch(settingsProvider);
+    service.promptOnConnect = _s.askOnConnect && !_s.unattendedEnabled;
+    service.defaultPermControl = _s.defaultAllowControl;
+    service.defaultPermClipboard = _s.defaultAllowClipboard;
+    service.defaultPermFiles = _s.defaultAllowFiles;
 
     // Show the consent prompt when a new incoming connection is pending.
     ref.listen<RemoteService>(remoteServiceProvider, (prev, next) {
@@ -251,7 +256,12 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   // AnyDesk-style incoming-connection consent with per-session permissions.
   Future<void> _showConsentDialog(ConsentRequest req) async {
     final service = ref.read(remoteServiceProvider);
-    bool control = true, clipboard = true, files = true;
+    if (ref.read(settingsProvider).soundOnConnect) {
+      SystemSound.play(SystemSoundType.alert);
+    }
+    bool control = service.defaultPermControl;
+    bool clipboard = service.defaultPermClipboard;
+    bool files = service.defaultPermFiles;
     final accepted = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
