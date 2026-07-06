@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
+import 'dart:ui' show ImageFilter, PointMode;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -359,6 +359,9 @@ final _typingLockProvider = StateProvider<bool>((_) => false);
 
 /// Remote video view mode: false = fit (letterbox), true = fill (cover).
 final _fillModeProvider = StateProvider<bool>((_) => false);
+
+/// Whether the on-screen annotation (pen) overlay is active.
+final _annotateProvider = StateProvider<bool>((_) => false);
 
 /// Compact incoming-chat pop-up (top-right corner). Small, native-notification
 /// styling — a fixed ~300px card, not a full-width bar.
@@ -2017,7 +2020,8 @@ class _ConnectedSession extends ConsumerWidget {
                     uacKind: service.uacKind,
                     fillMode: ref.watch(_fillModeProvider),
                     inputPaused: ref.watch(_chatOpenProvider) ||
-                        ref.watch(_typingLockProvider),
+                        ref.watch(_typingLockProvider) ||
+                        ref.watch(_annotateProvider),
                     onUacClick: (b, x, y) =>
                         ref.read(remoteServiceProvider).sendUacClick(b, x, y),
                     onUacApprove: () =>
@@ -2026,6 +2030,14 @@ class _ConnectedSession extends ConsumerWidget {
                         ref.read(remoteServiceProvider).sendUacDecline(),
                   ),
                 ),
+                // Pen/annotate overlay — draw over the remote view.
+                if (ref.watch(_annotateProvider))
+                  Positioned.fill(
+                    child: _AnnotationOverlay(
+                      onClose: () =>
+                          ref.read(_annotateProvider.notifier).state = false,
+                    ),
+                  ),
                 Positioned(
                   right: AppSpacing.lg,
                   bottom: AppSpacing.lg,
@@ -2051,6 +2063,139 @@ class _ConnectedSession extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// A pen/annotation layer drawn over the remote view. Strokes are local to the
+/// viewer (a support tech circling things while talking over chat). A small
+/// floating palette lets you pick a colour, undo, clear, or exit.
+class _AnnotationOverlay extends StatefulWidget {
+  final VoidCallback onClose;
+  const _AnnotationOverlay({required this.onClose});
+
+  @override
+  State<_AnnotationOverlay> createState() => _AnnotationOverlayState();
+}
+
+class _Stroke {
+  _Stroke(this.color);
+  final Color color;
+  final List<Offset> points = [];
+}
+
+class _AnnotationOverlayState extends State<_AnnotationOverlay> {
+  final List<_Stroke> _strokes = [];
+  Color _color = const Color(0xFFFF5A4E);
+  static const _palette = [
+    Color(0xFFFF5A4E),
+    Color(0xFFFFC400),
+    Color(0xFF30C56A),
+    Color(0xFF3B82F6),
+    Color(0xFF1D1D1F),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            onPanStart: (d) => setState(
+                () => _strokes.add(_Stroke(_color)..points.add(d.localPosition))),
+            onPanUpdate: (d) =>
+                setState(() => _strokes.last.points.add(d.localPosition)),
+            child: CustomPaint(
+              painter: _AnnotationPainter(_strokes),
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+        // Palette / controls
+        Positioned(
+          top: AppSpacing.md,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1D1D1F),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: const [
+                  BoxShadow(color: Color(0x33000000), blurRadius: 16)
+                ],
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                for (final c in _palette)
+                  GestureDetector(
+                    onTap: () => setState(() => _color = c),
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      decoration: BoxDecoration(
+                        color: c,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: _color == c ? Colors.white : Colors.white24,
+                            width: _color == c ? 2.5 : 1),
+                      ),
+                    ),
+                  ),
+                _annBtn(Icons.undo, 'Undo', () {
+                  if (_strokes.isNotEmpty) setState(_strokes.removeLast);
+                }),
+                _annBtn(Icons.delete_outline, 'Clear', () {
+                  if (_strokes.isNotEmpty) setState(_strokes.clear);
+                }),
+                _annBtn(Icons.close, 'Done', widget.onClose),
+              ]),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _annBtn(IconData ic, String tip, VoidCallback onTap) => Tooltip(
+        message: tip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(ic, size: 18, color: Colors.white.withValues(alpha: 0.85)),
+          ),
+        ),
+      );
+}
+
+class _AnnotationPainter extends CustomPainter {
+  final List<_Stroke> strokes;
+  _AnnotationPainter(this.strokes);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final s in strokes) {
+      final paint = Paint()
+        ..color = s.color
+        ..strokeWidth = 3.5
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      if (s.points.length == 1) {
+        canvas.drawPoints(PointMode.points, s.points, paint);
+        continue;
+      }
+      final path = Path()..moveTo(s.points.first.dx, s.points.first.dy);
+      for (var i = 1; i < s.points.length; i++) {
+        path.lineTo(s.points[i].dx, s.points[i].dy);
+      }
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_AnnotationPainter old) => true;
 }
 
 /// In-session chat panel (dark glass), floated on the right of the video.
@@ -2322,6 +2467,16 @@ class _SessionToolbar extends ConsumerWidget {
                   active: ref.watch(_fillModeProvider),
                   onPressed: () => ref.read(_fillModeProvider.notifier).state =
                       !ref.read(_fillModeProvider),
+                ),
+                _ToolButton(
+                  icon: Icons.edit_outlined,
+                  label: 'Annotate',
+                  tooltip: ref.watch(_annotateProvider)
+                      ? 'Stop annotating'
+                      : 'Draw on the screen (annotate)',
+                  active: ref.watch(_annotateProvider),
+                  onPressed: () => ref.read(_annotateProvider.notifier).state =
+                      !ref.read(_annotateProvider),
                 ),
                 const _ToolDivider(),
                 // --- Files group ---
