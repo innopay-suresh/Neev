@@ -172,8 +172,11 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
         return _ChatSectionPage(service: service);
       case 4: // Discovery
         return _DiscoveryPage(onPick: _pickAndHome);
-      case 2: // Recent
+      case 1: // Contacts (Address Book)
+        return _AddressBookPage(onPick: _pickAndHome, favoritesOnly: false);
       case 3: // Favorites
+        return _AddressBookPage(onPick: _pickAndHome, favoritesOnly: true);
+      case 2: // Recent
         return _RecentPage(onPick: _pickAndHome);
       case 0: // Home
         return _HomeDashboard(
@@ -755,6 +758,186 @@ class _RecentPage extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 720),
           child: _RecentConnectionsCard(onPick: onPick),
         ),
+      ),
+    );
+  }
+}
+
+/// Address Book (Contacts) / Favorites — saved connections you can name, star,
+/// and one-click connect. Backed by [addressBookProvider] (persisted).
+class _AddressBookPage extends ConsumerWidget {
+  final void Function(String id) onPick;
+  final bool favoritesOnly;
+  const _AddressBookPage(
+      {required this.onPick, required this.favoritesOnly});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final all = ref.watch(addressBookProvider);
+    final entries = (favoritesOnly ? all.where((e) => e.favorite) : all)
+        .toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final notifier = ref.read(addressBookProvider.notifier);
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: _Card(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl, AppSpacing.lg, AppSpacing.lg, AppSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(children: [
+                  Icon(favoritesOnly ? Icons.star_rounded : Icons.contacts_rounded,
+                      color: AppColors.accentDark, size: 20),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text(favoritesOnly ? 'Favorites' : 'Address book',
+                      style: AppTypography.title),
+                  const Spacer(),
+                  if (!favoritesOnly)
+                    TextButton.icon(
+                      onPressed: () => _addOrEdit(context, notifier),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add contact'),
+                    ),
+                ]),
+                const SizedBox(height: AppSpacing.sm),
+                if (entries.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
+                    child: _EmptyState(
+                      icon: favoritesOnly
+                          ? Icons.star_border_rounded
+                          : Icons.person_add_alt_1_outlined,
+                      title: favoritesOnly
+                          ? 'No favorites yet'
+                          : 'No saved contacts',
+                      body: favoritesOnly
+                          ? 'Star a contact or a recent connection to keep it '
+                              'here for one-click access.'
+                          : 'Add a computer you connect to often so it\'s always '
+                              'a click away.',
+                    ),
+                  )
+                else
+                  for (final e in entries)
+                    _AddressBookRow(
+                      entry: e,
+                      onConnect: () => onPick(e.id),
+                      onToggleFavorite: () => notifier.toggleFavorite(e.id),
+                      onEdit: () => _addOrEdit(context, notifier, existing: e),
+                      onDelete: () => notifier.remove(e.id),
+                    ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addOrEdit(BuildContext context, AddressBookNotifier notifier,
+      {AddressBookEntry? existing}) async {
+    final idCtrl = TextEditingController(text: existing?.id ?? '');
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(existing == null ? 'Add contact' : 'Edit contact'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: idCtrl,
+              enabled: existing == null,
+              autofocus: existing == null,
+              decoration: const InputDecoration(
+                  labelText: 'Neev ID', hintText: 'e.g. 731 402 118'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: nameCtrl,
+              autofocus: existing != null,
+              decoration: const InputDecoration(
+                  labelText: 'Name', hintText: 'e.g. Reception PC'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      notifier.upsert(idCtrl.text, name: nameCtrl.text);
+    }
+  }
+}
+
+class _AddressBookRow extends StatelessWidget {
+  final AddressBookEntry entry;
+  final VoidCallback onConnect;
+  final VoidCallback onToggleFavorite;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  const _AddressBookRow({
+    required this.entry,
+    required this.onConnect,
+    required this.onToggleFavorite,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: entry.favorite ? 'Unfavorite' : 'Add to favorites',
+            visualDensity: VisualDensity.compact,
+            onPressed: onToggleFavorite,
+            icon: Icon(
+              entry.favorite ? Icons.star_rounded : Icons.star_border_rounded,
+              color: entry.favorite ? AppColors.accent : AppColors.textTertiary,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(entry.name, style: AppTypography.bodyStrong),
+                Text(entry.id,
+                    style: AppTypography.caption.copyWith(
+                        fontFeatures: const [FontFeature.tabularFigures()])),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Edit',
+            visualDensity: VisualDensity.compact,
+            onPressed: onEdit,
+            icon: const Icon(Icons.edit_outlined, size: 18),
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            visualDensity: VisualDensity.compact,
+            onPressed: onDelete,
+            icon: const Icon(Icons.delete_outline, size: 18),
+          ),
+          const SizedBox(width: 4),
+          FilledButton(onPressed: onConnect, child: const Text('Connect')),
+        ],
       ),
     );
   }
@@ -2065,6 +2248,22 @@ class _SessionToolbar extends ConsumerWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                // --- Favorite (add this computer to the address book) ---
+                Builder(builder: (_) {
+                  final id = service.targetId ?? '';
+                  final fav = ref.watch(addressBookProvider
+                      .select((l) => l.any((e) => e.id == id && e.favorite)));
+                  return _ToolButton(
+                    icon: fav ? Icons.star_rounded : Icons.star_border_rounded,
+                    label: 'Favorite',
+                    tooltip:
+                        fav ? 'Remove from favorites' : 'Add to favorites',
+                    active: fav,
+                    onPressed: () => ref
+                        .read(addressBookProvider.notifier)
+                        .toggleFavorite(id),
+                  );
+                }),
                 // --- Control group ---
                 _ToolButton(
                   icon: service.viewerViewOnly
