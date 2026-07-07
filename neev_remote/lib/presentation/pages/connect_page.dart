@@ -1087,7 +1087,9 @@ class _DiscoveryRowState extends State<_DiscoveryRow> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(d.name, style: AppTypography.bodyStrong),
-                Text('${d.id}   ·   ${d.ip}',
+                // Relay-discovered devices have no LAN IP — don't leave a
+                // dangling separator.
+                Text(d.ip.isEmpty ? d.id : '${d.id}   ·   ${d.ip}',
                     style: AppTypography.caption.copyWith(
                         fontFeatures: const [FontFeature.tabularFigures()])),
               ],

@@ -17,6 +17,7 @@ import 'clip_agent_bridge.dart';
 import 'discovery_model.dart';
 import 'file_store.dart';
 import 'file_transfer_service.dart';
+import 'host_name.dart' as host_name;
 import 'input_event.dart';
 import 'input_injector.dart';
 import 'keyboard_hook.dart';
@@ -315,6 +316,9 @@ class RemoteService extends ChangeNotifier {
   // when the helper isn't installed/running. [_routeToHelper] latches while a
   // button is held so a drag never splits across the two injectors.
   bool _routeToHelper = false;
+  // While set (ms on [_inputClock]), mouse moves follow button events onto the
+  // helper channel so a faster in-app move can't overtake an in-flight click.
+  int _helperMoveGraceUntilMs = 0;
 
   ViewerStatus get viewerStatus => _viewerStatus;
   bool get isViewing =>
@@ -407,6 +411,7 @@ class RemoteService extends ChangeNotifier {
     _statsTimerMaybeStop();
     _stopHostInputWatchdog();
     _routeToHelper = false;
+    _helperMoveGraceUntilMs = 0;
     PrivacyMode.set(false); // never leave the host blanked/locked
     for (final peer in _hostPeers.values) {
       await peer.close();
@@ -1133,28 +1138,51 @@ class RemoteService extends ChangeNotifier {
       // which is the reliable place for it.
       final event = InputEvent.decode(raw);
       if (event != null) {
-        _trackHeldButton(event);
         _lastInputMs = _inputClock.elapsedMilliseconds;
         _logHostInput(event);
+        // Route BEFORE tracking: _routeInput must see the pre-event held state,
+        // so the helper-vs-injector route is latched on the button-DOWN and a
+        // down and its matching up can never split across the two injectors.
         _routeInput(event);
+        _trackHeldButton(event);
       }
     }
   }
 
-  // Inject one host-side input event. Mouse MOVES always go to the fast in-app
+  // Inject one host-side input event. Hover mouse MOVES go to the fast in-app
   // injector: cursor positioning isn't integrity-blocked, and routing the
   // high-rate move stream through the SYSTEM helper (per-event desktop switch +
   // localhost hop) was stalling the cursor. Clicks/keys/wheel go through the
-  // helper when connected so they still reach elevated windows. The click/key
-  // route is only re-evaluated while nothing is held, so a drag doesn't split.
+  // helper when connected so they still reach elevated windows.
+  //
+  // Ordering between the two channels is critical: the helper path has real
+  // latency, so a move injected by the fast path can overtake a click still in
+  // flight to the helper. The OS then sees down → move(s) → (late) up and turns
+  // every click into a drag — apps/icons stick to the cursor instead of
+  // opening. So while a button is held, and for a short grace window after the
+  // last helper-routed button event, moves ride the helper channel too: the
+  // whole gesture stays on one serial, ordered pipe. The click/key route is
+  // only re-evaluated while nothing is held (the caller routes button events
+  // before tracking them), so a drag never splits across injectors.
   void _routeInput(InputEvent event) {
     if (event.kind == 'mv') {
-      _injector.inject(event);
+      final inGesture = _heldButtons.isNotEmpty ||
+          _inputClock.elapsedMilliseconds < _helperMoveGraceUntilMs;
+      if (_routeToHelper && inGesture && _uac.isConnected) {
+        _uac.sendInput(event.data);
+      } else {
+        _injector.inject(event);
+      }
       return;
     }
     if (_heldButtons.isEmpty) _routeToHelper = _uac.isConnected;
     if (_routeToHelper) {
       _uac.sendInput(event.data);
+      if (event.kind == 'btn') {
+        // Keep moves on the helper channel briefly so they can't be injected
+        // ahead of this click by the faster in-app path.
+        _helperMoveGraceUntilMs = _inputClock.elapsedMilliseconds + 250;
+      }
     } else {
       _injector.inject(event);
     }
@@ -1315,11 +1343,15 @@ class RemoteService extends ChangeNotifier {
       if (_heldButtons.isEmpty) return;
       if (_inputClock.elapsedMilliseconds - _lastInputMs < 1500) return;
       // Input went silent while a button was held — release it so the host's
-      // mouse doesn't stay stuck (fixes the minimize/maximize freeze). Route it
-      // the same way live input goes so the release reaches whichever injector
-      // is holding the button.
+      // mouse doesn't stay stuck (fixes the minimize/maximize freeze). Send the
+      // release through BOTH injectors: whichever one is holding the button
+      // releases it, and a stray up for an unpressed button is a no-op — while
+      // a release lost to a half-dead helper socket would leave the host
+      // dragging forever.
       for (final b in _heldButtons.toList()) {
-        _routeInput(InputEvent.button(b, false));
+        final up = InputEvent.button(b, false);
+        _routeInput(up);
+        if (_routeToHelper) _injector.inject(up);
       }
       _heldButtons.clear();
     });
@@ -1554,10 +1586,13 @@ class RemoteService extends ChangeNotifier {
     return '${s.substring(0, 3)}-${s.substring(3, 6)}-${s.substring(6, 9)}';
   }
 
-  /// A best-effort hostname. The platform host name is only available via
-  /// dart:io on native targets; to keep the orchestrator web-safe we derive a
-  /// label from the platform instead.
-  String _hostname() => '${_osName()}-host';
+  /// The real machine hostname (via dart:io on native targets, so Discovery
+  /// on other machines shows "DESKTOP-AB12CD" instead of a generic label);
+  /// falls back to "`<os>`-host" on web or if the lookup fails.
+  String _hostname() {
+    final name = host_name.localHostname();
+    return name.isEmpty ? '${_osName()}-host' : name;
+  }
 
   String _osName() {
     if (kIsWeb) return 'web';
