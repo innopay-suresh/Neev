@@ -309,12 +309,18 @@ class RemoteService extends ChangeNotifier {
   int _lastInputMs = 0;
   Timer? _hostInputWatchdog;
 
-  // AnyDesk/TeamViewer model: when the SYSTEM helper agent is connected, ALL
-  // input is injected by it (it runs at SYSTEM integrity, so UIPI never blocks
-  // it — it reaches elevated windows, the UAC secure desktop, and the login
-  // screen alike). Our own Medium-integrity injector is only the fallback for
-  // when the helper isn't installed/running. [_routeToHelper] latches while a
-  // button is held so a drag never splits across the two injectors.
+  // The SYSTEM helper was meant to inject ALL normal input (SYSTEM integrity →
+  // reaches UIPI-elevated windows), but its normal-desktop injection has proven
+  // unreliable in the field: the helper accepts the events yet they never land.
+  // On old builds only the button-up rode the helper — every click became an
+  // endless drag; once the whole click was routed there (r22), clicks went
+  // fully dead while in-app moves kept working. Until helper injection is
+  // debugged on a real Windows box, ALL normal input goes through the in-app
+  // injector — one serial channel, strictly ordered, demonstrably working.
+  // The helper still does what only it can: UAC secure-desktop clicks ('C'),
+  // credential typing ('T'), and Ctrl+Alt+Del ('S'). Known trade-off: clicks
+  // can't reach UIPI-elevated windows until this is re-enabled.
+  static const bool _kRouteNormalInputViaHelper = false;
   bool _routeToHelper = false;
   // While set (ms on [_inputClock]), mouse moves follow button events onto the
   // helper channel so a faster in-app move can't overtake an in-flight click.
@@ -1175,7 +1181,9 @@ class RemoteService extends ChangeNotifier {
       }
       return;
     }
-    if (_heldButtons.isEmpty) _routeToHelper = _uac.isConnected;
+    if (_heldButtons.isEmpty) {
+      _routeToHelper = _kRouteNormalInputViaHelper && _uac.isConnected;
+    }
     if (_routeToHelper) {
       _uac.sendInput(event.data);
       if (event.kind == 'btn') {

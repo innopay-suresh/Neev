@@ -67,11 +67,13 @@ class InputInjector {
   private static var retained: (FlutterMethodChannel, InputInjector)?
 
   /// Returns true only when accessibility is explicitly granted.
-  /// Cached after first check to avoid syscalls on every event.
+  /// Only a POSITIVE result is cached: caching "denied" bricked input for the
+  /// whole session when the user granted permission after the app launched —
+  /// every event kept hitting the stale false until an app restart.
   private func checkAccessibility() -> Bool {
-    if let cached = hasAccessibility { return cached }
+    if hasAccessibility == true { return true }
     let granted = AXIsProcessTrusted()
-    hasAccessibility = granted
+    if granted { hasAccessibility = true }
     return granted
   }
 
