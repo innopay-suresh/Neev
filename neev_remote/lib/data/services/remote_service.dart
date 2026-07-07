@@ -663,11 +663,42 @@ class RemoteService extends ChangeNotifier {
   /// doesn't lag); buttons, wheel and keys stay on the reliable channel so they
   /// are never lost or reordered.
   void sendViewerInput(InputEvent event) {
+    // Track which keys the host currently believes are held so we can force a
+    // release if our window loses focus (see [releaseHeldViewerKeys]). Both
+    // input paths — the video's Focus handler and the Windows keyboard hook —
+    // funnel through here, so this is the one place that sees every key.
+    if (event.kind == 'key') {
+      final u = event.data['u'] as int?;
+      if (u != null) {
+        if (event.data['d'] == true) {
+          _heldViewerKeys.add(u);
+        } else {
+          _heldViewerKeys.remove(u);
+        }
+      }
+    }
     if (event.kind == 'mv') {
       _viewerPeer?.sendCursor(event.encode());
     } else {
       _viewerPeer?.sendData(event.encode());
     }
+  }
+
+  // Keys the host currently believes are pressed (by HID usage). Used to release
+  // a modifier whose key-up was swallowed by a focus change.
+  final Set<int> _heldViewerKeys = {};
+
+  /// Releases every key the host currently thinks is held. Called when the
+  /// viewer window loses focus / input is paused, so a modifier (Alt/Ctrl/Shift/
+  /// ⌘) whose key-up never arrived can't stay stuck on the host — a stuck Alt
+  /// turns every double-click into Alt+double-click, which opens Properties
+  /// instead of the file.
+  void releaseHeldViewerKeys() {
+    if (_heldViewerKeys.isEmpty) return;
+    for (final u in _heldViewerKeys.toList()) {
+      _viewerPeer?.sendData(InputEvent.key(u, false).encode());
+    }
+    _heldViewerKeys.clear();
   }
 
   /// Sends a system key combo to the host by explicit HID usage codes (e.g.

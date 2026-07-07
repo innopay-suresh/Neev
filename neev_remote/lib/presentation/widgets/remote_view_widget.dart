@@ -26,6 +26,12 @@ class RemoteViewWidget extends StatefulWidget {
   final String? hostOs;
   final void Function(InputEvent event)? onInput;
 
+  /// Called when the remote view loses keyboard focus (click away, Alt+Tab,
+  /// dialog opened, window hidden). The viewer releases any keys it still
+  /// believes are held so a modifier whose key-up was swallowed can't stay
+  /// stuck on the host.
+  final VoidCallback? onReleaseModifiers;
+
   /// UAC overlay: when the host's UAC secure desktop is active, [uacFrame] is a
   /// PNG of it (the normal video goes black during UAC). Taps are forwarded via
   /// [onUacClick] (normalized 0..1, button 0=left).
@@ -55,6 +61,7 @@ class RemoteViewWidget extends StatefulWidget {
     this.viewOnly = false,
     this.hostOs,
     this.onInput,
+    this.onReleaseModifiers,
     this.uacActive = false,
     this.uacFrame,
     this.uacW = 0,
@@ -101,8 +108,20 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Whenever the remote view loses keyboard focus, release any keys the host
+    // still thinks are held (a modifier whose key-up was swallowed by the focus
+    // change would otherwise stick — a stuck Alt makes every double-click open
+    // Properties instead of the file).
+    _focusNode.addListener(_onFocusChange);
     _initRenderer();
     if (widget.uacFrame != null) _measureUacFrame(widget.uacFrame!);
+  }
+
+  bool _hadFocus = false;
+  void _onFocusChange() {
+    final has = _focusNode.hasFocus;
+    if (_hadFocus && !has) widget.onReleaseModifiers?.call();
+    _hadFocus = has;
   }
 
   // Decode just enough to read the frame's width/height. Cheap at UAC frame
@@ -176,10 +195,12 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
         // window can interrupt the pointer stream with NO PointerUp/Cancel, so
         // a held button would stay stuck-down on the host and freeze its mouse.
         _releaseHeld();
+        widget.onReleaseModifiers?.call();
         _renderer.srcObject = null;
         break;
       case AppLifecycleState.inactive:
         _releaseHeld();
+        widget.onReleaseModifiers?.call();
         break;
       case AppLifecycleState.resumed:
         _renderer.srcObject = widget.remoteStream;
@@ -226,6 +247,7 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     WidgetsBinding.instance.removeObserver(this);
     _renderer.srcObject = null;
     _renderer.dispose();
+    _focusNode.removeListener(_onFocusChange);
     _focusNode.dispose();
     super.dispose();
   }

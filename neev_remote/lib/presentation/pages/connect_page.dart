@@ -2024,6 +2024,9 @@ class _ConnectedSession extends ConsumerWidget {
                         : (event) => ref
                             .read(remoteServiceProvider)
                             .sendViewerInput(event),
+                    onReleaseModifiers: () => ref
+                        .read(remoteServiceProvider)
+                        .releaseHeldViewerKeys(),
                     uacActive: service.uacActive,
                     uacFrame: service.uacFrame,
                     uacW: service.uacW,
