@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/app_constants.dart';
 import 'auth_service.dart';
 import 'clip_agent_bridge.dart';
+import 'clipboard_writer.dart';
 import 'discovery_model.dart';
 import 'file_store.dart';
 import 'file_transfer_service.dart';
@@ -130,9 +131,13 @@ class RemoteService extends ChangeNotifier {
     try {
       _clipFileSuppress = 3;
       _lastClipFiles = [path];
-      // Prefer the user-context agent (works when the host is SYSTEM); fall back
-      // to the in-process clipboard (works when the host is attended).
-      final ok = await _clipAgent.writeFiles([path]);
+      // Write with an explicit COPY drop-effect so Ctrl+V copies (not moves) the
+      // file — otherwise the mirrored file vanishes from its folder on paste.
+      //  1. SYSTEM host → the user-context clip agent (writes COPY).
+      //  2. Attended Windows → our runner's native writer (writes COPY).
+      //  3. Anything else (macOS/Linux) → Pasteboard; no move semantics there.
+      final ok = await _clipAgent.writeFiles([path]) ||
+          await ClipboardWriter.writeFilesCopy([path]);
       if (!ok) await Pasteboard.writeFiles([path]);
     } catch (_) {}
   }
@@ -322,6 +327,12 @@ class RemoteService extends ChangeNotifier {
   // can't reach UIPI-elevated windows until this is re-enabled.
   static const bool _kRouteNormalInputViaHelper = false;
   bool _routeToHelper = false;
+  // True while THIS host is showing a secure desktop (UAC / sign-in / lock /
+  // switch-user). Only the SYSTEM helper can inject into Winlogon, so input is
+  // forced through it while this is set — independent of the flag above, which
+  // only governs normal-desktop (elevated-window) routing. Set from the helper's
+  // onActive/onGone in [_setupUacBridge].
+  bool _hostSecureActive = false;
   // While set (ms on [_inputClock]), mouse moves follow button events onto the
   // helper channel so a faster in-app move can't overtake an in-flight click.
   int _helperMoveGraceUntilMs = 0;
@@ -418,6 +429,7 @@ class RemoteService extends ChangeNotifier {
     _stopHostInputWatchdog();
     _routeToHelper = false;
     _helperMoveGraceUntilMs = 0;
+    _hostSecureActive = false;
     PrivacyMode.set(false); // never leave the host blanked/locked
     for (final peer in _hostPeers.values) {
       await peer.close();
@@ -1171,6 +1183,15 @@ class RemoteService extends ChangeNotifier {
   // only re-evaluated while nothing is held (the caller routes button events
   // before tracking them), so a drag never splits across injectors.
   void _routeInput(InputEvent event) {
+    // Secure desktop up (UAC / sign-in / lock / switch-user): ONLY the SYSTEM
+    // helper can inject into Winlogon, so force every event — moves included —
+    // through it while it's active and connected. Without this, keyboard/clicks
+    // on the sign-in or switch-user screen silently do nothing (the in-app
+    // injector can't reach the secure desktop).
+    if (_hostSecureActive && _uac.isConnected) {
+      _uac.sendInput(event.data);
+      return;
+    }
     if (event.kind == 'mv') {
       final inGesture = _heldButtons.isNotEmpty ||
           _inputClock.elapsedMilliseconds < _helperMoveGraceUntilMs;
@@ -1301,10 +1322,18 @@ class RemoteService extends ChangeNotifier {
 
   void _setupUacBridge() {
     if (!_uac.isSupported) return;
-    _uac.onActive = (w, h, kind) => _broadcastToPeers(
-        jsonEncode({'k': 'uac', 't': 'active', 'w': w, 'h': h, 'kind': kind}));
+    _uac.onActive = (w, h, kind) {
+      // Host is now on the secure desktop → route input through the helper
+      // (the only injector that reaches Winlogon).
+      _hostSecureActive = true;
+      _broadcastToPeers(
+          jsonEncode({'k': 'uac', 't': 'active', 'w': w, 'h': h, 'kind': kind}));
+    };
     _uac.onFrame = _broadcastUacFrame;
-    _uac.onGone = () => _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
+    _uac.onGone = () {
+      _hostSecureActive = false;
+      _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
+    };
     _uac.start();
   }
 
