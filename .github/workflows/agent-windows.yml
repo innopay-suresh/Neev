@@ -1,0 +1,54 @@
+name: Build Go Host Agent (Windows)
+
+# Phase 0 of the SYSTEM-service transport work: prove the existing Go/pion host
+# (agent/) builds cleanly on Windows with CGO + the bundled static libvpx. This
+# is ISOLATED from flutter.yml — it does not touch the shipping Flutter app.
+on:
+  push:
+    branches: [fix/remote-input-clicks-keyboard, main]
+    paths:
+      - 'agent/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/agent-windows.yml'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+
+      - name: Install MSYS2 (mingw-w64 gcc for CGO)
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          install: mingw-w64-x86_64-gcc
+
+      - name: Build Go host (CGO + bundled libvpx)
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          $gcc = Join-Path "${{ steps.msys2.outputs.msys2-location }}" "mingw64\bin\gcc.exe"
+          Write-Host "Using CC = $gcc"
+          if (!(Test-Path $gcc)) { throw "gcc not found at $gcc" }
+          $env:CC = $gcc
+          go version
+          go build -v -o neev-host.exe ./agent
+          Write-Host "Built neev-host.exe:"
+          Get-Item neev-host.exe | Select-Object Name,Length
+
+      - name: Upload host binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: neev-host-windows
+          path: neev-host.exe
+          if-no-files-found: error
