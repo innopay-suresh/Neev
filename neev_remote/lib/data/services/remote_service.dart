@@ -834,11 +834,14 @@ class RemoteService extends ChangeNotifier {
     }
     if (_reconnectTimer?.isActive ?? false) return;
     _reconnectTries++;
-    if (_reconnectTries > 60) {
-      autoReconnect = false; // give up after ~5 min
+    if (_reconnectTries > 90) {
+      autoReconnect = false; // give up after a few minutes
       return;
     }
-    _reconnectTimer = Timer(const Duration(seconds: 5), () async {
+    // Fast retries first (snappy user-switch / brief-drop recovery), then back
+    // off so a longer outage (e.g. a remote reboot) is still ridden out.
+    final delay = _reconnectTries <= 15 ? 2 : 5;
+    _reconnectTimer = Timer(Duration(seconds: delay), () async {
       if (!autoReconnect || _viewerStatus == ViewerStatus.connected) return;
       try {
         await connectToHost(
@@ -1056,6 +1059,14 @@ class RemoteService extends ChangeNotifier {
     peer.onRemoteStream = (stream) {
       _remoteStream = stream;
       _viewerStatus = ViewerStatus.connected;
+      // Once a session is actually up, keep it alive across unexpected host
+      // drops — most importantly a user switch, where the SYSTEM service kills
+      // and relaunches the host in the new session under the SAME machine id.
+      // Re-dialing that id reconnects into the new user's desktop (brief drop,
+      // then continues). Enabled only after a successful connect, so a bad
+      // password never retry-loops. Reset the retry budget on each success.
+      autoReconnect = true;
+      _reconnectTries = 0;
       _startStatsTimer();
       _ensureClipboardSync();
       // Ask the host to apply our chosen quality preset once streaming starts.

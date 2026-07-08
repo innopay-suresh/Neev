@@ -76,12 +76,15 @@ moves to **Working Features** after it is confirmed working on real hardware.
   the helper now broadcasts frames to ALL connected pipe clients
   (`neev_helper.cpp`: `g_client` → `g_clients` + per-client reader threads), so
   whichever host the viewer watches gets the overlay. No Flutter/app change.
-- **KP-2 — Full disconnect on user switch.** The service does
-  `TerminateProcess(host)` + relaunch on session change (log:
-  `active session X -> Y; relaunching host`); the transport lives in that host,
-  so it dies. Permanent fix = LD-1 (transport in service). Chosen approach:
-  PoC first (Go/pion transport in service + swappable capture worker + one live
-  frame to the viewer surviving a session switch), then parity.
+- **KP-2 — Full disconnect on user switch. FIX IMPLEMENTED 2026-07-08 (pending
+  hardware verify).** The service does `TerminateProcess(host)` + relaunch on
+  session change (log: `active session X -> Y; relaunching host`); the transport
+  lives in that host, so it dies. Per LD-1 (revised: no Go rewrite), fixed in
+  Dart: the viewer now enables auto-reconnect after a successful connect and
+  re-dials the SAME machine-id when the peer drops (fast 2 s retries, then 5 s).
+  The relaunched host re-registers the machine-id, so the viewer reconnects into
+  the new user's desktop. Result: brief ~2-5 s drop, NOT seamless (true seamless
+  would need the native service-transport, deliberately not done).
 - **KP-3 — Clipboard files on-paste (delayed render) is v1, unverified on
   hardware.** Compiles; paste correctness / large / multi-file / timeout need
   real-Windows testing before it becomes a Working Feature.
@@ -90,6 +93,10 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-08 — KP-2 fix: viewer auto-reconnect across user switch.**
+  `remote_service.dart`: enable `autoReconnect` on successful connect (was
+  reboot-only) + faster initial retries. Re-dials the same machine-id when the
+  host is relaunched by the service on session change. Dart-only, no Go.
 - **2026-07-08 — KP-1 fix: helper multi-client broadcast.** `neev_helper.cpp`
   pipe server now accepts multiple hosts and broadcasts secure-desktop frames to
   all of them (per-client reader threads). Restores UAC-on-viewer regardless of
