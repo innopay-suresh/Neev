@@ -113,6 +113,10 @@ class AppSettings {
   final bool defaultAllowClipboard; // default: share the clipboard
   final bool defaultAllowFiles; // default: allow file transfer
   final bool lockOnSessionEnd; // lock this device when the last viewer leaves
+  // Master on/off for clipboard mirroring (text + images synced on copy; files
+  // announced on copy, transferred on paste). Off = no clipboard crosses the
+  // session in either direction.
+  final bool clipboardSync;
 
   const AppSettings({
     this.relayUrl = '',
@@ -131,6 +135,7 @@ class AppSettings {
     this.defaultAllowClipboard = true,
     this.defaultAllowFiles = true,
     this.lockOnSessionEnd = false,
+    this.clipboardSync = true,
   });
 
   bool get unattendedEnabled => unattendedPassword.isNotEmpty;
@@ -149,6 +154,7 @@ class AppSettings {
     bool? defaultAllowClipboard,
     bool? defaultAllowFiles,
     bool? lockOnSessionEnd,
+    bool? clipboardSync,
   }) {
     return AppSettings(
       relayUrl: relayUrl ?? this.relayUrl,
@@ -165,6 +171,7 @@ class AppSettings {
           defaultAllowClipboard ?? this.defaultAllowClipboard,
       defaultAllowFiles: defaultAllowFiles ?? this.defaultAllowFiles,
       lockOnSessionEnd: lockOnSessionEnd ?? this.lockOnSessionEnd,
+      clipboardSync: clipboardSync ?? this.clipboardSync,
     );
   }
 }
@@ -191,6 +198,7 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   static const _kPermClip = 'defaultAllowClipboard';
   static const _kPermFiles = 'defaultAllowFiles';
   static const _kLockEnd = 'lockOnSessionEnd';
+  static const _kClipboardSync = 'clipboardSync';
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -207,6 +215,7 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
       defaultAllowClipboard: prefs.getBool(_kPermClip),
       defaultAllowFiles: prefs.getBool(_kPermFiles),
       lockOnSessionEnd: prefs.getBool(_kLockEnd),
+      clipboardSync: prefs.getBool(_kClipboardSync),
     );
   }
 
@@ -224,10 +233,16 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     await prefs.setBool(_kPermClip, state.defaultAllowClipboard);
     await prefs.setBool(_kPermFiles, state.defaultAllowFiles);
     await prefs.setBool(_kLockEnd, state.lockOnSessionEnd);
+    await prefs.setBool(_kClipboardSync, state.clipboardSync);
   }
 
   void setLockOnSessionEnd(bool v) {
     state = state.copyWith(lockOnSessionEnd: v);
+    _save();
+  }
+
+  void setClipboardSync(bool v) {
+    state = state.copyWith(clipboardSync: v);
     _save();
   }
 

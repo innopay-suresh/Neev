@@ -227,6 +227,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       .read(settingsProvider.notifier)
                       .setLockOnSessionEnd(v),
                 ),
+                const Divider(),
+                _buildToggle(
+                  label: 'Clipboard sync',
+                  subtitle:
+                      'Share copied text, images & files with the other side. '
+                      'Copying never pastes on its own — press Ctrl+V to paste.',
+                  value: settings.clipboardSync,
+                  onChanged: (v) =>
+                      ref.read(settingsProvider.notifier).setClipboardSync(v),
+                ),
               ]),
     ];
   }

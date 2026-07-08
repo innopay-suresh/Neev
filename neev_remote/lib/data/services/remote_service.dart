@@ -128,6 +128,7 @@ class RemoteService extends ChangeNotifier {
   // A clipboard file finished arriving: put it on THIS machine's clipboard so
   // Ctrl+V pastes the real file. Suppress our own poller so we don't echo it.
   Future<void> _onClipboardFileReceived(String path) async {
+    if (!clipboardSyncEnabled) return;
     try {
       _clipFileSuppress = 3;
       _lastClipFiles = [path];
@@ -229,6 +230,11 @@ class RemoteService extends ChangeNotifier {
   bool defaultPermControl = true;
   bool defaultPermClipboard = true;
   bool defaultPermFiles = true;
+
+  /// Master user toggle (Settings) for clipboard mirroring. When false, nothing
+  /// is polled from the local clipboard and nothing incoming is written to it —
+  /// a hard off switch in both directions. Pushed from [AppSettings.clipboardSync].
+  bool clipboardSyncEnabled = true;
 
   /// Host: accept the pending incoming connection with the chosen permissions.
   Future<void> acceptConnection(
@@ -1095,6 +1101,8 @@ class RemoteService extends ChangeNotifier {
     if (m == null) return;
 
     if (m['k'] == 'clip') {
+      // Master off switch: ignore incoming clipboard when the user disabled sync.
+      if (!clipboardSyncEnabled) return;
       if (m['img'] == 1) {
         _recvClipImage(m);
         return;
@@ -1462,6 +1470,8 @@ class RemoteService extends ChangeNotifier {
         _stopClipboardSync();
         return;
       }
+      // Master off switch: don't read the local clipboard at all when disabled.
+      if (!clipboardSyncEnabled) return;
       await _pollClipText();
       _clipTick++;
       if (_clipTick.isEven) await _pollClipImage(); // images ~every 1.2s
