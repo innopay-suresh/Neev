@@ -126,12 +126,26 @@ moves to **Working Features** after it is confirmed working on real hardware.
   (real DXGI capture + libvpx encode → IPC frames; exits on ErrAccessDenied so
   the service respawns it in the new session on a switch). `main.go` dispatches
   `--transport` / `--capture-worker`; default path unchanged.
-  **M3 NEXT:** transport gets the WebRTC peer + signaling (reuse `network.Client`
-  + a VP8 `TrackLocalStaticSample`, WriteSample per worker frame, RTCP PLI →
-  KindKeyframeReq). Then wire `neev_helper` to launch the transport ONCE
-  (persistent) + swap the worker per session. M4: prove one live frame surviving
-  a switch on hardware. Machine-id/password for the transport comes from the
-  helper's existing creds (TCP 47921).
+  **M3 DONE 2026-07-08 (CI green):** `agent/session/transport.go` — transport
+  registers (network.Client + FetchICEServers), and per viewer connect creates a
+  network.NewPeer (RoleAgent) with its own VP8 rtp.Packetizer; worker frames are
+  packetized onto every viewer track with a CONTINUOUS RTP seq/timestamp (so a
+  worker swap = brief freeze, not disconnect); viewer PLI/FIR → KindKeyframeReq
+  to the worker. **M4 NEXT:** neev_helper launches the transport ONCE in session
+  0 (survives switches; networking-only, no desktop) + the capture worker per
+  active session via CreateProcessAsUser (swap on switch), behind an opt-in
+  `HKLM\SOFTWARE\NeevRemote\TransportMode` flag so default behavior is unchanged.
+  Then prove one live frame surviving a switch on hardware.
+
+## PROGRAM PLAN (user-approved 2026-07-08, in priority order)
+
+1. **Finish transport (M3✓ → M4)** — zero-drop switch proven on hardware.
+2. **Merge branch → main** — consolidate all fixes/features into mainline.
+3. **Flutter UI/UX polish pass** — connect screen, toolbar, settings, file/
+   clipboard/chat, visual consistency.
+4. **Phase 2 cutover** — Flutter becomes viewer/control-only over the Go backend;
+   all features unified. Deliberate, user-approved switchover.
+Guardrail: shipping Flutter host (r30) stays default + untouched through 1–3.
 - **2026-07-08 — Issue: host "app closes, doesn't return" on user switch — root
   cause = DUAL HOST.** Helper log (17:55:39 switch) proved the service relaunches
   the host fine in the new session AND that elevated input works (`inject-fwd:
