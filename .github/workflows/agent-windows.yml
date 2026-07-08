@@ -44,6 +44,8 @@ jobs:
           go version
           # The checked-in go.sum is incomplete — populate module hashes first.
           go mod tidy
+          # Compile every agent package (incl. new ipc/ + session/), then the exe.
+          go build -v ./agent/...
           go build -v -o neev-host.exe ./agent
           Write-Host "Built neev-host.exe:"
           Get-Item neev-host.exe | Select-Object Name,Length

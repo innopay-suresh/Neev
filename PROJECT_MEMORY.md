@@ -103,6 +103,23 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-08 — DECISION: build industry-standard transport-in-SYSTEM-service
+  (reverses "no Go").** To compete with AnyDesk/TeamViewer (zero-drop user
+  switch, always-on unattended), the transport must live in a persistent
+  LocalSystem service with capture as a swappable per-session worker. Survey of
+  `agent/` (Go/pion) found ~80% already exists: full pion WebRTC host, signaling
+  (id+password, reconnect, mTLS), DXGI+GDI capture, VP8 encode w/ ABR, input,
+  clipboard. Gap = service/session layer, most of which `neev_helper.cpp` has
+  (WTS session follow, CreateProcessAsUser). Plan: combine the two halves.
+  Phase 0 PoC milestones: (1) Go host builds in CI ✓, (2) split Go into
+  persistent `--transport` + per-session `--capture-worker` over local IPC,
+  (3) neev_helper launches transport once + swaps worker on session change,
+  (4) prove one live frame surviving a user switch. Guardrail: shipping Flutter
+  host is untouched and stays default until parity + user-approved cutover.
+  **M1 DONE 2026-07-08:** isolated `.github/workflows/agent-windows.yml` builds
+  the Go host on Windows (CGO + bundled `agent/encode/windows_lib/lib/libvpx.a`;
+  mingw gcc path resolved dynamically). The old build.yml failure was a
+  misconfigured workflow (pkg-config for ffmpeg/x264 the agent never uses).
 - **2026-07-08 — Issue: host "app closes, doesn't return" on user switch — root
   cause = DUAL HOST.** Helper log (17:55:39 switch) proved the service relaunches
   the host fine in the new session AND that elevated input works (`inject-fwd:

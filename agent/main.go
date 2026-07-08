@@ -17,11 +17,38 @@ import (
 	"github.com/neev/remote-agent/agent/bootstrap"
 	"github.com/neev/remote-agent/agent/capture"
 	"github.com/neev/remote-agent/agent/core"
+	"github.com/neev/remote-agent/agent/session"
 )
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+	// Phase 0 transport split (opt-in via flags; default = existing all-in-one
+	// host, so current behavior is unchanged):
+	//   --transport       persistent process that owns the WebRTC connection
+	//   --capture-worker  per-session process that captures + streams frames
+	if mode := parseMode(); mode != "" {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+			<-quit
+			cancel()
+		}()
+		var err error
+		switch mode {
+		case "transport":
+			err = session.RunTransport(ctx, 0)
+		case "capture-worker":
+			err = session.RunCaptureWorker(ctx, 0)
+		}
+		if err != nil && err != context.Canceled {
+			log.Fatal().Err(err).Str("mode", mode).Msg("session process exited")
+		}
+		return
+	}
 
 	bootstrapCfg, err := bootstrap.Load()
 	if err != nil {
@@ -89,6 +116,19 @@ func main() {
 	log.Info().Msg("shutting down…")
 	cancel()
 	time.Sleep(500 * time.Millisecond)
+}
+
+// parseMode returns "transport", "capture-worker", or "" (default all-in-one).
+func parseMode() string {
+	for _, a := range os.Args[1:] {
+		switch a {
+		case "--transport":
+			return "transport"
+		case "--capture-worker":
+			return "capture-worker"
+		}
+	}
+	return ""
 }
 
 func applyBootstrapEnv(cfg bootstrap.Config) {
