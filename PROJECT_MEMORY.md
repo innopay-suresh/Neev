@@ -52,6 +52,16 @@ moves to **Working Features** after it is confirmed working on real hardware.
 - **LD-4 — Clipboard: announce-on-copy → deliver-on-paste for files** (no bytes on
   copy). Requires native delayed-render (Windows COM `IDataObject`), not pure
   Dart. Text/images sync-on-copy, paste with Ctrl+V. Master on/off toggle exists.
+- **LD-5 — Input injection must run at SYSTEM/elevated integrity or it cannot
+  type into elevated windows (UIPI).** A Medium-integrity injector is silently
+  blocked from High-IL (admin) windows. Honored by routing input through the
+  SYSTEM helper agent whenever the host's foreground window is elevated (helper
+  detects it via `IsForegroundElevated`; app sets `_hostElevatedActive`).
+- **LD-6 — For TRUE seamless survival of a user switch, the transport must live
+  in the SYSTEM service and follow the new session id.** Not currently done
+  (transport is in the user-session Flutter host — see LD-1). Until/unless that
+  native re-architecture happens, user switches are handled by viewer
+  auto-reconnect (brief drop, not seamless).
 
 ---
 
@@ -93,6 +103,18 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-08 — Issue: can't type in elevated windows (UIPI) — FIX (native +
+  Dart).** Helper `neev_helper.cpp` now detects an elevated foreground window
+  (`IsForegroundElevated`, `TokenElevation`) and sends state msg `'e'` (1/0) to
+  the app. `remote_service.dart` sets `_hostElevatedActive` and routes ALL input
+  through the SYSTEM helper while elevated (or on secure desktop), so admin
+  windows receive input. Normal windows keep the fast in-app injector. See LD-5.
+- **2026-07-08 — Issue: user switch disconnected FOREVER on r28 — FIX (Dart).**
+  Root cause: the viewer's WebRTC peer entered ICE `disconnected` (not `failed`)
+  when the host was killed on session change, and the reconnect only triggered
+  on `failed`/`closed` → stuck. Now a 3 s grace on `disconnected` then treat as
+  lost → the existing auto-reconnect re-dials the machine-id. Still brief-drop,
+  not seamless (LD-6).
 - **2026-07-08 — KP-2 fix: viewer auto-reconnect across user switch.**
   `remote_service.dart`: enable `autoReconnect` on successful connect (was
   reboot-only) + faster initial retries. Re-dials the same machine-id when the

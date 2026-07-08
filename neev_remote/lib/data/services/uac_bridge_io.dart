@@ -33,6 +33,7 @@ class UacBridge {
   static const int _kCreds = 0x6D; // 'm' agent->us: id\npassword reply
   static const int _kType = 0x54; // 'T' us->agent: type text into focused field
   static const int _kSas = 0x53; // 'S' us->agent: send Ctrl+Alt+Del (SAS)
+  static const int _kElevated = 0x65; // 'e' agent->us: foreground elevated 1/0
 
   Socket? _sock;
   Uint8List _pending = Uint8List(0);
@@ -50,6 +51,11 @@ class UacBridge {
 
   /// The UAC prompt closed.
   void Function()? onGone;
+
+  /// The host's foreground window became (or stopped being) an elevated/High-IL
+  /// window. While true, the app must route input through this SYSTEM agent —
+  /// the Medium-integrity in-app injector is UIPI-blocked from elevated windows.
+  void Function(bool elevated)? onElevated;
 
   bool get isSupported => !kIsWeb && Platform.isWindows;
   bool get isConnected => _sock != null;
@@ -132,6 +138,9 @@ class UacBridge {
         break;
       case _kGone:
         onGone?.call();
+        break;
+      case _kElevated:
+        if (payload.isNotEmpty) onElevated?.call(payload[0] != 0);
         break;
       case _kCreds:
         final s = utf8.decode(payload, allowMalformed: true);

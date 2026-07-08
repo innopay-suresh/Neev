@@ -6,6 +6,7 @@ class UacBridge {
   void Function(int w, int h, int kind)? onActive;
   void Function(Uint8List png)? onFrame;
   void Function()? onGone;
+  void Function(bool elevated)? onElevated;
 
   bool get isSupported => false;
   bool get isConnected => false;

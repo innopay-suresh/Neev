@@ -1502,6 +1502,33 @@ static int DetectSecureKind() {
   return kind;
 }
 
+// True when the current foreground window belongs to an ELEVATED (High-IL)
+// process. Our own Medium-integrity in-app injector is UIPI-blocked from such
+// windows, so when this flips true the app routes input through this SYSTEM
+// agent instead (which UIPI never blocks). Runs as SYSTEM on winsta0\default,
+// so GetForegroundWindow sees the user's foreground window.
+static bool IsForegroundElevated() {
+  HWND fg = GetForegroundWindow();
+  if (!fg) return false;
+  DWORD pid = 0;
+  GetWindowThreadProcessId(fg, &pid);
+  if (!pid) return false;
+  HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!proc) return false;
+  HANDLE tok = nullptr;
+  bool elevated = false;
+  if (OpenProcessToken(proc, TOKEN_QUERY, &tok)) {
+    TOKEN_ELEVATION el = {0};
+    DWORD sz = 0;
+    if (GetTokenInformation(tok, TokenElevation, &el, sizeof(el), &sz)) {
+      elevated = el.TokenIsElevated != 0;
+    }
+    CloseHandle(tok);
+  }
+  CloseHandle(proc);
+  return elevated;
+}
+
 static int RunAgent() {
   MakeDpiAware();
   EnsureMachineId();  // machine-wide id exists before any host asks for it
@@ -1518,6 +1545,7 @@ static int RunAgent() {
   bool wasSecure = false;
   int lastSecureKind = -1;
   int frameTick = 0;
+  bool wasElevated = false;  // last-sent foreground-elevation state
   for (;;) {
     std::wstring name = L"(unknown)";
     HDESK d = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
@@ -1573,6 +1601,17 @@ static int RunAgent() {
       }
       wasSecure = false;
       lastSecureKind = -1;
+      // On the normal desktop, track whether the foreground window is elevated
+      // and tell the app on change (msg 'e', payload 1=elevated / 0=not) so it
+      // routes input through this SYSTEM agent while an admin window is focused.
+      bool elev = IsForegroundElevated();
+      if (elev != wasElevated) {
+        BYTE b = elev ? 1 : 0;
+        PipeSend(0x65 /* 'e' */, &b, 1);
+        wasElevated = elev;
+        Log(L"agent", L"pipe: foreground elevated -> %ls",
+            elev ? L"YES (route input via SYSTEM)" : L"no");
+      }
     }
     Sleep(400);
   }

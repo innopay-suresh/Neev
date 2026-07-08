@@ -304,6 +304,9 @@ class RemoteService extends ChangeNotifier {
   bool autoReconnect = false;
   Timer? _reconnectTimer;
   int _reconnectTries = 0;
+  // Grace timer for the ICE 'disconnected' state before we declare the peer lost
+  // (a killed host on user-switch shows as 'disconnected', not 'failed').
+  Timer? _disconnectGrace;
 
   /// Host monitors available to switch between (viewer side; empty if the host
   /// has a single monitor). Each entry: {'id':..., 'n': name}.
@@ -358,6 +361,11 @@ class RemoteService extends ChangeNotifier {
   // only governs normal-desktop (elevated-window) routing. Set from the helper's
   // onActive/onGone in [_setupUacBridge].
   bool _hostSecureActive = false;
+  // True while the host's foreground window is an ELEVATED (High-IL) window.
+  // The Medium-integrity in-app injector is UIPI-blocked from such windows, so
+  // input is force-routed through the SYSTEM helper agent while this is set.
+  // Driven by the helper's onElevated (see [_setupUacBridge]).
+  bool _hostElevatedActive = false;
   // While set (ms on [_inputClock]), mouse moves follow button events onto the
   // helper channel so a faster in-app move can't overtake an in-flight click.
   int _helperMoveGraceUntilMs = 0;
@@ -455,6 +463,7 @@ class RemoteService extends ChangeNotifier {
     _routeToHelper = false;
     _helperMoveGraceUntilMs = 0;
     _hostSecureActive = false;
+    _hostElevatedActive = false;
     PrivacyMode.set(false); // never leave the host blanked/locked
     for (final peer in _hostPeers.values) {
       await peer.close();
@@ -747,6 +756,8 @@ class RemoteService extends ChangeNotifier {
       autoReconnect = false;
       _reconnectTimer?.cancel();
     }
+    _disconnectGrace?.cancel();
+    _disconnectGrace = null;
     if (keyboardCapture) {
       keyboardCapture = false;
       _keyHook.setCapture(false);
@@ -825,6 +836,17 @@ class RemoteService extends ChangeNotifier {
   }
 
   String _two(int n) => n.toString().padLeft(2, '0');
+
+  // The viewer's peer dropped (host killed / network lost). Mark failed and
+  // start re-dialing the same machine-id. Idempotent — safe to call from both
+  // the 'failed'/'closed' path and the 'disconnected' grace timeout.
+  void _onViewerConnectionLost() {
+    if (_viewerStatus == ViewerStatus.idle) return; // user disconnected on purpose
+    _viewerStatus = ViewerStatus.failed;
+    _viewerError = 'Connection lost — reconnecting…';
+    notifyListeners();
+    _maybeScheduleReconnect();
+  }
 
   // Re-dial the same host after an unexpected drop while auto-reconnect is on.
   void _maybeScheduleReconnect() {
@@ -1076,15 +1098,33 @@ class RemoteService extends ChangeNotifier {
     peer.onIceCandidate = (c) =>
         _viewerSignaling?.sendCandidate(hostId, _candidateMap(c));
     peer.onConnectionStateChange = (state) {
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        // Recovered (or (re)connected) — cancel any pending disconnect grace.
+        _disconnectGrace?.cancel();
+        _disconnectGrace = null;
+        return;
+      }
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
-        if (_viewerStatus != ViewerStatus.idle) {
-          _viewerStatus = ViewerStatus.failed;
-          _viewerError = 'Connection failed';
-          notifyListeners();
-          // After a remote reboot this keeps re-dialing until the host is back.
-          _maybeScheduleReconnect();
-        }
+        _disconnectGrace?.cancel();
+        _disconnectGrace = null;
+        _onViewerConnectionLost();
+        return;
+      }
+      // ICE 'disconnected' fires when the host process is killed (e.g. the
+      // service relaunches the host on a user switch). WebRTC can linger in this
+      // state forever when the peer is truly gone, and it does NOT progress to
+      // 'failed' — so without this the viewer stayed disconnected forever. Give
+      // it a short grace to self-heal a transient blip; if it hasn't recovered,
+      // treat it as lost and let the reconnect loop re-dial the machine-id.
+      if (state ==
+          RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+        _disconnectGrace?.cancel();
+        _disconnectGrace = Timer(const Duration(seconds: 3), () {
+          if (_viewerStatus != ViewerStatus.connected) {
+            _onViewerConnectionLost();
+          }
+        });
       }
     };
 
@@ -1266,12 +1306,13 @@ class RemoteService extends ChangeNotifier {
   // only re-evaluated while nothing is held (the caller routes button events
   // before tracking them), so a drag never splits across injectors.
   void _routeInput(InputEvent event) {
-    // Secure desktop up (UAC / sign-in / lock / switch-user): ONLY the SYSTEM
-    // helper can inject into Winlogon, so force every event — moves included —
-    // through it while it's active and connected. Without this, keyboard/clicks
-    // on the sign-in or switch-user screen silently do nothing (the in-app
-    // injector can't reach the secure desktop).
-    if (_hostSecureActive && _uac.isConnected) {
+    // Route EVERYTHING through the SYSTEM helper when either the secure desktop
+    // is up (UAC / sign-in / lock / switch-user — only SYSTEM can reach
+    // Winlogon) OR the foreground window is elevated/High-IL (the Medium in-app
+    // injector is UIPI-blocked from admin windows, so mouse+keys silently do
+    // nothing there). Sending the whole gesture on one ordered pipe also avoids
+    // the cross-injector reordering that caused click-becomes-drag.
+    if ((_hostSecureActive || _hostElevatedActive) && _uac.isConnected) {
       _uac.sendInput(event.data);
       return;
     }
@@ -1417,6 +1458,10 @@ class RemoteService extends ChangeNotifier {
       _hostSecureActive = false;
       _broadcastToPeers(jsonEncode({'k': 'uac', 't': 'gone'}));
     };
+    // Foreground elevated ↔ route input through the SYSTEM helper (reaches admin
+    // windows the Medium in-app injector can't). Local host state only — not
+    // broadcast to viewers.
+    _uac.onElevated = (elevated) => _hostElevatedActive = elevated;
     _uac.start();
   }
 
