@@ -42,6 +42,8 @@ jobs:
           if (!(Test-Path $gcc)) { throw "gcc not found at $gcc" }
           $env:CC = $gcc
           go version
+          # The checked-in go.sum is incomplete — populate module hashes first.
+          go mod tidy
           go build -v -o neev-host.exe ./agent
           Write-Host "Built neev-host.exe:"
           Get-Item neev-host.exe | Select-Object Name,Length
