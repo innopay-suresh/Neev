@@ -50,6 +50,14 @@ class ConsentRequest {
   ConsentRequest(this.controllerId);
 }
 
+/// Reassembly state for one incoming clipboard file's chunked bytes.
+class _ClipRecv {
+  final int total;
+  int next = 0;
+  final StringBuffer buf = StringBuffer();
+  _ClipRecv(this.total);
+}
+
 /// Central orchestrator that turns the signaling + WebRTC + capture services
 /// into a working remote-desktop session, for both roles:
 ///
@@ -235,6 +243,17 @@ class RemoteService extends ChangeNotifier {
   /// is polled from the local clipboard and nothing incoming is written to it —
   /// a hard off switch in both directions. Pushed from [AppSettings.clipboardSync].
   bool clipboardSyncEnabled = true;
+
+  // ---- Clipboard files: announce-on-copy → deliver-on-paste --------------
+  // Source side: announced sets we can still serve, token -> local file paths.
+  int _clipOutToken = 0;
+  final Map<String, List<String>> _clipOutFiles = {};
+  // Destination side: poll the native delayed-render object for paste requests
+  // (Windows attended only) and reassemble incoming file bytes.
+  Timer? _clipFetchPoller;
+  final Map<String, _ClipRecv> _clipRecv = {}; // key 'token#index'
+  final Set<String> _clipNativeTokens = {}; // tokens handed to delayed-render
+  final Map<String, List<String>> _clipRecvNames = {}; // token -> file names
 
   /// Host: accept the pending incoming connection with the chosen permissions.
   Future<void> acceptConnection(
@@ -1118,6 +1137,20 @@ class RemoteService extends ChangeNotifier {
       return;
     }
 
+    // Clipboard files (announce-on-copy → deliver-on-paste).
+    if (m['k'] == 'clipfann') {
+      if (clipboardSyncEnabled) _onClipFilesAnnounced(m);
+      return;
+    }
+    if (m['k'] == 'clipfreq') {
+      _onClipFileRequested(m);
+      return;
+    }
+    if (m['k'] == 'clipfdat') {
+      _onClipFileData(m);
+      return;
+    }
+
     // Host announces its OS so the viewer can map ⌘ ↔ Ctrl.
     if (m['k'] == 'os') {
       _remoteHostOs = m['v'] as String?;
@@ -1593,24 +1626,231 @@ class RemoteService extends ChangeNotifier {
       if (same) return;
     }
     _lastClipFiles = List.of(paths);
+    // ANNOUNCE-ON-COPY (AnyDesk model): send only names + sizes now, keep the
+    // paths locally, and stream the bytes only when the other side actually
+    // pastes (a 'clipfreq' comes back). No bytes cross the wire on copy.
+    final entries = <Map<String, Object>>[];
+    final kept = <String>[];
     for (final p in paths) {
       try {
-        final bytes = await XFile(p).readAsBytes();
-        if (bytes.length > _clipFileMaxBytes) continue; // too big to mirror
+        final len = await XFile(p).length();
+        if (len > _clipFileMaxBytes) continue; // too big to mirror on paste
         final name = p.split(RegExp(r'[\\/]')).last;
         if (name.isEmpty) continue;
-        // Reuse the reliable, flow-controlled file channel (not the control
-        // channel) so large copies don't overrun the send buffer or stall input.
-        await _files.sendFile(name, bytes, clipboard: true);
+        entries.add({'name': name, 'size': len});
+        kept.add(p);
       } catch (_) {
         // Directory / unreadable — skip (folder copy isn't supported).
       }
     }
+    if (entries.isEmpty) return;
+    _clipOutToken++;
+    // Tag with this instance's identity so a host token can never collide with a
+    // viewer token (both sides may announce over the same pair of channels).
+    final token = 'c${identityHashCode(this)}_$_clipOutToken';
+    _clipOutFiles[token] = kept; // serve these when a paste requests them
+    // Bound memory: only keep the few most recent announced sets around.
+    if (_clipOutFiles.length > 8) {
+      _clipOutFiles.remove(_clipOutFiles.keys.first);
+    }
+    _sendClipCtl(jsonEncode({'k': 'clipfann', 'token': token, 'files': entries}));
+  }
+
+  // Send a clipboard-file control message on the reliable file channel to
+  // whichever peer(s) we're connected to (host has many viewers; viewer has one).
+  void _sendClipCtl(String msg) {
+    for (final peer in _hostPeers.values) {
+      peer.sendFileData(msg);
+    }
+    _viewerPeer?.sendFileData(msg);
+  }
+
+  // Destination: an announcement arrived. On attended Windows, place a
+  // delayed-render virtual-file set on the clipboard so paste pulls bytes on
+  // demand. Elsewhere (macOS / Linux / SYSTEM host) delayed rendering isn't
+  // available, so eagerly fetch the bytes now and stage real files for paste.
+  Future<void> _onClipFilesAnnounced(Map<String, dynamic> m) async {
+    final token = m['token'] as String?;
+    final raw = m['files'];
+    if (token == null || raw is! List) return;
+    final files = <Map<String, Object>>[];
+    final names = <String>[];
+    for (final f in raw) {
+      if (f is Map) {
+        final name = f['name'] as String?;
+        final size = (f['size'] as num?)?.toInt() ?? 0;
+        if (name != null && name.isNotEmpty) {
+          files.add({'name': name, 'size': size});
+          names.add(name);
+        }
+      }
+    }
+    if (files.isEmpty) return;
+    _clipRecvNames[token] = names;
+    if (_clipRecvNames.length > 8) {
+      _clipRecvNames.remove(_clipRecvNames.keys.first);
+    }
+
+    if (ClipboardWriter.isSupported) {
+      final ok = await ClipboardWriter.announceRemoteFiles(token, files);
+      if (ok) {
+        _clipNativeTokens.add(token);
+        _startClipFetchPoller(); // paste will raise native fetch requests
+        return;
+      }
+      // announce failed → fall through to eager fetch
+    }
+    // Fallback: pull every file now and stage it for a normal Ctrl+V.
+    for (var i = 0; i < files.length; i++) {
+      _requestClipFile(token, i);
+    }
+  }
+
+  // Destination (Windows): poll the native delayed-render object for the file
+  // indices the shell asked for on paste, and request those bytes from the peer.
+  void _startClipFetchPoller() {
+    if (_clipFetchPoller != null) return;
+    _clipFetchPoller =
+        Timer.periodic(const Duration(milliseconds: 150), (_) async {
+      if (_hostPeers.isEmpty && _viewerPeer == null) {
+        _stopClipFetchPoller();
+        return;
+      }
+      final reqs = await ClipboardWriter.pollFileRequests();
+      for (final r in reqs) {
+        final token = r['token'] as String?;
+        final index = r['index'] as int?;
+        if (token != null && index != null) _requestClipFile(token, index);
+      }
+    });
+  }
+
+  void _stopClipFetchPoller() {
+    _clipFetchPoller?.cancel();
+    _clipFetchPoller = null;
+  }
+
+  void _requestClipFile(String token, int index) {
+    _sendClipCtl(jsonEncode({'k': 'clipfreq', 'token': token, 'index': index}));
+  }
+
+  // Source: a paste on the other side wants the bytes for one announced file.
+  // Read it now and stream it back in chunks (this is the ONLY time bytes move).
+  Future<void> _onClipFileRequested(Map<String, dynamic> m) async {
+    final token = m['token'] as String?;
+    final index = m['index'] as int?;
+    if (token == null || index == null) return;
+    final paths = _clipOutFiles[token];
+    Uint8List? bytes;
+    if (paths != null && index >= 0 && index < paths.length) {
+      try {
+        bytes = await XFile(paths[index]).readAsBytes();
+      } catch (_) {}
+    }
+    if (bytes == null) {
+      _sendClipCtl(jsonEncode({
+        'k': 'clipfdat',
+        'token': token,
+        'index': index,
+        'ok': false,
+        'seq': 0,
+        'total': 1,
+      }));
+      return;
+    }
+    final b64 = base64Encode(bytes);
+    const chunk = 48 * 1024;
+    final total = (b64.length / chunk).ceil().clamp(1, 1 << 24);
+    for (var i = 0; i < total; i++) {
+      final start = i * chunk;
+      final end = start + chunk < b64.length ? start + chunk : b64.length;
+      _sendClipCtl(jsonEncode({
+        'k': 'clipfdat',
+        'token': token,
+        'index': index,
+        'ok': true,
+        'seq': i,
+        'total': total,
+        'd': b64.substring(start, end),
+      }));
+    }
+  }
+
+  // Destination: reassemble streamed file bytes, then hand them to the paste
+  // (native delayed-render) or stage them on disk (eager fallback).
+  void _onClipFileData(Map<String, dynamic> m) {
+    final token = m['token'] as String?;
+    final index = m['index'] as int?;
+    if (token == null || index == null) return;
+    final key = '$token#$index';
+    if (m['ok'] == false) {
+      _clipRecv.remove(key);
+      _completeClipRecv(token, index, false, null);
+      return;
+    }
+    final seq = m['seq'] as int?;
+    final total = m['total'] as int?;
+    final d = m['d'] as String?;
+    if (seq == null || total == null || d == null) return;
+    var rec = _clipRecv[key];
+    if (seq == 0) {
+      rec = _ClipRecv(total);
+      _clipRecv[key] = rec;
+    }
+    if (rec == null || total != rec.total || seq != rec.next) {
+      _clipRecv.remove(key);
+      return;
+    }
+    rec.buf.write(d);
+    rec.next++;
+    if (rec.next == rec.total) {
+      _clipRecv.remove(key);
+      Uint8List? bytes;
+      try {
+        bytes = base64Decode(rec.buf.toString());
+      } catch (_) {}
+      _completeClipRecv(token, index, bytes != null, bytes);
+    }
+  }
+
+  Future<void> _completeClipRecv(
+      String token, int index, bool ok, Uint8List? bytes) async {
+    // Windows delayed-render: unblock the pending paste with the bytes.
+    if (_clipNativeTokens.contains(token)) {
+      await ClipboardWriter.deliverRemoteFileBytes(
+          token, index, ok, bytes ?? Uint8List(0));
+      return;
+    }
+    // Eager fallback (non-Windows): stage the file and put it on the clipboard.
+    if (!ok || bytes == null) return;
+    final names = _clipRecvNames[token];
+    final name = (names != null && index < names.length)
+        ? names[index]
+        : 'file_$index';
+    try {
+      final path = await FileStore().saveToTemp(name, bytes);
+      if (path != null) await _onClipboardFileReceived(path);
+    } catch (_) {}
   }
 
   void _stopClipboardSync() {
     _clipTimer?.cancel();
     _clipTimer = null;
+    _stopClipFetchPoller();
+    // Fail any paste still blocked in the native layer so Explorer doesn't hang.
+    for (final key in _clipRecv.keys.toList()) {
+      final sep = key.lastIndexOf('#');
+      if (sep <= 0) continue;
+      final token = key.substring(0, sep);
+      final index = int.tryParse(key.substring(sep + 1));
+      if (index != null && _clipNativeTokens.contains(token)) {
+        ClipboardWriter.deliverRemoteFileBytes(token, index, false, Uint8List(0));
+      }
+    }
+    _clipRecv.clear();
+    _clipOutFiles.clear();
+    _clipNativeTokens.clear();
+    _clipRecvNames.clear();
   }
 
   void _broadcastClip(String text) {

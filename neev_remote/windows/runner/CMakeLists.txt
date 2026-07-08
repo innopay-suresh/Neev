@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "clipboard_writer.cpp"
+  "remote_file_drop.cpp"
   "input_injector.cpp"
   "keyboard_hook.cpp"
   "privacy_mode.cpp"
@@ -38,6 +39,9 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+# OLE + shell: OleSetClipboard / SHCreateStdEnumFmtEtc / SHCreateMemStream for
+# the delayed-render virtual-file clipboard (remote_file_drop.cpp).
+target_link_libraries(${BINARY_NAME} PRIVATE "ole32.lib" "shlwapi.lib" "shell32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
