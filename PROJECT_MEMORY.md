@@ -120,6 +120,18 @@ moves to **Working Features** after it is confirmed working on real hardware.
   the Go host on Windows (CGO + bundled `agent/encode/windows_lib/lib/libvpx.a`;
   mingw gcc path resolved dynamically). The old build.yml failure was a
   misconfigured workflow (pkg-config for ffmpeg/x264 the agent never uses).
+  **M2 DONE 2026-07-08:** process split shipped (all builds green in CI).
+  `agent/ipc` = framed loopback protocol; `agent/session` = `RunTransport`
+  (persistent, drains worker stream; WebRTC lands in M3) + `RunCaptureWorker`
+  (real DXGI capture + libvpx encode → IPC frames; exits on ErrAccessDenied so
+  the service respawns it in the new session on a switch). `main.go` dispatches
+  `--transport` / `--capture-worker`; default path unchanged.
+  **M3 NEXT:** transport gets the WebRTC peer + signaling (reuse `network.Client`
+  + a VP8 `TrackLocalStaticSample`, WriteSample per worker frame, RTCP PLI →
+  KindKeyframeReq). Then wire `neev_helper` to launch the transport ONCE
+  (persistent) + swap the worker per session. M4: prove one live frame surviving
+  a switch on hardware. Machine-id/password for the transport comes from the
+  helper's existing creds (TCP 47921).
 - **2026-07-08 — Issue: host "app closes, doesn't return" on user switch — root
   cause = DUAL HOST.** Helper log (17:55:39 switch) proved the service relaunches
   the host fine in the new session AND that elevated input works (`inject-fwd:
