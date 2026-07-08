@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/discovery_service.dart';
+import '../../data/services/host_mode.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
 import '../widgets/file_transfer_panel.dart';
@@ -50,6 +51,15 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     if (service.isHosting) return;
     final settings = ref.read(settingsProvider);
     if (settings.relayUrl.isEmpty) return; // wait until the server is configured
+    // Don't become a SECOND host: when ServiceHost mode is on, only the
+    // service-launched instance hosts; a manually-opened window stays
+    // viewer/control-only so the two don't compete for the machine-id (which
+    // strands one host in the old session on a user switch).
+    if (!await HostMode.shouldAutoHost()) {
+      _autoStarted = true; // decided; this instance won't host
+      return;
+    }
+    if (!mounted) return;
     _autoStarted = true;
     try {
       await service.startHosting(

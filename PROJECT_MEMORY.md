@@ -103,6 +103,18 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-08 — Issue: host "app closes, doesn't return" on user switch — root
+  cause = DUAL HOST.** Helper log (17:55:39 switch) proved the service relaunches
+  the host fine in the new session AND that elevated input works (`inject-fwd:
+  key … sent=1`). The real problem: a manually-opened app window AND the service
+  host both register the machine-id (two `tcp: client connected` per event).
+  On a switch the visible manual host is stranded in the old (backgrounded)
+  session while the service host moves on, and the viewer's reconnect ping-pongs
+  between them. FIX: new `neev_remote/hostmode` channel (runner `host_mode.cpp`)
+  reports {serviceInstance, serviceHostMode (HKLM reg)}; `HostMode.shouldAutoHost`
+  makes a manually-opened window NOT host when ServiceHost mode is on — only the
+  service instance hosts. Eliminates the dual host (also underlay KP-1 / elevated
+  input). Native (runner + registry) + small Dart.
 - **2026-07-08 — Issue: can't type in elevated windows (UIPI) — FIX (native +
   Dart).** Helper `neev_helper.cpp` now detects an elevated foreground window
   (`IsForegroundElevated`, `TokenElevation`) and sends state msg `'e'` (1/0) to

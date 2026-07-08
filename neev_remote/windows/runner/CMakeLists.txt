@@ -10,6 +10,7 @@ add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "clipboard_writer.cpp"
   "remote_file_drop.cpp"
+  "host_mode.cpp"
   "input_injector.cpp"
   "keyboard_hook.cpp"
   "privacy_mode.cpp"
