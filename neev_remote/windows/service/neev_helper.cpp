@@ -558,7 +558,13 @@ static bool CaptureInputDesktopToBmp(const wchar_t* path) {
 // --------------------------------------------------------------------------
 static const unsigned short kPort = 47921;  // 127.0.0.1 only
 static CRITICAL_SECTION g_clientLock;
-static SOCKET g_client = INVALID_SOCKET;
+// Multiple hosts can be connected at once (a user-launched app AND the
+// ServiceHost-launched host both register the machine id, and either may be the
+// one the viewer is watching). Secure-desktop frames are broadcast to ALL of
+// them so whichever one the viewer sees receives the UAC/login overlay — the
+// single-client model routed frames to only one host, so the viewer connected
+// to the other host went blank at 0 fps during UAC.
+static std::vector<SOCKET> g_clients;
 
 static int GetEncoderClsid(const WCHAR* mime, CLSID* clsid) {
   UINT num = 0, size = 0;
@@ -1256,20 +1262,22 @@ static bool SendAll(SOCKET s, const void* buf, int n) {
   return true;
 }
 
-// Send a framed message to the connected app. A separate-thread recv is NOT
-// serialized against this send (TCP is full-duplex), so streaming never stalls.
+// Broadcast a framed message to EVERY connected app. A separate-thread recv is
+// NOT serialized against this send (TCP is full-duplex), so streaming never
+// stalls. A client whose send fails is shut down (its reader thread then removes
+// it) so a dead host never blocks the others.
 static void PipeSend(BYTE type, const BYTE* payload, DWORD plen) {
+  DWORD len = 1 + plen;
+  std::vector<BYTE> buf(4 + len);
+  memcpy(buf.data(), &len, 4);
+  buf[4] = type;
+  if (plen) memcpy(buf.data() + 5, payload, plen);
   EnterCriticalSection(&g_clientLock);
-  if (g_client != INVALID_SOCKET) {
-    DWORD len = 1 + plen;
-    std::vector<BYTE> buf(4 + len);
-    memcpy(buf.data(), &len, 4);
-    buf[4] = type;
-    if (plen) memcpy(buf.data() + 5, payload, plen);
-    if (!SendAll(g_client, buf.data(), (int)buf.size())) {
-      Log(L"agent", L"tcp: send failed; dropping client");
-      shutdown(g_client, SD_BOTH);  // unblock the reader; it closesocket()s
-      g_client = INVALID_SOCKET;
+  for (SOCKET s : g_clients) {
+    if (s == INVALID_SOCKET) continue;
+    if (!SendAll(s, buf.data(), (int)buf.size())) {
+      Log(L"agent", L"tcp: send failed; shutting down a client");
+      shutdown(s, SD_BOTH);  // unblock its reader; it removes + closesocket()s
     }
   }
   LeaveCriticalSection(&g_clientLock);
@@ -1277,7 +1285,7 @@ static void PipeSend(BYTE type, const BYTE* payload, DWORD plen) {
 
 static bool ClientConnected() {
   EnterCriticalSection(&g_clientLock);
-  bool c = (g_client != INVALID_SOCKET);
+  bool c = !g_clients.empty();
   LeaveCriticalSection(&g_clientLock);
   return c;
 }
@@ -1363,9 +1371,36 @@ static void HandleClientMessage(const std::vector<BYTE>& m) {
   }
 }
 
-// TCP server on 127.0.0.1: one client at a time. This thread is the reader
-// (recv loop for viewer commands); frames are pushed from the agent loop via
-// PipeSend (send), concurrently — TCP is full-duplex so neither blocks.
+// Per-client reader thread: drains one host's command stream (viewer input,
+// creds requests, …). Frames are pushed to all clients from the agent loop via
+// PipeSend concurrently — TCP is full-duplex so neither blocks. When the client
+// drops, it removes itself from g_clients and releases any held buttons.
+static DWORD WINAPI ClientReaderThread(LPVOID param) {
+  SOCKET c = (SOCKET)(ULONG_PTR)param;
+  Log(L"agent", L"tcp: client connected");
+  for (;;) {
+    DWORD len = 0;
+    if (!RecvAll(c, &len, 4) || len == 0 || len > (1 << 20)) break;
+    std::vector<BYTE> msg(len);
+    if (!RecvAll(c, msg.data(), (int)len)) break;
+    HandleClientMessage(msg);
+  }
+  EnterCriticalSection(&g_clientLock);
+  for (auto it = g_clients.begin(); it != g_clients.end(); ++it) {
+    if (*it == c) {
+      g_clients.erase(it);
+      break;
+    }
+  }
+  LeaveCriticalSection(&g_clientLock);
+  closesocket(c);
+  ReleaseForwardedButtons();  // never leave a drag stuck after a disconnect
+  Log(L"agent", L"tcp: client disconnected");
+  return 0;
+}
+
+// TCP server on 127.0.0.1: accepts MULTIPLE clients (see g_clients). Each gets
+// its own reader thread; frames broadcast to all via PipeSend.
 static DWORD WINAPI PipeServerThread(LPVOID) {
   SOCKET srv = socket(AF_INET, SOCK_STREAM, 0);
   if (srv == INVALID_SOCKET) {
@@ -1383,7 +1418,7 @@ static DWORD WINAPI PipeServerThread(LPVOID) {
     closesocket(srv);
     return 0;
   }
-  listen(srv, 1);
+  listen(srv, 4);
   Log(L"agent", L"tcp: listening on 127.0.0.1:%d", kPort);
   for (;;) {
     SOCKET c = accept(srv, nullptr, nullptr);
@@ -1394,22 +1429,21 @@ static DWORD WINAPI PipeServerThread(LPVOID) {
     DWORD tmo = 5000;
     setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (char*)&tmo, sizeof(tmo));
     EnterCriticalSection(&g_clientLock);
-    g_client = c;
+    g_clients.push_back(c);
     LeaveCriticalSection(&g_clientLock);
-    Log(L"agent", L"tcp: client connected");
-    for (;;) {
-      DWORD len = 0;
-      if (!RecvAll(c, &len, 4) || len == 0 || len > (1 << 20)) break;
-      std::vector<BYTE> msg(len);
-      if (!RecvAll(c, msg.data(), (int)len)) break;
-      HandleClientMessage(msg);
+    HANDLE t = CreateThread(nullptr, 0, ClientReaderThread,
+                            (LPVOID)(ULONG_PTR)c, 0, nullptr);
+    if (t) {
+      CloseHandle(t);
+    } else {
+      // Couldn't spawn a reader — don't leak the socket in the list.
+      EnterCriticalSection(&g_clientLock);
+      for (auto it = g_clients.begin(); it != g_clients.end(); ++it) {
+        if (*it == c) { g_clients.erase(it); break; }
+      }
+      LeaveCriticalSection(&g_clientLock);
+      closesocket(c);
     }
-    EnterCriticalSection(&g_clientLock);
-    if (g_client == c) g_client = INVALID_SOCKET;
-    LeaveCriticalSection(&g_clientLock);
-    closesocket(c);
-    ReleaseForwardedButtons();  // never leave a drag stuck after a disconnect
-    Log(L"agent", L"tcp: client disconnected");
   }
 }
 
