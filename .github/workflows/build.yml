@@ -15,7 +15,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: '1.23'
+
+      - name: Download Go modules
+        run: go mod download
 
       - name: Build Server
         run: |
@@ -49,7 +52,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: '1.23'
 
       - name: Install MSYS2 for CGO
         uses: msys2/setup-msys2@v2
@@ -63,6 +66,11 @@ jobs:
       - name: Build Agent
         shell: msys2 {0}
         run: |
+          # setup-go installs Go to the Windows PATH but not to the msys2 PATH,
+          # so add it explicitly (otherwise `go` is "command not found", exit 127).
+          export PATH="/c/Program Files/Go/bin:$PATH"
+          go version
+          go mod download
           cd agent
           go build -ldflags "-s -w -H=windowsgui" -o remote-agent.exe .
 
@@ -90,7 +98,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: '1.23'
+
+      - name: Download Go modules
+        run: go mod download
 
       - name: Build Agent
         run: |
@@ -121,7 +132,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: '1.23'
+
+      - name: Download Go modules
+        run: go mod download
 
       - name: Build Agent
         run: |
