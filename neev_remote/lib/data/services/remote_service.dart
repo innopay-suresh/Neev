@@ -19,6 +19,7 @@ import 'clipboard_writer.dart';
 import 'discovery_model.dart';
 import 'file_store.dart';
 import 'file_transfer_service.dart';
+import 'host_mode.dart';
 import 'host_name.dart' as host_name;
 import 'input_event.dart';
 import 'input_injector.dart';
@@ -394,6 +395,18 @@ class RemoteService extends ChangeNotifier {
     String? password,
     String? fixedAgentId,
   }) async {
+    // Single-host guarantee: when the SYSTEM service transport owns hosting
+    // (TransportMode), this app must NEVER register as a second connectable host
+    // — the service transport is the one machine identity (capture + SYSTEM
+    // input + secure desktop). Guard here so EVERY caller (auto-host, settings,
+    // Share button, fixed-password) is covered, not just auto-host. We still
+    // surface the machine id+password for the UI to dial, but do not register.
+    if (await HostMode.serviceOwnsHosting()) {
+      await _showServiceIdentity();
+      DiagLog.log('host', 'startHosting suppressed — service transport owns '
+          'hosting (TransportMode); app is UI-only');
+      return _password ?? '';
+    }
     await stopHosting();
     _resolvedIce = await _resolveIceServers(relayUrl);
     _setupUacBridge();  // Windows host: stream UAC to viewers (no-op elsewhere)
@@ -460,6 +473,22 @@ class RemoteService extends ChangeNotifier {
       rethrow;
     }
     return pw;
+  }
+
+  /// Display-only: populate the machine id + password from the SYSTEM helper so
+  /// the UI shows the single service-owned host to dial, WITHOUT registering a
+  /// host. Used when the service transport owns hosting (TransportMode).
+  Future<void> _showServiceIdentity() async {
+    if (!_uac.isSupported) return;
+    try {
+      final machine = await _uac.fetchMachineCreds();
+      if (machine != null && machine.id.isNotEmpty) {
+        _agentId = machine.id;
+        if (machine.password.isNotEmpty) _password = machine.password;
+        _hostStatus = HostStatus.online; // reachable via the service transport
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   Future<void> stopHosting() async {

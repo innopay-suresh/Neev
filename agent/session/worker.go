@@ -60,8 +60,14 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	injector := newInputSink()
 	defer injector.Close()
 
-	// Reader: transport -> worker messages (keyframe requests, input). Ends when
-	// the transport goes away, which also unblocks the capture loop via ctx.
+	// Text clipboard both ways (viewer↔host) so copy-paste keeps working in
+	// TransportMode where the app no longer hosts. Runs as the logged-in user.
+	clip := newClipSync(conn)
+	go clip.poll(ctx)
+
+	// Reader: transport -> worker messages (keyframe requests, input, clipboard).
+	// Ends when the transport goes away, which also unblocks the capture loop via
+	// ctx.
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
@@ -74,7 +80,11 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 			case ipc.KindKeyframeReq:
 				wantKeyframe.Store(true)
 			case ipc.KindInput:
-				injector.Post(payload)
+				// A viewer clipboard update rides the control channel too; apply
+				// it to the host clipboard rather than injecting it as input.
+				if !clip.handleInbound(payload) {
+					injector.Post(payload)
+				}
 			}
 		}
 	}()

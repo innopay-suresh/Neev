@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"strings"
@@ -226,6 +227,26 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	go t.watchRTCP(ctx, peer)
 }
 
+// broadcastClip relays a host clipboard text change to every viewer on the
+// control channel as {"k":"clip","t":...} (as text — the viewer ignores binary
+// there), matching the Flutter host's clipboard message so no viewer change is
+// needed.
+func (t *Transport) broadcastClip(text string) {
+	msg, err := json.Marshal(map[string]string{"k": "clip", "t": text})
+	if err != nil {
+		return
+	}
+	t.mu.Lock()
+	sessions := make([]*peerSession, 0, len(t.peers))
+	for _, ps := range t.peers {
+		sessions = append(sessions, ps)
+	}
+	t.mu.Unlock()
+	for _, ps := range sessions {
+		_ = ps.peer.SendControlText(string(msg))
+	}
+}
+
 // sendInputToWorker forwards a raw viewer input event to the current capture
 // worker over IPC. Dropped silently if no worker is attached (e.g. mid-swap).
 func (t *Transport) sendInputToWorker(raw []byte) {
@@ -311,6 +332,18 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 			}
 			t.workerMu.Unlock()
 			return
+		}
+		// Host clipboard changed → relay to viewers on the control channel. Only
+		// the current worker (single-producer guard) pushes, so an overlapping or
+		// backgrounded worker can't inject stale clipboard.
+		if kind == ipc.KindClipboard {
+			t.workerMu.Lock()
+			current := t.worker == conn
+			t.workerMu.Unlock()
+			if current {
+				t.broadcastClip(string(payload))
+			}
+			continue
 		}
 		if kind != ipc.KindVideoFrame {
 			continue

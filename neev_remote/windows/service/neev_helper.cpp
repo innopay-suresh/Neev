@@ -471,6 +471,13 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   SetState(SERVICE_RUNNING);
   Log(L"svc", L"service started (LOCAL SYSTEM, session 0)");
 
+  // Mint the machine-wide id up front — BEFORE the transport is launched — so
+  // machine.dat always exists when the transport reads it. Otherwise, on a fresh
+  // machine the transport could start before the agent mints the id, fall back
+  // to a relay-assigned id, and advertise an unstable/wrong host id. This makes
+  // the published id stable + service-owned on every laptop, first boot included.
+  EnsureMachineId();
+
   HANDLE agent = nullptr;
   DWORD agentSession = 0xFFFFFFFF;
   HANDLE host = nullptr;  // ServiceHost mode: the service-owned Flutter host

@@ -85,6 +85,21 @@ moves to **Working Features** after it is confirmed working on real hardware.
   path violates this — it relaunches + re-registers the host per switch, which
   is the black-screen/login-break failure mode LD-8 exists to prevent. That path
   stays only as the non-seamless default.)
+- **LD-11 — Exactly ONE host identity per machine, owned by the SYSTEM service;
+  the user app is UI-only and never a connectable host.** In service-owned mode
+  (TransportMode) the Flutter app must not register as a second host by ANY path
+  — the guard lives inside `startHosting` (keyed off `HostMode.serviceOwnsHosting`),
+  so auto-host, settings-reconnect, the Share button, and fixed-password all stay
+  UI-only. The app still shows the machine id+password (from the helper) so users
+  dial the single service transport. Prevents the split-brain where a viewer
+  lands on a user-app host that has screen but no SYSTEM input.
+- **LD-12 — The published machine ID is stable and service-owned — identical
+  across users, account types, and app launches; never per-launch or
+  per-profile.** The SYSTEM service mints `machine.dat` (`EnsureMachineId`) at
+  startup BEFORE launching the transport, so the transport always advertises that
+  id (never a relay-assigned fallback), on every laptop incl. first boot. The
+  only per-install id (`_persistentAgentId`) is confined to the legacy
+  Flutter-host mode, which is never used when the service owns hosting.
 - **LD-10 — The capture worker must RETRY connecting to the transport (never
   fatally exit on dial-refused); session-swap must wait for the new worker to
   attach before retiring the old one — no zero-producer window.** The transport
@@ -183,6 +198,31 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-09 — Fix: two host identities (viewer landed on user-app host with
+  no input) → collapse to ONE service-owned host + clipboard over transport;
+  implements LD-11/LD-12, pending hardware validation.** Logs showed a SYSTEM
+  transport (machine id 769370465, full input/secure pipeline) AND a separate
+  user-launched Flutter host (per-install id 318504232); when the transport
+  briefly lost signaling (~27 min, infinite-backoff reconnect), the viewer landed
+  on the user-app host → screen but NO SYSTEM input. Code root cause: only
+  `_autoStartHost` was gated; three other `startHosting` sites (settings
+  reconnect, Share button, fixed-password) registered a host regardless, and the
+  id fell back to per-install `_persistentAgentId` when the helper wasn't reached.
+  Fix (scope = option b, copy-paste preserved): (1) guard inside `startHosting`
+  keyed off `HostMode.serviceOwnsHosting()` (new; reads `transportMode`) so the
+  app NEVER registers a host in service mode — UI-only, shows the machine
+  id+password via `_showServiceIdentity` (fetchMachineCreds); (2) `ServiceMain`
+  mints `machine.dat` before launching the transport (stable id first-boot too);
+  (3) **clipboard over the transport** so copy-paste doesn't regress:
+  `agent/session/clipboard.go` — the worker (logged-in user) applies inbound
+  viewer clipboard (control-channel {"k":"clip"}) via atotto/clipboard and polls
+  host clipboard changes → `ipc.KindClipboard` → transport `broadcastClip` →
+  viewers on the control channel as TEXT (`Peer.SendControlText`; the viewer
+  ignores binary there). Text both ways; file clipboard still via helper
+  clipagent; image clipboard over transport is a follow-up. Deployment-safe: no
+  hardcoded sessions (dynamic `GetTargetSessionId`), account-type agnostic
+  (`WTSQueryUserToken`), timing-safe (worker `DialRetry` + infinite signaling
+  backoff), standard ProgramData path.
 - **2026-07-09 — Fix: black screen after switch (worker died on dial-refused,
   never retried) — implements LD-10, pending hardware validation.** `transport.log`
   confirmed the transport (session-0, pid 20792) persisted and did NOT

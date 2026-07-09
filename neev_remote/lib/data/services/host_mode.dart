@@ -30,4 +30,18 @@ class HostMode {
       return true; // channel absent → default to hosting
     }
   }
+
+  /// True when the SYSTEM service transport owns hosting for this machine
+  /// (TransportMode). In that mode the Flutter app must NEVER register as a
+  /// second connectable host by ANY path — the service transport is the single
+  /// host identity. Guards every startHosting entry point, not just auto-host.
+  static Future<bool> serviceOwnsHosting() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.windows) return false;
+    try {
+      final m = await _channel.invokeMethod<Map>('query');
+      return m != null && m['transportMode'] == true;
+    } catch (_) {
+      return false; // channel absent → legacy Flutter-host mode
+    }
+  }
 }

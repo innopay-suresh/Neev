@@ -51,6 +51,13 @@ const (
 	// active session, so mouse/keyboard control survives a user switch (the
 	// transport keeps the WebRTC connection; only the worker is swapped).
 	KindInput byte = 0x05
+
+	// Worker -> transport: the host's clipboard text changed; the transport
+	// relays it to viewers on the control channel as {"k":"clip","t":...}. Carries
+	// host→viewer copy-paste in TransportMode (where the app no longer hosts).
+	// payload = UTF-8 clipboard text. Viewer→host clipboard rides KindInput (the
+	// viewer's {"k":"clip",...} arrives on the control channel like other input).
+	KindClipboard byte = 0x06
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

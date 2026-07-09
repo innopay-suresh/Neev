@@ -514,6 +514,19 @@ func (p *Peer) SendControl(data []byte) error {
 	return dc.Send(data)
 }
 
+// SendControlText sends a TEXT message on the control DataChannel. The Flutter
+// viewer only accepts non-binary messages there (clipboard/OS handshake ride the
+// control channel as text), so host→viewer clipboard must go through this.
+func (p *Peer) SendControlText(s string) error {
+	p.mu.Lock()
+	dc := p.ControlDC
+	p.mu.Unlock()
+	if dc == nil {
+		return fmt.Errorf("control channel not open")
+	}
+	return dc.SendText(s)
+}
+
 // SendClipboard sends a text message on the clipboard DataChannel.
 func (p *Peer) SendClipboard(data []byte) error {
 	p.mu.Lock()
