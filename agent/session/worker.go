@@ -34,6 +34,7 @@ const (
 // The service spawns one of these into the active session and replaces it on a
 // user switch; the transport connection is unaffected.
 func RunCaptureWorker(ctx context.Context, port int) error {
+	setupFileLog("worker.log")
 	if port == 0 {
 		port = ipc.DefaultPort
 	}

@@ -193,18 +193,6 @@ func isExtendedVk(vk uint16) bool {
 	return false
 }
 
-// controlEvent is the viewer's control/cursor-channel JSON.
-type controlEvent struct {
-	K  string   `json:"k"`
-	X  *float64 `json:"x"`
-	Y  *float64 `json:"y"`
-	B  *int     `json:"b"`
-	D  *bool    `json:"d"`
-	DX *float64 `json:"dx"`
-	DY *float64 `json:"dy"`
-	U  *int     `json:"u"`
-}
-
 type winInputSink struct {
 	ch     chan []byte
 	done   chan struct{}
@@ -318,13 +306,6 @@ func (s *winInputSink) handle(raw []byte) {
 		}
 		sendKey(vk, down)
 	}
-}
-
-func num(p *float64) float64 {
-	if p == nil {
-		return 0
-	}
-	return *p
 }
 
 // sendMouseAbsolute mirrors SendMouseAbsolute() in input_injector.cpp: absolute

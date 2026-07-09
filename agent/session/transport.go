@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
@@ -40,6 +41,9 @@ type Transport struct {
 
 	workerMu sync.Mutex
 	worker   net.Conn // current capture worker (nil if none attached)
+
+	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
+	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
 }
 
 type peerSession struct {
@@ -50,6 +54,7 @@ type peerSession struct {
 // RunTransport starts the persistent transport: registers with the relay, then
 // serves worker frames to connected viewers until ctx is cancelled.
 func RunTransport(ctx context.Context, port int) error {
+	setupFileLog("transport.log")
 	if port == 0 {
 		port = ipc.DefaultPort
 	}
@@ -62,6 +67,17 @@ func RunTransport(ctx context.Context, port int) error {
 	if err := t.setupSignaling(ctx); err != nil {
 		return err
 	}
+
+	// Bridge the SYSTEM helper's secure desktop (UAC / lock / another user's
+	// login screen) onto the SAME live track: while secure, the helper's frames
+	// are used instead of the worker's, so a user-profile switch shows and
+	// accepts the login password with no disconnect. Only distribute while
+	// secure (a straggler frame after 'G' is ignored).
+	t.bridge = newSecureBridge(func(vp8 []byte, keyframe bool) {
+		if t.bridge != nil && t.bridge.SecureActive() {
+			t.distributeFrame(vp8)
+		}
+	})
 
 	// Accept the (single active) capture worker and pump its frames to peers.
 	ln, err := ipc.Listen(port)
@@ -177,17 +193,25 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 
 	peer.OnConnected = func() {
 		log.Info().Str("controller", m.From).Msg("transport: viewer connected")
-		t.requestKeyframe() // fresh keyframe for the new viewer
+		// Fresh keyframe for the new viewer from whichever source is live.
+		t.requestKeyframe()
+		if t.bridge != nil {
+			t.bridge.requestKeyframe()
+		}
 	}
 
-	// Viewer input (mouse/keyboard) arrives on the control + cursor channels;
-	// forward it down to the current capture worker, which injects it into the
-	// active session. This is what gives the viewer full control that survives a
-	// user switch (only the worker is swapped; this peer never drops).
+	// Viewer input (mouse/keyboard) arrives on the control + cursor channels.
+	// Route it to whoever owns the CURRENT input path: the SYSTEM helper while a
+	// secure or elevated desktop is up (only it can inject there), otherwise the
+	// per-session worker. Exactly one owner at a time — no contention.
 	peer.OnData = func(label string, data []byte, isString bool) {
 		switch label {
 		case "control", "cursor":
-			t.sendInputToWorker(data)
+			if t.bridge != nil && (t.bridge.SecureActive() || t.bridge.ElevatedActive()) {
+				t.bridge.SendInput(data)
+			} else {
+				t.sendInputToWorker(data)
+			}
 		}
 	}
 
@@ -293,6 +317,18 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 		}
 		_, vp8, ok := ipc.DecodeVideoFrame(payload)
 		if !ok || len(vp8) == 0 {
+			continue
+		}
+		// While the secure desktop is showing, the bridge owns the track — drop
+		// worker frames so the two sources never interleave on one decoder.
+		if t.bridge != nil && t.bridge.SecureActive() {
+			t.secureWas.Store(true)
+			continue
+		}
+		// Just reverted from secure → ask the worker for a fresh keyframe so the
+		// viewer's decoder re-syncs, and drop this (likely inter) frame.
+		if t.secureWas.Swap(false) {
+			t.requestKeyframe()
 			continue
 		}
 		t.distributeFrame(vp8)

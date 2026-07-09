@@ -77,6 +77,22 @@ moves to **Working Features** after it is confirmed working on real hardware.
   consent dialog). Requires the native session-0 transport — NOT achievable in
   pure Dart (a user-session transport dies on the switch by definition, see
   LD-1). Clipboard/files over this path are Phase B (not yet carried).
+- **LD-8 — Relay registration and the WebRTC connection happen ONCE in the
+  SYSTEM service and persist across session changes — NEVER re-register on a
+  switch.** In TransportMode the Go transport (session 0) registers the
+  machine id+password one time and keeps that connection for its whole lifetime;
+  a user switch must not run `startHosting` / re-register. (The default Flutter
+  path violates this — it relaunches + re-registers the host per switch, which
+  is the black-screen/login-break failure mode LD-8 exists to prevent. That path
+  stays only as the non-seamless default.)
+- **LD-9 — On session change, swap the capture/input SOURCE behind the live
+  connection; never restart hosting. Exactly ONE owner holds capture+input at a
+  time.** The transport picks its frame source and input target live: the SYSTEM
+  helper's secure-desktop bridge while a secure/elevated desktop is up (UAC /
+  lock / another user's login — only SYSTEM can inject there), otherwise the
+  per-session worker. Sources never interleave on one decoder (a keyframe is
+  forced on every source switch), and input is routed to that single owner, so
+  two workers can never contend (the login-screen input-break cause).
 
 ---
 
@@ -156,6 +172,32 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-09 — Seamless switch hardening: secure-desktop bridge + observable
+  logs (implements LD-8/LD-9) — pending hardware validation.** Field logs from
+  the latest test showed the app BOOTING repeatedly and RE-REGISTERING
+  agentId=696561846 per switch, with `host.log` recreating the Flutter engine.
+  Diagnosis: those are the DEFAULT Flutter ServiceHost path — the helper log has
+  ZERO TransportMode markers (`launched transport in session 0` / `swapping
+  capture worker` absent) and instead shows `relaunching host` every switch
+  (changing PIDs). So the seamless backend was NOT active for that test
+  (TransportMode off / wrong build). The re-register-on-switch model they hit is
+  exactly what TransportMode replaces. Two honest gaps in Phase A fixed now:
+  • **Observability** (Go): `setupFileLog` (`agent/session/hostlog.go`) tees
+    zerolog to `C:\ProgramData\NeevRemote\transport.log` + `worker.log` (stderr
+    is discarded under the service's CREATE_NO_WINDOW, which left TransportMode
+    undiagnosable). All existing log lines now land in a file.
+  • **Secure-desktop bridge** (Go, `agent/session/securebridge.go`): the
+    transport connects to the helper's `127.0.0.1:47921` pipe; while the helper
+    reports the secure desktop active ('A'/'F'/'G'), it decodes the helper's
+    JPEG frames → re-encodes VP8 → feeds the SAME live track (worker frames
+    dropped meanwhile; keyframe forced on switch), and translates viewer input
+    to the helper's 'I' forwarded-input protocol (sub m/b/w/k). So a
+    user-profile switch shows and ACCEPTS the login/UAC password with no
+    disconnect, and elevated-window input routes to the helper too. The proven
+    helper secure-desktop C++ is untouched (just another pipe client — no
+    regression to UAC / secure-desktop capture). `transport.go`: source-switch
+    gating in `handleWorker` + input routing in `OnData` (single owner). Shared
+    `controlEvent`/`num` moved to securebridge.go (cross-platform).
 - **2026-07-09 — Phase A: seamless user-profile switch (TransportMode) built
   end-to-end (native Go + C++ + installer) — pending hardware validation.**
   Delivers LD-7. User approved after diagnosis confirmed: (Q1) the helper service
