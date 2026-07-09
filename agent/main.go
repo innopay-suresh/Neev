@@ -29,6 +29,11 @@ func main() {
 	//   --transport       persistent process that owns the WebRTC connection
 	//   --capture-worker  per-session process that captures + streams frames
 	if mode := parseMode(); mode != "" {
+		// --relay <url> overrides RELAY_URL (the SYSTEM service passes it so the
+		// session-0 transport reaches the same relay as the Flutter installer).
+		if relay := parseFlagValue("--relay"); relay != "" {
+			_ = os.Setenv("RELAY_URL", relay)
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		go func() {
@@ -126,6 +131,17 @@ func parseMode() string {
 			return "transport"
 		case "--capture-worker":
 			return "capture-worker"
+		}
+	}
+	return ""
+}
+
+// parseFlagValue returns the argument following [flag] (e.g. --relay <url>).
+func parseFlagValue(flag string) string {
+	args := os.Args[1:]
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
 		}
 	}
 	return ""

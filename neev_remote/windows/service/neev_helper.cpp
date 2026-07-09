@@ -257,6 +257,9 @@ static std::wstring InstallDir() {
 // The Flutter host exe sits next to the helper in the install dir.
 static std::wstring HostExePath() { return InstallDir() + L"neev_remote.exe"; }
 
+// The Go transport/capture host (Phase 0 seamless-switch backend), if bundled.
+static std::wstring HostCoreExePath() { return InstallDir() + L"neev-host.exe"; }
+
 // Opt-in "service owns the host" mode: HKLM\SOFTWARE\NeevRemote\ServiceHost=1
 // (written by the installer's unattended task). When set, the service launches
 // + follows neev_remote.exe into the active session so the machine is reachable
@@ -269,6 +272,30 @@ static bool ReadServiceHostFlag() {
     return val != 0;
   }
   return false;
+}
+
+// Opt-in seamless-switch backend (Phase 0): HKLM\SOFTWARE\NeevRemote\TransportMode
+// =1 makes the service run the Go transport once (session 0, survives switches)
+// + a capture worker per active session. OFF by default → unchanged behavior.
+static bool ReadTransportModeFlag() {
+  DWORD val = 0, sz = sizeof(val);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\NeevRemote", L"TransportMode",
+                   RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
+    return val != 0;
+  }
+  return false;
+}
+
+// Relay URL the transport should dial (installer writes it). Falls back empty →
+// the transport uses its built-in default.
+static std::wstring ReadRelayURL() {
+  wchar_t buf[512] = {0};
+  DWORD sz = sizeof(buf);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\NeevRemote", L"RelayURL",
+                   RRF_RT_REG_SZ, nullptr, buf, &sz) == ERROR_SUCCESS) {
+    return buf;
+  }
+  return L"";
 }
 
 // Launch [cmdline] AS SYSTEM in the interactive [sid]. Used for both the helper
@@ -339,6 +366,35 @@ static HANDLE LaunchHostInSession(DWORD sid) {
       sid, L"\"" + HostExePath() + L"\" --service-host", L"host");
 }
 
+// Capture worker: runs in the active user session (needs desktop access), swapped
+// on every session change. Streams encoded frames to the session-0 transport.
+static HANDLE LaunchWorkerInSession(DWORD sid) {
+  return LaunchProcessInSession(
+      sid, L"\"" + HostCoreExePath() + L"\" --capture-worker", L"worker");
+}
+
+// Transport: runs in session 0 as SYSTEM (networking only — no desktop), so it
+// survives every user switch. Launched once and kept alive; the WebRTC
+// connection it holds is never torn down by a session change.
+static HANDLE LaunchTransportSession0() {
+  std::wstring relay = ReadRelayURL();
+  std::wstring cmd = L"\"" + HostCoreExePath() + L"\" --transport";
+  if (!relay.empty()) cmd += L" --relay \"" + relay + L"\"";
+  STARTUPINFOW si = {0};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi = {0};
+  std::wstring mutableCmd = cmd;
+  BOOL ok = CreateProcessW(nullptr, &mutableCmd[0], nullptr, nullptr, FALSE,
+                           CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+  if (!ok) {
+    Log(L"svc", L"CreateProcess(transport) failed: %lu", GetLastError());
+    return nullptr;
+  }
+  Log(L"svc", L"launched transport in session 0 (pid %lu)", pi.dwProcessId);
+  CloseHandle(pi.hThread);
+  return pi.hProcess;
+}
+
 // Defined lower down (with the clipboard agent), but used by the service loop
 // above it — forward-declare so it's visible here.
 static HANDLE LaunchClipAgentAsUser(DWORD sid);
@@ -378,8 +434,12 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   DWORD hostSession = 0xFFFFFFFF;
   HANDLE clip = nullptr;  // user-context clipboard agent (file clipboard)
   DWORD clipSession = 0xFFFFFFFF;
+  HANDLE transport = nullptr;  // TransportMode: session-0 persistent transport
+  HANDLE worker = nullptr;     // TransportMode: per-session capture worker
+  DWORD workerSession = 0xFFFFFFFF;
   for (;;) {
     DWORD target = GetTargetSessionId();
+    bool transportMode = ReadTransportModeFlag();
 
     // ---- clipboard agent (runs as the logged-in USER; file clipboard) ----
     // Relaunch when it dies OR the active session moves. It self-skips at the
@@ -415,11 +475,42 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
       agentSession = target;
     }
 
-    // ---- Flutter host (opt-in ServiceHost mode) ----
-    // When enabled, the service owns a single host that follows the active
-    // session — reachable across user-switching / logoff with the machine-wide
-    // id+password. When disabled, the host is user-launched as before.
-    if (ReadServiceHostFlag()) {
+    // ---- Seamless-switch backend (opt-in TransportMode) ----
+    // Transport = ONE persistent process in session 0 (survives switches).
+    // Worker = per active session (swapped on switch), streams to the transport.
+    // When on, the Flutter service-host below is NOT launched (they'd conflict).
+    if (transportMode) {
+      bool tDead = (!transport || WaitForSingleObject(transport, 0) == WAIT_OBJECT_0);
+      if (tDead) {
+        if (transport) {
+          Log(L"svc", L"transport exited; relaunching");
+          CloseHandle(transport);
+          transport = nullptr;
+        }
+        transport = LaunchTransportSession0();
+      }
+      bool wDead = (!worker || WaitForSingleObject(worker, 0) == WAIT_OBJECT_0);
+      bool wMoved = (worker && target != 0xFFFFFFFF && target != workerSession);
+      if (wDead || wMoved) {
+        if (worker) {
+          if (wMoved)
+            Log(L"svc", L"active session %lu -> %lu; swapping capture worker",
+                workerSession, target);
+          if (wMoved) TerminateProcess(worker, 0);
+          CloseHandle(worker);
+          worker = nullptr;
+        }
+        worker = LaunchWorkerInSession(target);
+        workerSession = target;
+      }
+    } else if (worker || transport) {
+      // Mode turned off — stop the transport/worker.
+      if (worker) { TerminateProcess(worker, 0); CloseHandle(worker); worker = nullptr; }
+      if (transport) { TerminateProcess(transport, 0); CloseHandle(transport); transport = nullptr; }
+      workerSession = 0xFFFFFFFF;
+    }
+
+    if (ReadServiceHostFlag() && !transportMode) {
       bool hDead = (!host || WaitForSingleObject(host, 0) == WAIT_OBJECT_0);
       bool hMoved = (host && target != 0xFFFFFFFF && target != hostSession);
       if (hDead || hMoved) {
@@ -459,6 +550,14 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   if (clip) {
     TerminateProcess(clip, 0);
     CloseHandle(clip);
+  }
+  if (worker) {
+    TerminateProcess(worker, 0);
+    CloseHandle(worker);
+  }
+  if (transport) {
+    TerminateProcess(transport, 0);
+    CloseHandle(transport);
   }
   Log(L"svc", L"service stopping");
   SetState(SERVICE_STOPPED);

@@ -30,6 +30,7 @@ const (
 // never a disconnect.
 type Transport struct {
 	relayURL   string
+	password   string
 	sigClient  *network.Client
 	iceServers []network.ICEServer
 
@@ -85,14 +86,20 @@ func RunTransport(ctx context.Context, port int) error {
 }
 
 func (t *Transport) setupSignaling(ctx context.Context) error {
-	// Unattended password so the machine is reachable with a stable credential
-	// (Phase 1 will source id+password from the SYSTEM helper's machine creds).
-	unattended := os.Getenv("UNATTENDED_PASSWORD")
-	var unattendedHash string
-	if unattended != "" {
-		if h, err := auth.HashPassword(unattended); err == nil {
-			unattendedHash = h
+	// Credential: a fixed unattended password if provided, else a fresh random
+	// one. Both id + password are written to a file on register so a headless
+	// (session 0) transport is still reachable during PoC testing.
+	// (Phase 1 will source id+password from the SYSTEM helper's machine creds.)
+	password := os.Getenv("UNATTENDED_PASSWORD")
+	if password == "" {
+		if p, err := auth.GenerateRandomPassword(); err == nil {
+			password = p
 		}
+	}
+	t.password = password
+	var passwordHash string
+	if h, err := auth.HashPassword(password); err == nil {
+		passwordHash = h
 	}
 
 	ice, err := network.FetchICEServers(ctx, t.relayURL)
@@ -103,7 +110,7 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 	}
 	t.iceServers = ice
 
-	t.sigClient = network.NewClient(t.relayURL, unattendedHash, unattendedHash,
+	t.sigClient = network.NewClient(t.relayURL, passwordHash, passwordHash,
 		"transport", os.Getenv("ORG_ID"), os.Getenv("DEVICE_GROUP"),
 		os.Getenv("ENROLLMENT_CODE"))
 
@@ -115,6 +122,7 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 
 	t.sigClient.On(network.MsgRegistered, func(network.Message) {
 		log.Info().Str("id", t.sigClient.AgentID).Msg("transport registered")
+		t.writeCreds()
 	})
 	t.sigClient.On(network.MsgConnect, func(m network.Message) { t.onConnect(ctx, m) })
 	t.sigClient.On(network.MsgOffer, func(m network.Message) {
@@ -265,6 +273,21 @@ func (t *Transport) distributeFrame(vp8 []byte) {
 			_ = ps.peer.VideoTrack.WriteRTP(pkt)
 		}
 	}
+}
+
+// writeCreds records the transport's id + password so a headless (session 0)
+// transport is reachable during testing. Written to ProgramData\NeevRemote.
+func (t *Transport) writeCreds() {
+	dir := os.Getenv("ProgramData")
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	dir = dir + string(os.PathSeparator) + "NeevRemote"
+	_ = os.MkdirAll(dir, 0o755)
+	path := dir + string(os.PathSeparator) + "transport.txt"
+	content := "id=" + t.sigClient.AgentID + "\npassword=" + t.password + "\n"
+	_ = os.WriteFile(path, []byte(content), 0o600)
+	log.Info().Str("path", path).Msg("transport creds written")
 }
 
 // requestKeyframe asks the current capture worker for a keyframe.
