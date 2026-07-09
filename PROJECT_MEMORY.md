@@ -110,6 +110,29 @@ moves to **Working Features** after it is confirmed working on real hardware.
   Dart fix also works against the OLD deployed relay (bare bye + armed →
   reconnect; rejections arrive before arming, so they still end cleanly);
   relay redeploy only needed for the reason tags.
+  **STILL FAILED IN FIELD 2026-07-09 (build ~12:39 IST).** User's helper logs
+  (`helper - Host.log` / `helper -viewer.log`) show native side perfect
+  (secure-desktop capture, session poll `1->2` relaunches host in the new
+  session, new host attaches to the local pipe). BUT those are HELPER logs —
+  they contain ZERO Flutter/WebRTC/relay events, so they can't show whether the
+  viewer reconnect ran. Blocking discovery: **the Dart app has NO file logging
+  (only `debugPrint`, dropped in release)** → the whole transport layer is
+  invisible in the field. Two structural facts that matter for the fix:
+  (1) the service launches the host with a **duplicated SYSTEM token**
+  (`neev_helper.cpp` `LaunchProcessInSession`, ~L318) — the host runs as
+  LOCAL SYSTEM, so its SharedPreferences live in the SYSTEM profile, SEPARATE
+  from the user-profile settings the person configures in the visible window;
+  (2) the service-host runs **headless/hidden** (`flutter_window.cpp` ~L73).
+  So if the SYSTEM/headless host has `promptOnConnect=true` (SYSTEM-profile
+  never had unattended enabled), a reconnecting viewer triggers an INVISIBLE
+  consent dialog nobody can accept → hangs. That's the leading hypothesis but
+  UNCONFIRMED. ACTION 2026-07-09: shipped a **diagnostic build**
+  (`lib/core/diag_log.dart` → `C:\ProgramData\NeevRemote\app.log`, build stamp
+  `2026-07-09-diag1`) instrumenting host register, incoming-connect +
+  promptOnConnect, viewer connect/bye/error/peer-state, and reconnect
+  scheduling. Next: user retests switch-user, sends `app.log` from BOTH
+  machines → pinpoint exact failure, then fix precisely (do NOT ship more blind
+  behavior changes).
 - **KP-3 — Clipboard files on-paste (delayed render) is v1, unverified on
   hardware.** Compiles; paste correctness / large / multi-file / timeout need
   real-Windows testing before it becomes a Working Feature.

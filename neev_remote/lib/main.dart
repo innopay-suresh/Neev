@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/app_theme.dart';
+import 'core/diag_log.dart';
 import 'window_manager.dart' show initWindowManager;
 import 'presentation/pages/connect_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  DiagLog.init();
   await initWindowManager();
   runApp(const ProviderScope(child: NeevRemoteApp()));
 }

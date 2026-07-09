@@ -12,6 +12,7 @@ import 'package:pasteboard/pasteboard.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../core/diag_log.dart';
 import 'auth_service.dart';
 import 'clip_agent_bridge.dart';
 import 'clipboard_writer.dart';
@@ -422,12 +423,16 @@ class RemoteService extends ChangeNotifier {
             : await _persistentAgentId());
     _hostStatus = HostStatus.starting;
     _hostError = null;
+    DiagLog.log('host', 'startHosting relay=$relayUrl agentId=$agentId '
+        'promptOnConnect=$promptOnConnect unattended=${password != null}');
     notifyListeners();
 
     final signaling = SignalingService(
       serverUrl: relayUrl,
       onMessage: _onHostMessage,
       onConnected: () {
+        DiagLog.log('host', 'signaling connected; registering agentId=$agentId '
+            'machineCreds=${machine != null} relay=$relayUrl');
         _hostSignaling?.registerHost(
           passwordHash: AuthService.hashPassword(pw),
           agentId: agentId,
@@ -485,6 +490,7 @@ class RemoteService extends ChangeNotifier {
       case SignalingMessageType.registered:
         _agentId = msg.payload?['agent_id'] as String?;
         _hostStatus = HostStatus.online;
+        DiagLog.log('host', 'registered ok agentId=$_agentId — reachable');
         _startServerDiscovery();
         notifyListeners();
         break;
@@ -495,9 +501,16 @@ class RemoteService extends ChangeNotifier {
         // A controller wants in. msg.from is the controller's routing id.
         final controllerId = msg.from;
         if (controllerId == null) break;
+        DiagLog.log('host', 'incoming connect from=$controllerId '
+            'promptOnConnect=$promptOnConnect');
         // Attended: ask the host user first (AnyDesk-style). Unattended access
         // (promptOnConnect=false) accepts immediately with full permissions.
         if (promptOnConnect) {
+          // NOTE: the service-host runs HEADLESS as SYSTEM — a consent dialog
+          // here is invisible and can never be accepted, so an incoming connect
+          // (incl. a viewer auto-reconnecting after a user switch) would hang.
+          DiagLog.log('host', 'WARN showing consent prompt — if headless this '
+              'cannot be accepted; enable unattended access');
           _pendingConsent = ConsentRequest(controllerId);
           notifyListeners();
         } else {
@@ -662,6 +675,8 @@ class RemoteService extends ChangeNotifier {
     _targetId = targetId;
     _viewerStatus = ViewerStatus.connecting;
     _viewerError = null;
+    DiagLog.log('viewer', 'connectToHost target=$targetId relay=$relayUrl '
+        'autoReconnect=$autoReconnect tries=$_reconnectTries');
     notifyListeners();
 
     final signaling = SignalingService(
@@ -842,6 +857,7 @@ class RemoteService extends ChangeNotifier {
   // the 'failed'/'closed' path and the 'disconnected' grace timeout.
   void _onViewerConnectionLost() {
     if (_viewerStatus == ViewerStatus.idle) return; // user disconnected on purpose
+    DiagLog.log('viewer', 'connection lost — will attempt reconnect');
     _viewerStatus = ViewerStatus.failed;
     _viewerError = 'Connection lost — reconnecting…';
     notifyListeners();
@@ -850,19 +866,26 @@ class RemoteService extends ChangeNotifier {
 
   // Re-dial the same host after an unexpected drop while auto-reconnect is on.
   void _maybeScheduleReconnect() {
-    if (!autoReconnect) return;
+    if (!autoReconnect) {
+      DiagLog.log('reconnect', 'skipped — autoReconnect off');
+      return;
+    }
     if (_lastRelayUrl == null || _lastTargetId == null || _lastPassword == null) {
+      DiagLog.log('reconnect', 'skipped — no saved target');
       return;
     }
     if (_reconnectTimer?.isActive ?? false) return;
     _reconnectTries++;
     if (_reconnectTries > 90) {
       autoReconnect = false; // give up after a few minutes
+      DiagLog.log('reconnect', 'gave up after $_reconnectTries tries');
       return;
     }
     // Fast retries first (snappy user-switch / brief-drop recovery), then back
     // off so a longer outage (e.g. a remote reboot) is still ridden out.
     final delay = _reconnectTries <= 15 ? 2 : 5;
+    DiagLog.log('reconnect', 'scheduling try #$_reconnectTries in ${delay}s '
+        'target=$_lastTargetId');
     _reconnectTimer = Timer(Duration(seconds: delay), () async {
       if (!autoReconnect || _viewerStatus == ViewerStatus.connected) return;
       try {
@@ -1059,6 +1082,8 @@ class RemoteService extends ChangeNotifier {
         }
         break;
       case SignalingMessageType.bye:
+        DiagLog.log('viewer', 'recv bye reason=${msg.error} '
+            'autoReconnect=$autoReconnect status=$_viewerStatus');
         // The relay sends a synthetic bye whenever the HOST's socket drops —
         // which is exactly what a user switch looks like (the SYSTEM service
         // kills + relaunches the host in the new session). That is NOT a
@@ -1076,6 +1101,8 @@ class RemoteService extends ChangeNotifier {
       case SignalingMessageType.error:
         _viewerStatus = ViewerStatus.failed;
         _viewerError = msg.error ?? 'Connection rejected';
+        DiagLog.log('viewer', 'recv error="${msg.error}" '
+            'autoReconnect=$autoReconnect tries=$_reconnectTries');
         notifyListeners();
         // While riding out a host relaunch (user switch / reboot) the relay
         // answers "agent disconnected" / "agent not found or offline" until
@@ -1105,6 +1132,7 @@ class RemoteService extends ChangeNotifier {
     peer.onRemoteStream = (stream) {
       _remoteStream = stream;
       _viewerStatus = ViewerStatus.connected;
+      DiagLog.log('viewer', 'connected — remote stream up (session live)');
       // Once a session is actually up, keep it alive across unexpected host
       // drops — most importantly a user switch, where the SYSTEM service kills
       // and relaunches the host in the new session under the SAME machine id.
@@ -1122,6 +1150,7 @@ class RemoteService extends ChangeNotifier {
     peer.onIceCandidate = (c) =>
         _viewerSignaling?.sendCandidate(hostId, _candidateMap(c));
     peer.onConnectionStateChange = (state) {
+      DiagLog.log('viewer', 'peer state=$state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         // Recovered (or (re)connected) — cancel any pending disconnect grace.
         _disconnectGrace?.cancel();

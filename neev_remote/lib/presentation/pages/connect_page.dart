@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../core/diag_log.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/discovery_service.dart';
 import '../../data/services/host_mode.dart';
@@ -50,12 +51,18 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     final service = ref.read(remoteServiceProvider);
     if (service.isHosting) return;
     final settings = ref.read(settingsProvider);
-    if (settings.relayUrl.isEmpty) return; // wait until the server is configured
+    if (settings.relayUrl.isEmpty) {
+      DiagLog.log('autohost', 'skipped — no relay configured yet');
+      return; // wait until the server is configured
+    }
     // Don't become a SECOND host: when ServiceHost mode is on, only the
     // service-launched instance hosts; a manually-opened window stays
     // viewer/control-only so the two don't compete for the machine-id (which
     // strands one host in the old session on a user switch).
-    if (!await HostMode.shouldAutoHost()) {
+    final auto = await HostMode.shouldAutoHost();
+    DiagLog.log('autohost', 'shouldAutoHost=$auto unattended='
+        '${settings.unattendedEnabled} askOnConnect=${settings.askOnConnect}');
+    if (!auto) {
       _autoStarted = true; // decided; this instance won't host
       return;
     }
