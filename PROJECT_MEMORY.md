@@ -148,7 +148,8 @@ Test kit published (NOT in the shipping installer — guardrail): portal
 ## PROGRAM PLAN (user-approved 2026-07-08, in priority order)
 
 1. **Finish transport (M3✓ → M4✓; hardware validation pending)** — zero-drop switch.
-2. **Merge branch → main** — consolidate all fixes/features into mainline.
+2. **Merge branch → main** — ✓ DONE 2026-07-09 (clean fast-forward; main = branch
+   HEAD 0828788; all 118 commits / features consolidated).
 3. **Flutter UI/UX polish pass** — connect screen, toolbar, settings, file/
    clipboard/chat, visual consistency.
 4. **Phase 2 cutover** — Flutter becomes viewer/control-only over the Go backend;
