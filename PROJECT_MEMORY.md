@@ -85,6 +85,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
   path violates this — it relaunches + re-registers the host per switch, which
   is the black-screen/login-break failure mode LD-8 exists to prevent. That path
   stays only as the non-seamless default.)
+- **LD-10 — The capture worker must RETRY connecting to the transport (never
+  fatally exit on dial-refused); session-swap must wait for the new worker to
+  attach before retiring the old one — no zero-producer window.** The transport
+  (session 0) may not be accepting at the instant the service spawns a new worker
+  on a switch; a single connection-refused used to `log.Fatal` the worker,
+  leaving the transport with no frame producer (frozen/black while input still
+  worked via the agent/secure-bridge pipe). Fixed: `ipc.DialRetry` (worker
+  retries ~300 ms up to 15 s); the transport distributes frames only from the
+  CURRENT worker (single-producer guard, safe overlap); and the service spawns
+  the new worker first and defers killing the old (`prevWorker`) to the next
+  loop, so the old keeps producing until the new attaches.
 - **LD-9 — On session change, swap the capture/input SOURCE behind the live
   connection; never restart hosting. Exactly ONE owner holds capture+input at a
   time.** The transport picks its frame source and input target live: the SYSTEM
@@ -172,6 +183,25 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-09 — Fix: black screen after switch (worker died on dial-refused,
+  never retried) — implements LD-10, pending hardware validation.** `transport.log`
+  confirmed the transport (session-0, pid 20792) persisted and did NOT
+  re-register (correct); `worker.log` showed the session-2 worker hit
+  `FTL session process exited error="dial tcp 127.0.0.1:47930: ...refused"
+  mode=capture-worker` and never logged "connected" — root cause = the worker
+  dialed the transport ONCE (`ipc.Dial`) and `main.go` `log.Fatal`'d on refused,
+  so it lost the startup race on a switch and died, leaving the transport with no
+  frame producer (black; input still worked via the agent/secure-bridge pipe).
+  Narrow fix, three parts, nothing else touched (transport lifecycle,
+  registration, session detection, secure-desktop capture, copy-paste all
+  unchanged): (1) `agent/ipc/ipc.go` `DialRetry` — the worker retries the dial
+  ~300 ms up to 15 s instead of exiting; (2) `transport.go` single-producer guard
+  — `handleWorker` distributes only from the current worker, so a brief old/new
+  overlap can't interleave/corrupt the decoder; (3) `neev_helper.cpp` worker-swap
+  — spawn the new worker first and defer terminating the old (`prevWorker`) to the
+  next service loop, so the old keeps producing until the new attaches (no
+  zero-producer window). Expected: after a switch the new worker connects to the
+  already-running transport within ~1 s and frames resume on the SAME connection.
 - **2026-07-09 — Seamless switch hardening: secure-desktop bridge + observable
   logs (implements LD-8/LD-9) — pending hardware validation.** Field logs from
   the latest test showed the app BOOTING repeatedly and RE-REGISTERING

@@ -319,6 +319,16 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 		if !ok || len(vp8) == 0 {
 			continue
 		}
+		// Single-producer guard: if a newer worker has attached (during a session
+		// swap, the old and new worker can briefly overlap), only the current one
+		// feeds the track — otherwise two sources would interleave on one decoder
+		// and corrupt the picture. A superseded worker drains but stops emitting.
+		t.workerMu.Lock()
+		current := t.worker == conn
+		t.workerMu.Unlock()
+		if !current {
+			continue
+		}
 		// While the secure desktop is showing, the bridge owns the track — drop
 		// worker frames so the two sources never interleave on one decoder.
 		if t.bridge != nil && t.bridge.SecureActive() {

@@ -16,10 +16,12 @@
 package ipc
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"time"
 )
 
 // DefaultPort is the loopback port the transport listens on for its worker.
@@ -138,4 +140,30 @@ func Listen(port int) (net.Listener, error) {
 // Dial connects a worker to the transport.
 func Dial(port int) (net.Conn, error) {
 	return net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+}
+
+// DialRetry connects a worker to the transport, retrying on failure until it
+// succeeds, ctx is cancelled, or the timeout elapses. The transport (session 0)
+// may not be accepting at the instant the service spawns a new worker on a user
+// switch; without retrying, a single connection-refused would fatally kill the
+// worker and leave the transport with no frame producer (black screen). Retrying
+// makes the worker simply wait for the transport to come up.
+func DialRetry(ctx context.Context, port int, timeout time.Duration) (net.Conn, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		conn, err := Dial(port)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 }

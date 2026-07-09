@@ -480,6 +480,8 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   HANDLE transport = nullptr;  // TransportMode: session-0 persistent transport
   HANDLE worker = nullptr;     // TransportMode: per-session capture worker
   DWORD workerSession = 0xFFFFFFFF;
+  HANDLE prevWorker = nullptr;  // old worker kept alive one loop during a swap so
+                                // there's no zero-producer window (see below)
   for (;;) {
     DWORD target = GetTargetSessionId();
     bool transportMode = ReadTransportModeFlag();
@@ -532,23 +534,41 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
         }
         transport = LaunchTransportSession0();
       }
+      // Retire a worker held over from the previous loop's swap. By now the new
+      // worker has had a full loop (+ its own dial-retry) to attach to the
+      // transport and become the producer, so killing the old one leaves no gap.
+      if (prevWorker) {
+        TerminateProcess(prevWorker, 0);
+        CloseHandle(prevWorker);
+        prevWorker = nullptr;
+      }
       bool wDead = (!worker || WaitForSingleObject(worker, 0) == WAIT_OBJECT_0);
       bool wMoved = (worker && target != 0xFFFFFFFF && target != workerSession);
-      if (wDead || wMoved) {
+      if (wMoved) {
+        // Session changed: spawn the new-session worker FIRST and DEFER killing
+        // the old one (via prevWorker) to the next loop — so the old worker keeps
+        // producing frames until the new one has attached. The transport keeps a
+        // single producer (newest attached wins), so brief overlap is safe. If
+        // there's no interactive user yet (login screen), LaunchWorker returns
+        // null and the wDead path retries; secure-desktop frames come via the
+        // helper bridge meanwhile.
+        Log(L"svc", L"active session %lu -> %lu; swapping capture worker",
+            workerSession, target);
+        prevWorker = worker;
+        worker = LaunchWorkerInSession(target);
+        workerSession = target;
+      } else if (wDead) {
         if (worker) {
-          if (wMoved)
-            Log(L"svc", L"active session %lu -> %lu; swapping capture worker",
-                workerSession, target);
-          if (wMoved) TerminateProcess(worker, 0);
           CloseHandle(worker);
           worker = nullptr;
         }
         worker = LaunchWorkerInSession(target);
         workerSession = target;
       }
-    } else if (worker || transport) {
-      // Mode turned off — stop the transport/worker.
+    } else if (worker || transport || prevWorker) {
+      // Mode turned off — stop the transport/worker(s).
       if (worker) { TerminateProcess(worker, 0); CloseHandle(worker); worker = nullptr; }
+      if (prevWorker) { TerminateProcess(prevWorker, 0); CloseHandle(prevWorker); prevWorker = nullptr; }
       if (transport) { TerminateProcess(transport, 0); CloseHandle(transport); transport = nullptr; }
       workerSession = 0xFFFFFFFF;
     }
@@ -597,6 +617,10 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   if (worker) {
     TerminateProcess(worker, 0);
     CloseHandle(worker);
+  }
+  if (prevWorker) {
+    TerminateProcess(prevWorker, 0);
+    CloseHandle(prevWorker);
   }
   if (transport) {
     TerminateProcess(transport, 0);

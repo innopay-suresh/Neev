@@ -38,7 +38,11 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	if port == 0 {
 		port = ipc.DefaultPort
 	}
-	conn, err := ipc.Dial(port)
+	// Retry the dial: the persistent transport (session 0) may not be accepting
+	// at the instant the service spawns us on a user switch. Without retrying, a
+	// single connection-refused would fatally exit the worker, leaving the
+	// transport with no frame producer (frozen/black screen). Wait for it.
+	conn, err := ipc.DialRetry(ctx, port, 15*time.Second)
 	if err != nil {
 		return err
 	}
