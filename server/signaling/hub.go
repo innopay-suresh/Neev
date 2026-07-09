@@ -89,6 +89,7 @@ type client struct {
 	hostname  string // for same-network discovery
 	os        string
 	orgID     string
+	saidBye   bool // sent an explicit bye (deliberate end, not a dropped socket)
 	mu        sync.Mutex
 }
 
@@ -282,6 +283,7 @@ func (h *Hub) HandleWS(c *websocket.Conn) {
 		case MsgOffer, MsgAnswer, MsgCandidate:
 			h.handleRelay(ctx, cli, msg)
 		case MsgBye:
+			cli.saidBye = true
 			return
 		}
 	}
@@ -699,13 +701,21 @@ func (h *Hub) disconnect(ctx context.Context, cli *client) {
 	})
 	log.Info().Str("id", cli.agentID).Str("role", cli.role).Msg("client disconnected")
 
-	// Notify paired peer.
+	// Notify paired peer. The reason lets the peer tell a deliberate end
+	// ("peer_left": the client sent an explicit bye) from a dropped socket
+	// ("peer_dropped": process killed / network lost — e.g. the SYSTEM service
+	// relaunching the host on a user switch). Viewers auto-reconnect only on
+	// the latter.
 	peerID := peerOf(cli.agentID)
 	h.mu.RLock()
 	peer, ok := h.agents[peerID]
 	h.mu.RUnlock()
 	if ok {
-		_ = peer.send(Message{Type: MsgBye, From: cli.agentID})
+		reason := "peer_dropped"
+		if cli.saidBye {
+			reason = "peer_left"
+		}
+		_ = peer.send(Message{Type: MsgBye, From: cli.agentID, Error: reason})
 	}
 }
 

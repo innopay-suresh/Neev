@@ -1059,12 +1059,36 @@ class RemoteService extends ChangeNotifier {
         }
         break;
       case SignalingMessageType.bye:
-        await disconnectViewer();
+        // The relay sends a synthetic bye whenever the HOST's socket drops —
+        // which is exactly what a user switch looks like (the SYSTEM service
+        // kills + relaunches the host in the new session). That is NOT a
+        // deliberate "session ended", so while auto-reconnect is armed treat
+        // it as an unexpected drop and keep re-dialing the same machine-id.
+        // A deliberate end ('peer_left', e.g. the host rejected the request)
+        // still tears down for good — and rejections also arrive before
+        // autoReconnect is armed, so old servers without a reason are safe.
+        if (autoReconnect && msg.error != 'peer_left') {
+          _onViewerConnectionLost();
+        } else {
+          await disconnectViewer();
+        }
         break;
       case SignalingMessageType.error:
         _viewerStatus = ViewerStatus.failed;
         _viewerError = msg.error ?? 'Connection rejected';
         notifyListeners();
+        // While riding out a host relaunch (user switch / reboot) the relay
+        // answers "agent disconnected" / "agent not found or offline" until
+        // the new host re-registers — keep re-dialing through those. Auth
+        // failures are terminal: stop, or the retry loop would hammer the
+        // relay into its 5-strike password lockout.
+        final err = (msg.error ?? '').toLowerCase();
+        if (err.contains('password') || err.contains('too many')) {
+          autoReconnect = false;
+          _reconnectTimer?.cancel();
+        } else {
+          _maybeScheduleReconnect();
+        }
         break;
       default:
         break;

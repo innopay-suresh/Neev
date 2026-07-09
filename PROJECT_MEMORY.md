@@ -86,15 +86,30 @@ moves to **Working Features** after it is confirmed working on real hardware.
   the helper now broadcasts frames to ALL connected pipe clients
   (`neev_helper.cpp`: `g_client` → `g_clients` + per-client reader threads), so
   whichever host the viewer watches gets the overlay. No Flutter/app change.
-- **KP-2 — Full disconnect on user switch. FIX IMPLEMENTED 2026-07-08 (pending
-  hardware verify).** The service does `TerminateProcess(host)` + relaunch on
-  session change (log: `active session X -> Y; relaunching host`); the transport
-  lives in that host, so it dies. Per LD-1 (revised: no Go rewrite), fixed in
-  Dart: the viewer now enables auto-reconnect after a successful connect and
-  re-dials the SAME machine-id when the peer drops (fast 2 s retries, then 5 s).
-  The relaunched host re-registers the machine-id, so the viewer reconnects into
-  the new user's desktop. Result: brief ~2-5 s drop, NOT seamless (true seamless
-  would need the native service-transport, deliberately not done).
+- **KP-2 — Full disconnect on user switch. 07-08 fix FAILED IN FIELD 2026-07-09
+  (build 11:37 IST); real root cause found, FIX v2 IMPLEMENTED 2026-07-09
+  (pending hardware verify).** The 07-08 viewer auto-reconnect never got the
+  chance to run: when the service kills the host on a session change, the
+  host's relay websocket drops and the relay sends a synthetic `bye` to the
+  viewer (`server/signaling/hub.go` `disconnect()`); the viewer treated ANY
+  `bye` as a deliberate session end → `disconnectViewer()` with
+  `autoReconnect=false` → reconnect disarmed + grace timer cancelled →
+  permanent disconnect. Exactly the reported symptom: switch-user password
+  page visible in viewer (secure-desktop path works), host app closes on
+  login, viewer stays open but never reconnects. Second latent hole: while the
+  new host is still re-registering (password entry + profile load can take
+  30-60 s), the relay answers a re-dial with `error` "agent disconnected" /
+  "agent not found or offline", which set status failed WITHOUT rescheduling.
+  Fix v2: (a) `remote_service.dart` `bye` handler — while autoReconnect is
+  armed and reason ≠ `peer_left`, treat bye as connection lost and keep
+  re-dialing; (b) relay `error` replies reschedule the retry, EXCEPT
+  password / too-many-attempts which now hard-stop autoReconnect (so retries
+  can't trip the relay's 5-strike lockout); (c) `hub.go` — synthetic bye now
+  carries reason `peer_left` (client sent an explicit bye, e.g. host rejected
+  consent) vs `peer_dropped` (socket died, e.g. host killed on switch). The
+  Dart fix also works against the OLD deployed relay (bare bye + armed →
+  reconnect; rejections arrive before arming, so they still end cleanly);
+  relay redeploy only needed for the reason tags.
 - **KP-3 — Clipboard files on-paste (delayed render) is v1, unverified on
   hardware.** Compiles; paste correctness / large / multi-file / timeout need
   real-Windows testing before it becomes a Working Feature.
