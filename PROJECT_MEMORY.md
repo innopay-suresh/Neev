@@ -137,9 +137,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
   `HKLM\SOFTWARE\NeevRemote\TransportMode` flag so default behavior is unchanged.
   Then prove one live frame surviving a switch on hardware.
 
+**M4 DONE 2026-07-09 (both CI green):** `neev_helper` opt-in TransportMode
+(HKLM `TransportMode`=1, default off) launches the Go transport once in session 0
++ a capture worker per active session (swap on switch); Flutter host skipped when
+on. Transport writes id/password to `ProgramData\NeevRemote\transport.txt`.
+Test kit published (NOT in the shipping installer — guardrail): portal
+`…/public/installers/seamless-test/` = neev-host.exe + enable/disable-seamless.reg
++ README. **Awaiting user hardware validation of the zero-drop switch.**
+
 ## PROGRAM PLAN (user-approved 2026-07-08, in priority order)
 
-1. **Finish transport (M3✓ → M4)** — zero-drop switch proven on hardware.
+1. **Finish transport (M3✓ → M4✓; hardware validation pending)** — zero-drop switch.
 2. **Merge branch → main** — consolidate all fixes/features into mainline.
 3. **Flutter UI/UX polish pass** — connect screen, toolbar, settings, file/
    clipboard/chat, visual consistency.
