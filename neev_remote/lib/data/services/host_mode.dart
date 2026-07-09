@@ -19,6 +19,11 @@ class HostMode {
       if (m == null) return true;
       final serviceInstance = m['serviceInstance'] == true;
       final serviceHostMode = m['serviceHostMode'] == true;
+      final transportMode = m['transportMode'] == true;
+      // Seamless mode: the Go transport (session 0) owns the machine-id, so a
+      // Flutter window must never host — it would double-register and fight the
+      // transport. Stay viewer/control-only regardless of instance.
+      if (transportMode) return false;
       // Host only if we ARE the service instance, or the service isn't hosting.
       return serviceInstance || !serviceHostMode;
     } catch (_) {

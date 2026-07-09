@@ -55,7 +55,7 @@ const (
 type ICEGatheringPhase int
 
 const (
-	ICEGatheringPhaseHost ICEGatheringPhase = iota // 0-3s: host candidates only
+	ICEGatheringPhaseHost  ICEGatheringPhase = iota // 0-3s: host candidates only
 	ICEGatheringPhaseSTUN                           // 3-8s: add srflx (STUN) candidates
 	ICEGatheringPhaseRelay                          // 8s+: add relay (TURN) candidates
 )
@@ -75,29 +75,29 @@ func (p ICEGatheringPhase) String() string {
 
 // Peer wraps a pion WebRTC PeerConnection and manages ICE/SDP signaling.
 type Peer struct {
-	mu                sync.Mutex
-	pc                *webrtc.PeerConnection
-	role              PeerRole
-	sigClient         *Client
-	peerID            string
-	connMode          ConnectionMode
-	icePhase          ICEGatheringPhase
-	iceGatheringDone  bool
-	firstCandidateSet bool
+	mu                 sync.Mutex
+	pc                 *webrtc.PeerConnection
+	role               PeerRole
+	sigClient          *Client
+	peerID             string
+	connMode           ConnectionMode
+	icePhase           ICEGatheringPhase
+	iceGatheringDone   bool
+	firstCandidateSet  bool
 	fallbackICEservers []webrtc.ICEServer // TURN servers for fallback
-	iceTimeoutTimer   *time.Timer
-	VideoTrack        *webrtc.TrackLocalStaticRTP // nil for controller role
-	ControlDC         *webrtc.DataChannel         // the control data channel
-	ClipboardDC       *webrtc.DataChannel         // clipboard data channel
-	ChatDC            *webrtc.DataChannel         // chat data channel
-	FileTransferDC    *webrtc.DataChannel         // file transfer data channel
-	OnTrack           func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
-	OnData            func(label string, data []byte, isString bool)
-	OnConnected       func()
-	OnDisconnected    func(reason string) // called when connection drops unexpectedly
-	OnReconnected     func()              // called after successful reconnect
-	OnFallbackAttempt func(phase ICEGatheringPhase) // called when falling back to next ICE phase
-	pendingCandidates []webrtc.ICECandidateInit
+	iceTimeoutTimer    *time.Timer
+	VideoTrack         *webrtc.TrackLocalStaticRTP // nil for controller role
+	ControlDC          *webrtc.DataChannel         // the control data channel
+	ClipboardDC        *webrtc.DataChannel         // clipboard data channel
+	ChatDC             *webrtc.DataChannel         // chat data channel
+	FileTransferDC     *webrtc.DataChannel         // file transfer data channel
+	OnTrack            func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
+	OnData             func(label string, data []byte, isString bool)
+	OnConnected        func()
+	OnDisconnected     func(reason string)           // called when connection drops unexpectedly
+	OnReconnected      func()                        // called after successful reconnect
+	OnFallbackAttempt  func(phase ICEGatheringPhase) // called when falling back to next ICE phase
+	pendingCandidates  []webrtc.ICECandidateInit
 }
 
 // NewPeer creates a WebRTC PeerConnection configured with the given ICE servers.
@@ -120,8 +120,8 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 	log.Info().Int("total_ice_servers", len(pionServers)).Msg("creating PeerConnection with ICE servers")
 
 	cfg := webrtc.Configuration{
-		ICEServers:           pionServers,
-		ICETransportPolicy:   webrtc.ICETransportPolicyAll, // gather all candidate types
+		ICEServers:         pionServers,
+		ICETransportPolicy: webrtc.ICETransportPolicyAll, // gather all candidate types
 	}
 	pc, err := webrtc.NewPeerConnection(cfg)
 	if err != nil {
@@ -364,6 +364,65 @@ func (p *Peer) CreateOffer(ctx context.Context) error {
 
 	// Send the fully gathered offer
 	payload, err := json.Marshal(p.pc.LocalDescription())
+	if err != nil {
+		return fmt.Errorf("marshal offer: %w", err)
+	}
+	return p.sigClient.Send(Message{Type: MsgOffer, To: p.peerID, Payload: payload})
+}
+
+// CreateAgentOffer makes the AGENT the offerer, matching the Flutter host so an
+// unchanged Flutter viewer (which always answers the host's offer) can connect
+// to the SYSTEM-service transport. It opens the exact data channels the viewer
+// binds — "control" (reliable, ordered), "cursor" (unreliable, unordered), and
+// "file" (reliable, ordered) — and sends the offer immediately, letting ICE
+// candidates trickle via OnICECandidate, exactly like the Flutter host. The
+// video track was already added in NewPeer for RoleAgent.
+func (p *Peer) CreateAgentOffer(ctx context.Context) error {
+	// control: reliable, ordered (buttons, keys, wheel, commands, quality).
+	ctrl, err := p.pc.CreateDataChannel("control", nil)
+	if err != nil {
+		return fmt.Errorf("create control channel: %w", err)
+	}
+	p.mu.Lock()
+	p.ControlDC = ctrl
+	p.mu.Unlock()
+	ctrl.OnMessage(func(m webrtc.DataChannelMessage) {
+		if p.OnData != nil {
+			p.OnData("control", m.Data, m.IsString)
+		}
+	})
+
+	// cursor: unreliable, unordered — high-rate mouse moves where only the
+	// latest position matters (a lost/late move must not stall input).
+	ordered := false
+	var noRetransmit uint16 = 0
+	if cur, err := p.pc.CreateDataChannel("cursor",
+		&webrtc.DataChannelInit{Ordered: &ordered, MaxRetransmits: &noRetransmit}); err == nil {
+		cur.OnMessage(func(m webrtc.DataChannelMessage) {
+			if p.OnData != nil {
+				p.OnData("cursor", m.Data, m.IsString)
+			}
+		})
+	}
+
+	// file: reliable, ordered — created so the viewer binds it (bytes carried in
+	// a later parity phase); harmless if unused.
+	if fileDC, err := p.pc.CreateDataChannel("file", nil); err == nil {
+		fileDC.OnMessage(func(m webrtc.DataChannelMessage) {
+			if p.OnData != nil {
+				p.OnData("file", m.Data, m.IsString)
+			}
+		})
+	}
+
+	offer, err := p.pc.CreateOffer(nil)
+	if err != nil {
+		return fmt.Errorf("create offer: %w", err)
+	}
+	if err := p.pc.SetLocalDescription(offer); err != nil {
+		return fmt.Errorf("set local description: %w", err)
+	}
+	payload, err := json.Marshal(offer)
 	if err != nil {
 		return fmt.Errorf("marshal offer: %w", err)
 	}

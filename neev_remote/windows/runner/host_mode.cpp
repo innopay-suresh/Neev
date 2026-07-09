@@ -22,6 +22,19 @@ bool ServiceHostModeEnabled() {
   return false;
 }
 
+// HKLM\SOFTWARE\NeevRemote\TransportMode=1 means the SYSTEM service runs the Go
+// transport (session 0) + per-session worker for the seamless user-switch
+// backend. When on, the Go transport owns the machine-id, so a Flutter window
+// must NOT also host (that would double-register the id and fight the transport).
+bool TransportModeEnabled() {
+  DWORD val = 0, sz = sizeof(val);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\NeevRemote", L"TransportMode",
+                   RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
+    return val != 0;
+  }
+  return false;
+}
+
 }  // namespace
 
 void RegisterHostMode(flutter::FlutterEngine* engine, bool is_service_instance) {
@@ -44,6 +57,8 @@ void RegisterHostMode(flutter::FlutterEngine* engine, bool is_service_instance) 
             flutter::EncodableValue(is_service_instance);
         m[flutter::EncodableValue("serviceHostMode")] =
             flutter::EncodableValue(ServiceHostModeEnabled());
+        m[flutter::EncodableValue("transportMode")] =
+            flutter::EncodableValue(TransportModeEnabled());
         result->Success(flutter::EncodableValue(m));
       });
 

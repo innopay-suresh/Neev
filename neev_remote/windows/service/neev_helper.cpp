@@ -366,10 +366,53 @@ static HANDLE LaunchHostInSession(DWORD sid) {
       sid, L"\"" + HostExePath() + L"\" --service-host", L"host");
 }
 
-// Capture worker: runs in the active user session (needs desktop access), swapped
-// on every session change. Streams encoded frames to the session-0 transport.
+// Launch [cmdline] AS THE LOGGED-IN USER of session [sid] (WTSQueryUserToken →
+// DuplicateTokenEx → CreateProcessAsUser on winsta0\default), rather than the
+// SYSTEM-retargeted token LaunchProcessInSession uses. Required for the capture
+// worker: running as the actual user makes SendInput and desktop capture land on
+// that user's interactive desktop. Returns null at the logon/secure desktop (no
+// interactive user token yet) — the caller retries once the user has logged in.
+static HANDLE LaunchAsUserInSession(DWORD sid, const std::wstring& cmdline,
+                                    const wchar_t* tag) {
+  if (sid == 0xFFFFFFFF) return nullptr;
+  HANDLE userTok = nullptr;
+  if (!WTSQueryUserToken(sid, &userTok)) return nullptr;  // no interactive user
+  HANDLE primary = nullptr;
+  if (!DuplicateTokenEx(userTok, MAXIMUM_ALLOWED, nullptr, SecurityImpersonation,
+                        TokenPrimary, &primary)) {
+    Log(L"svc", L"DuplicateTokenEx(%ls) failed: %lu", tag, GetLastError());
+    CloseHandle(userTok);
+    return nullptr;
+  }
+  CloseHandle(userTok);
+  LPVOID env = nullptr;
+  CreateEnvironmentBlock(&env, primary, FALSE);
+  STARTUPINFOW si = {0};
+  si.cb = sizeof(si);
+  si.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
+  PROCESS_INFORMATION pi = {0};
+  std::wstring mutableCmd = cmdline;
+  BOOL ok = CreateProcessAsUserW(
+      primary, nullptr, &mutableCmd[0], nullptr, nullptr, FALSE,
+      CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, env, nullptr, &si, &pi);
+  if (env) DestroyEnvironmentBlock(env);
+  CloseHandle(primary);
+  if (!ok) {
+    Log(L"svc", L"CreateProcessAsUser(%ls) failed: %lu", tag, GetLastError());
+    return nullptr;
+  }
+  Log(L"svc", L"launched %ls (as user) in session %lu (pid %lu)", tag, sid,
+      pi.dwProcessId);
+  CloseHandle(pi.hThread);
+  return pi.hProcess;
+}
+
+// Capture worker: runs in the active user session AS THE LOGGED-IN USER (needs
+// desktop access + SendInput on the user's desktop), swapped on every session
+// change. Streams encoded frames to (and receives input from) the session-0
+// transport. Null at the logon screen; the service loop retries after login.
 static HANDLE LaunchWorkerInSession(DWORD sid) {
-  return LaunchProcessInSession(
+  return LaunchAsUserInSession(
       sid, L"\"" + HostCoreExePath() + L"\" --capture-worker", L"worker");
 }
 

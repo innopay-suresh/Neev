@@ -65,6 +65,38 @@ jobs:
         if: matrix.platform == 'windows'
         run: choco install innosetup -y
 
+      # ---- Go transport/worker host (Windows only): the seamless user-switch
+      # backend (TransportMode). Built here so build_windows.ps1 can bundle
+      # neev-host.exe into the installer. Mirrors agent-windows.yml (CGO + the
+      # bundled static libvpx). ----
+      - name: Set up Go (Windows)
+        if: matrix.platform == 'windows'
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+
+      - name: Install MSYS2 (mingw gcc for CGO, Windows)
+        if: matrix.platform == 'windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          install: mingw-w64-x86_64-gcc
+
+      - name: Build Go host (neev-host.exe)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          $gcc = Join-Path "${{ steps.msys2.outputs.msys2-location }}" "mingw64\bin\gcc.exe"
+          if (!(Test-Path $gcc)) { throw "gcc not found at $gcc" }
+          $env:CC = $gcc
+          go mod tidy
+          go build -v -o neev-host.exe ./agent
+          Get-Item neev-host.exe | Select-Object Name,Length
+
       - name: flutter pub get
         run: cd neev_remote && flutter pub get
 

@@ -6,6 +6,12 @@
 #define AppVersion "1.0.0"
 #define AppPublisher "Neev"
 #define AppExe "neev_remote.exe"
+; Relay URL the Go transport (seamless mode) dials. Passed by build_windows.ps1
+; (/DRelayURL=...) to match the URL baked into the Flutter app; empty otherwise
+; (the transport then falls back to its built-in default).
+#ifndef RelayURL
+  #define RelayURL ""
+#endif
 
 [Setup]
 AppId={{8F1B6C3A-7E2D-4B5A-9C11-NEEVREMOTE001}}
@@ -45,6 +51,12 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 ; account is active. DEFAULT ON — without it the host stays stuck in the first
 ; user's session and won't follow user-switching / logon of another account.
 Name: "allusersstart"; Description: "Keep reachable for every user (follow user-switching / lock screen)"; GroupDescription: "Unattended access:"
+; Seamless user-switch (opt-in, EXPERIMENTAL): run the SYSTEM-service transport
+; (session 0, survives switches) + a per-session capture+input worker instead of
+; the per-session Flutter host, so a user-profile switch hands the viewer the new
+; profile's screen + control with NO disconnect. Requires neev-host.exe to be
+; bundled. DEFAULT OFF — the Flutter host stays the default until validated.
+Name: "seamless"; Description: "Seamless user-switch (experimental, no disconnect)"; GroupDescription: "Unattended access:"; Flags: unchecked
 
 [Files]
 ; Packages the entire release folder produced by `flutter build windows`.
@@ -74,6 +86,16 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait pos
 ; service-owned host (no duplicate from a per-user Run key). The service reads
 ; this flag live. Removed on uninstall.
 Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "ServiceHost"; ValueData: "1"; Flags: uninsdeletevalue; Tasks: allusersstart
+; TransportMode (opt-in via the "seamless" task): the service runs the Go
+; transport (session 0) + per-session capture+input worker for a zero-disconnect
+; user-profile switch. The service reads this live. Written 1 when chosen, and
+; forced 0 when NOT chosen so unticking it on re-install actually turns it off.
+Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "TransportMode"; ValueData: "1"; Flags: uninsdeletevalue; Tasks: seamless
+Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "TransportMode"; ValueData: "0"; Flags: uninsdeletevalue; Tasks: not seamless
+#if RelayURL != ""
+; Relay URL for the Go transport (seamless mode), matching the app's baked URL.
+Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: string; ValueName: "RelayURL"; ValueData: "{#RelayURL}"; Flags: uninsdeletevalue
+#endif
 
 [UninstallRun]
 ; Always remove the service on uninstall (no-op if it was never installed).

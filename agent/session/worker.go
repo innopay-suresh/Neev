@@ -49,18 +49,27 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	var wantKeyframe atomic.Bool
 	wantKeyframe.Store(true) // first frame is always a keyframe
 
-	// Reader: transport -> worker messages (keyframe requests, pings). Ends when
+	// Injects viewer input into THIS session. On Windows this is real SendInput
+	// (the worker runs as the logged-in user, so control follows the switch);
+	// elsewhere it's a no-op.
+	injector := newInputSink()
+	defer injector.Close()
+
+	// Reader: transport -> worker messages (keyframe requests, input). Ends when
 	// the transport goes away, which also unblocks the capture loop via ctx.
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
 		for {
-			kind, _, err := ipc.ReadMessage(conn)
+			kind, payload, err := ipc.ReadMessage(conn)
 			if err != nil {
 				return
 			}
-			if kind == ipc.KindKeyframeReq {
+			switch kind {
+			case ipc.KindKeyframeReq:
 				wantKeyframe.Store(true)
+			case ipc.KindInput:
+				injector.Post(payload)
 			}
 		}
 	}()

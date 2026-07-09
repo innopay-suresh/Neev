@@ -4,11 +4,12 @@ import (
 	"context"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
-	"github.com/pion/rtcp"
 	"github.com/rs/zerolog/log"
 
 	"github.com/neev/remote-agent/agent/auth"
@@ -86,11 +87,17 @@ func RunTransport(ctx context.Context, port int) error {
 }
 
 func (t *Transport) setupSignaling(ctx context.Context) error {
-	// Credential: a fixed unattended password if provided, else a fresh random
-	// one. Both id + password are written to a file on register so a headless
-	// (session 0) transport is still reachable during PoC testing.
-	// (Phase 1 will source id+password from the SYSTEM helper's machine creds.)
-	password := os.Getenv("UNATTENDED_PASSWORD")
+	// Identity + credential: prefer the machine-wide id + password minted by the
+	// SYSTEM helper (machine.dat), so a viewer reaches the transport with the
+	// SAME id+password it uses for the normal Flutter host — nothing new to
+	// discover, and a switch into TransportMode is transparent. Fall back to a
+	// fixed unattended password (env) or a fresh random one for non-helper/PoC
+	// runs. id/password are also written to transport.txt on register.
+	machineID, machinePw := loadMachineCreds()
+	password := machinePw
+	if password == "" {
+		password = os.Getenv("UNATTENDED_PASSWORD")
+	}
 	if password == "" {
 		if p, err := auth.GenerateRandomPassword(); err == nil {
 			password = p
@@ -113,6 +120,11 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 	t.sigClient = network.NewClient(t.relayURL, passwordHash, passwordHash,
 		"transport", os.Getenv("ORG_ID"), os.Getenv("DEVICE_GROUP"),
 		os.Getenv("ENROLLMENT_CODE"))
+	// Register under the machine-wide id (the relay honors a requested id), so
+	// the viewer's saved machine-id keeps working across the switch.
+	if machineID != "" {
+		t.sigClient.AgentID = machineID
+	}
 
 	go func() {
 		if err := t.sigClient.Connect(ctx); err != nil && ctx.Err() == nil {
@@ -125,10 +137,12 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 		t.writeCreds()
 	})
 	t.sigClient.On(network.MsgConnect, func(m network.Message) { t.onConnect(ctx, m) })
-	t.sigClient.On(network.MsgOffer, func(m network.Message) {
+	// The transport is the OFFERER (like the Flutter host), so the viewer sends
+	// an ANSWER, not an offer.
+	t.sigClient.On(network.MsgAnswer, func(m network.Message) {
 		if p := t.getPeer(m.From); p != nil {
-			if err := p.peer.HandleOffer(m.Payload); err != nil {
-				log.Error().Err(err).Msg("transport: handle offer")
+			if err := p.peer.HandleAnswer(m.Payload); err != nil {
+				log.Error().Err(err).Msg("transport: handle answer")
 			}
 		}
 	})
@@ -166,8 +180,37 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		t.requestKeyframe() // fresh keyframe for the new viewer
 	}
 
+	// Viewer input (mouse/keyboard) arrives on the control + cursor channels;
+	// forward it down to the current capture worker, which injects it into the
+	// active session. This is what gives the viewer full control that survives a
+	// user switch (only the worker is swapped; this peer never drops).
+	peer.OnData = func(label string, data []byte, isString bool) {
+		switch label {
+		case "control", "cursor":
+			t.sendInputToWorker(data)
+		}
+	}
+
+	// Send the offer now (viewer answers). Candidates trickle via OnICECandidate.
+	if err := peer.CreateAgentOffer(ctx); err != nil {
+		log.Error().Err(err).Msg("transport: create offer")
+		t.dropPeer(m.From)
+		return
+	}
+
 	// Forward viewer PLI/FIR (keyframe requests) to the capture worker.
 	go t.watchRTCP(ctx, peer)
+}
+
+// sendInputToWorker forwards a raw viewer input event to the current capture
+// worker over IPC. Dropped silently if no worker is attached (e.g. mid-swap).
+func (t *Transport) sendInputToWorker(raw []byte) {
+	t.workerMu.Lock()
+	conn := t.worker
+	t.workerMu.Unlock()
+	if conn != nil {
+		_ = ipc.WriteMessage(conn, ipc.KindInput, raw)
+	}
 }
 
 // watchRTCP reads RTCP from the peer's video sender and asks the worker for a
@@ -288,6 +331,31 @@ func (t *Transport) writeCreds() {
 	content := "id=" + t.sigClient.AgentID + "\npassword=" + t.password + "\n"
 	_ = os.WriteFile(path, []byte(content), 0o600)
 	log.Info().Str("path", path).Msg("transport creds written")
+}
+
+// loadMachineCreds reads the SYSTEM helper's machine-wide id + password from
+// C:\ProgramData\NeevRemote\machine.dat (line 1 = id, line 2 = password; the
+// password may be empty until the user sets one). Returns ("","") if absent —
+// the caller then falls back to env/random. Windows-only in practice; on other
+// OSes ProgramData is unset so this returns empty.
+func loadMachineCreds() (id, password string) {
+	dir := os.Getenv("ProgramData")
+	if dir == "" {
+		return "", ""
+	}
+	data, err := os.ReadFile(dir + string(os.PathSeparator) + "NeevRemote" +
+		string(os.PathSeparator) + "machine.dat")
+	if err != nil {
+		return "", ""
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	if len(lines) > 0 {
+		id = strings.TrimSpace(lines[0])
+	}
+	if len(lines) > 1 {
+		password = strings.TrimSpace(lines[1])
+	}
+	return id, password
 }
 
 // requestKeyframe asks the current capture worker for a keyframe.

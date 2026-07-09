@@ -76,6 +76,20 @@ if (Test-Path $outExe) {
   throw "neev_helper.exe FAILED to compile — installer requires it (see cl errors above)"
 }
 
+# Bundle the Go transport/worker host (neev-host.exe) if CI built it at the repo
+# root. It powers the opt-in seamless user-switch backend (TransportMode): a
+# persistent session-0 transport + a per-session capture+input worker. Optional
+# so a local build without the Go toolchain still produces a working installer;
+# the seamless mode simply stays unavailable when it's absent.
+Write-Host "==> bundling Go host (neev-host.exe) if present"
+$goHost = Join-Path ".." "neev-host.exe"
+if (Test-Path $goHost) {
+  Copy-Item $goHost (Join-Path $ReleaseDir "neev-host.exe") -Force
+  Write-Host "    bundled neev-host.exe"
+} else {
+  Write-Warning "    neev-host.exe not found at $goHost — seamless (TransportMode) backend will be unavailable in this build"
+}
+
 Write-Host "==> portable zip"
 $Zip = Join-Path $Out "NeevRemote-windows-x64-portable.zip"
 if (Test-Path $Zip) { Remove-Item $Zip }
@@ -84,7 +98,13 @@ Compress-Archive -Path "$ReleaseDir\*" -DestinationPath $Zip
 Write-Host "==> installer (Inno Setup)"
 $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
 if ($iscc) {
-  & $iscc.Source "packaging\windows\installer.iss"
+  # Pass the baked relay URL so the Go transport (seamless mode) dials the same
+  # server the app does.
+  if ($env:RELAY_URL) {
+    & $iscc.Source ("/DRelayURL=" + $env:RELAY_URL) "packaging\windows\installer.iss"
+  } else {
+    & $iscc.Source "packaging\windows\installer.iss"
+  }
   Write-Host "Installer written to $Out"
 } else {
   Write-Warning "iscc.exe not found - skipping installer. Install Inno Setup from https://jrsoftware.org/isdl.php"

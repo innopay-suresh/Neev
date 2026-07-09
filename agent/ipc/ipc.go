@@ -41,6 +41,14 @@ const (
 
 	// Either direction: liveness ping. payload = empty.
 	KindPing byte = 0x04
+
+	// Transport -> worker: a viewer input event to inject into the worker's
+	// session. payload = the raw viewer control-channel JSON, e.g.
+	// {"k":"mv","x":..,"y":..} / {"k":"btn",..} / {"k":"whl",..} /
+	// {"k":"key","u":hidUsage,"d":bool}. The worker parses + injects it in the
+	// active session, so mouse/keyboard control survives a user switch (the
+	// transport keeps the WebRTC connection; only the worker is swapped).
+	KindInput byte = 0x05
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

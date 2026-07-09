@@ -62,6 +62,21 @@ moves to **Working Features** after it is confirmed working on real hardware.
   (transport is in the user-session Flutter host — see LD-1). Until/unless that
   native re-architecture happens, user switches are handled by viewer
   auto-reconnect (brief drop, not seamless).
+- **LD-7 — After any user-profile switch, the service spawns a worker into the
+  new session and hands the viewer full screen + control automatically, with no
+  prompt and no disconnect** (the AnyDesk model; session ends only on deliberate
+  end-session or network loss). Implemented via the opt-in `TransportMode`
+  seamless backend (built 2026-07-09, Phase A — pending hardware validation):
+  the Go transport runs persistently in session 0 as SYSTEM (owns the WebRTC
+  connection, never dies on a switch), and a per-session capture+**input**
+  worker is spawned into the active session via `WTSQueryUserToken` →
+  `DuplicateTokenEx` → `CreateProcessAsUser` on `winsta0\default` (runs AS the
+  logged-in user, so SendInput lands on that user's desktop). On a profile
+  switch only the worker is swapped; the viewer's peer + RTP stream continue, so
+  no disconnect. The transport is the WebRTC OFFERER and auto-accepts (no
+  consent dialog). Requires the native session-0 transport — NOT achievable in
+  pure Dart (a user-session transport dies on the switch by definition, see
+  LD-1). Clipboard/files over this path are Phase B (not yet carried).
 
 ---
 
@@ -141,6 +156,43 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-09 — Phase A: seamless user-profile switch (TransportMode) built
+  end-to-end (native Go + C++ + installer) — pending hardware validation.**
+  Delivers LD-7. User approved after diagnosis confirmed: (Q1) the helper service
+  genuinely runs as LocalSystem/session 0 (`CreateServiceW(..,nullptr,..)`), so
+  `WTSQueryUserToken` works; (Q2) the shipping path only RELAUNCHES the whole
+  Flutter host into the new session (transport dies → disconnect), never swaps a
+  worker behind a live connection. Fix = finish the opt-in Go transport backend:
+  • **Input over the transport** (Go): `ipc.KindInput` carries the viewer's raw
+    control JSON transport→worker; new `agent/session/inject_windows.go` is a
+    faithful port of `input_injector.cpp` (HID→VK, extended keys, absolute-over-
+    primary coords, last-position fallback, single serial goroutine for ordering)
+    that SendInputs into the worker's session; `inject_other.go` = no-op stub.
+    `transport.go` sets `peer.OnData` (control+cursor) → `sendInputToWorker`.
+  • **WebRTC role fix** (Go): the transport is now the OFFERER (was answerer) via
+    new `Peer.CreateAgentOffer` creating the exact channels the unchanged Flutter
+    viewer binds (`control`/`cursor`/`file`) + trickle offer, and handles the
+    viewer's ANSWER. Without this, viewer(answerer)+transport(answerer) deadlock.
+    Transport auto-accepts on connect → NO consent dialog.
+  • **Same machine creds** (Go): transport reads `machine.dat` (id+password) and
+    registers under the machine id, so the viewer uses the SAME credentials as
+    the normal host.
+  • **Worker as the user** (C++): new `LaunchAsUserInSession` (WTSQueryUserToken →
+    DuplicateTokenEx → CreateProcessAsUser on `winsta0\default`); `LaunchWorker
+    InSession` now uses it (was SYSTEM-retarget), so capture+SendInput land on the
+    logged-in user's desktop. Null at the logon screen → loop retries after login.
+  • **No double host** (C++/Dart): `host_mode` now reports `transportMode`;
+    `HostMode.shouldAutoHost` returns false when it's on, so a Flutter window
+    never fights the transport for the machine-id.
+  • **Bundle + ship** (CI/installer): `flutter.yml` Windows job builds
+    `neev-host.exe` (Go, CGO+libvpx); `build_windows.ps1` bundles it into the
+    installer; new opt-in installer task "Seamless user-switch" sets HKLM
+    `TransportMode=1` (default OFF — Flutter host stays default), and writes
+    `RelayURL` for the transport.
+  NO regression to UAC / secure-desktop capture / clipboard: those stay in the
+  unchanged `neev_helper` GDI path + Flutter+helper for the default mode; the
+  seamless path is opt-in. Phase B (deferred): carry clipboard/files + commands
+  (reboot/lock/SAS) over the transport for full parity before any default cutover.
 - **2026-07-08 — DECISION: build industry-standard transport-in-SYSTEM-service
   (reverses "no Go").** To compete with AnyDesk/TeamViewer (zero-drop user
   switch, always-on unattended), the transport must live in a persistent
