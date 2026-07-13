@@ -206,6 +206,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-13 — TransportMode Phase B, batch 3: file transfer viewer→host
+  (import) (r34-filexfer) — pending hardware validation.** Viewer→host file send
+  now works in TransportMode: `transport.go` routes the 'file' data channel
+  (previously dropped — OnData only handled control/cursor) to the worker via new
+  `ipc.KindFileData`; new `filerecv.go` parses the {k:'ft',offer/data/end} stream
+  (reliable+ordered channel, so chunks append in order) and writes to the
+  logged-in user's Downloads (path-sanitized, unique-name). `sendInputToWorker`
+  generalized to `sendToWorker(kind,raw)`. Host→viewer "export" ({t:request})
+  needs a native file picker on the headless host — deferred (logged as
+  unsupported). Bundled with batch 2 (image clipboard) into r34. STILL OPEN:
+  file EXPORT (host→viewer), chat, privacy-mode execution, SAS.
 - **2026-07-13 — TransportMode Phase B, batch 2: image clipboard both ways
   (r33-imgclip) — pending hardware validation.** Extends clipboard-over-transport
   from text to images. New `clipimg_windows.go` reads the host clipboard's CF_DIB

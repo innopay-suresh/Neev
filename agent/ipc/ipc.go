@@ -65,6 +65,11 @@ const (
 	// Viewer→host image chunks ride KindInput like other control messages and are
 	// reassembled by the worker.
 	KindClipboardImage byte = 0x07
+
+	// Transport -> worker: a viewer file-transfer message from the dedicated
+	// 'file' data channel ({"k":"ft","t":"offer|data|end|cancel",...}). The
+	// worker writes received files to the logged-in user's Downloads folder.
+	KindFileData byte = 0x08
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

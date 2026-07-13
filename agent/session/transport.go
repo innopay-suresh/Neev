@@ -224,6 +224,11 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	// per-session worker. Exactly one owner at a time — no contention.
 	peer.OnData = func(label string, data []byte, isString bool) {
 		switch label {
+		case "file":
+			// Viewer→host file transfer rides its own reliable channel; hand it to
+			// the worker (user session) to write into Downloads.
+			t.sendToWorker(ipc.KindFileData, data)
+			return
 		case "control", "cursor":
 			if t.bridge != nil && (t.bridge.SecureActive() || t.bridge.ElevatedActive()) {
 				if n := t.inToBridge.Add(1); n == 1 || n%256 == 0 {
@@ -345,6 +350,20 @@ func (t *Transport) sendInputToWorker(raw []byte) {
 	}
 	if err := ipc.WriteMessage(conn, ipc.KindInput, raw); err != nil {
 		log.Warn().Err(err).Msg("transport: forward input to worker failed")
+	}
+}
+
+// sendToWorker forwards a raw viewer message of the given IPC kind to the current
+// capture worker (e.g. file-transfer data). Dropped silently if no worker.
+func (t *Transport) sendToWorker(kind byte, raw []byte) {
+	t.workerMu.Lock()
+	conn := t.worker
+	t.workerMu.Unlock()
+	if conn == nil {
+		return
+	}
+	if err := ipc.WriteMessage(conn, kind, raw); err != nil {
+		log.Warn().Err(err).Uint8("kind", kind).Msg("transport: forward to worker failed")
 	}
 }
 

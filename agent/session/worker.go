@@ -69,6 +69,10 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	clip := newClipSync(conn)
 	go clip.poll(ctx)
 
+	// Viewer→host file transfers land in the user's Downloads folder.
+	files := newFileReceiver()
+	defer files.closeAll()
+
 	// Reader: transport -> worker messages (keyframe requests, input, clipboard).
 	// Ends when the transport goes away, which also unblocks the capture loop via
 	// ctx.
@@ -94,6 +98,9 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 				} else {
 					injector.Post(payload)
 				}
+			case ipc.KindFileData:
+				// Viewer→host file transfer chunk → write into Downloads.
+				files.handle(payload)
 			}
 		}
 	}()
