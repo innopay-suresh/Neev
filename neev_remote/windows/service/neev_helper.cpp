@@ -213,6 +213,35 @@ static int InstallService() {
     }
   }
   if (svc) {
+    // Enable ServiceHost mode so the SYSTEM service owns a session-following
+    // host (fixes the blank screen after a user switch: the manual window
+    // gets stranded in the old session, the service-launched one follows).
+    // Guard on the co-located host exe — without it the service couldn't
+    // launch a host, and forcing the flag would strand the manual window as
+    // viewer-only with no host at all. Only enable when we can honour it.
+    {
+      std::wstring self = SelfPath();
+      size_t slash = self.find_last_of(L"\\/");
+      std::wstring dir =
+          (slash == std::wstring::npos) ? L"" : self.substr(0, slash + 1);
+      std::wstring hostExe = dir + L"neev_remote.exe";
+      if (GetFileAttributesW(hostExe.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        HKEY k;
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\NeevRemote", 0,
+                            nullptr, 0, KEY_SET_VALUE, nullptr, &k,
+                            nullptr) == ERROR_SUCCESS) {
+          DWORD one = 1;
+          RegSetValueExW(k, L"ServiceHost", 0, REG_DWORD, (const BYTE*)&one,
+                         sizeof(one));
+          RegCloseKey(k);
+          wprintf(L"ServiceHost mode enabled (session-following host)\n");
+        }
+      } else {
+        wprintf(L"Note: neev_remote.exe not next to helper; ServiceHost mode "
+                L"left off (install via the packaged installer to enable "
+                L"user-switch follow).\n");
+      }
+    }
     StartServiceW(svc, 0, nullptr);
     CloseServiceHandle(svc);
     wprintf(L"Installed + started '%ls'. Log: %ls\n", kServiceName, kLogPath);

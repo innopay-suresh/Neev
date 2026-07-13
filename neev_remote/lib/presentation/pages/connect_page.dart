@@ -64,14 +64,9 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
         '${settings.unattendedEnabled} askOnConnect=${settings.askOnConnect}');
     if (!auto) {
       _autoStarted = true; // decided; this instance won't host
-      // When the SYSTEM service transport owns hosting (seamless / TransportMode),
-      // still surface the machine id+password to dial — startHosting is guarded
-      // and stays UI-only (never registers a second host).
-      if (await HostMode.serviceOwnsHosting()) {
-        try {
-          await service.startHosting(relayUrl: settings.relayUrl);
-        } catch (_) {}
-      }
+      // Still show the machine-wide shareable id+password (the service host
+      // owns them) so the Share card isn't blank on a viewer-only window.
+      await service.loadMachineCredsForDisplay();
       return;
     }
     if (!mounted) return;

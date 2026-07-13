@@ -1625,6 +1625,22 @@ class RemoteService extends ChangeNotifier {
   Future<({String id, String password})?> fetchMachineCreds() =>
       _uac.fetchMachineCreds();
 
+  /// Populate the shareable id+password from the machine-wide store for DISPLAY
+  /// on a viewer-only window (one that isn't hosting itself, so it never sets
+  /// them) — otherwise the Share card shows "…" even though the box is
+  /// reachable via the service host's machine-wide credentials.
+  Future<void> loadMachineCredsForDisplay() async {
+    if (!_uac.isSupported) return;
+    final m = await _uac.fetchMachineCreds();
+    if (m != null && m.id.isNotEmpty) {
+      _agentId ??= m.id;
+      if ((_password == null || _password!.isEmpty) && m.password.isNotEmpty) {
+        _password = m.password;
+      }
+      notifyListeners();
+    }
+  }
+
   /// Store [password] as the machine-wide password (shared by every account on
   /// this PC). No-op when the helper isn't present.
   void setMachinePassword(String password) =>
