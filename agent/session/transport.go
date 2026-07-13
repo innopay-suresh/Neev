@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
@@ -211,10 +212,9 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		// Announce the host OS (like the Flutter host does) so the viewer enables
 		// OS-specific controls — WITHOUT it `remoteHostOs` stays empty and the
 		// viewer hides the Windows-only Privacy/Login buttons and skips ⌘↔Ctrl
-		// mapping. The transport/worker only run on Windows, so it's "windows".
-		if err := peer.SendControlText(`{"k":"os","v":"windows"}`); err != nil {
-			log.Debug().Err(err).Msg("transport: host-os announce deferred (control DC not open yet)")
-		}
+		// mapping. The control DC may not be open at the instant OnConnected fires,
+		// so retry briefly until it lands (idempotent on the viewer).
+		go t.announceHostOS(peer)
 	}
 
 	// Viewer input (mouse/keyboard) arrives on the control + cursor channels.
@@ -274,6 +274,22 @@ func (t *Transport) broadcastClip(text string) {
 	for _, ps := range sessions {
 		_ = ps.peer.SendControlText(string(msg))
 	}
+}
+
+// announceHostOS tells the viewer this host is Windows so it un-hides the
+// Windows-only Privacy/Login buttons and applies ⌘↔Ctrl mapping. The control DC
+// can open a beat after the peer connects, so retry until a send succeeds. pion
+// returns an error while the channel isn't open, so err==nil means it landed;
+// sends are idempotent on the viewer regardless.
+func (t *Transport) announceHostOS(peer *network.Peer) {
+	for i := 0; i < 15; i++ {
+		if err := peer.SendControlText(`{"k":"os","v":"windows"}`); err == nil {
+			log.Info().Msg("transport: announced host OS to viewer")
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Warn().Msg("transport: host-OS announce never landed (control DC not open)")
 }
 
 // sendInputToWorker forwards a raw viewer input event to the current capture
