@@ -131,10 +131,35 @@ static bool SaveMachineCreds(const std::string& id, const std::string& pw) {
   return ok == TRUE;
 }
 
-// Generate a stable 9-digit numeric ID once, if the store has none yet.
+// Mint an 8-char password from an unambiguous alphabet (no 0/O/1/l/I) using a
+// crypto-quality source, so every machine has a shareable credential even when
+// the user never sets one manually.
+static std::string GenMachinePassword() {
+  static const char kAlpha[] =
+      "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const size_t n = sizeof(kAlpha) - 1;
+  std::string pw;
+  for (int i = 0; i < 8; ++i) {
+    unsigned int r = 0;
+    rand_s(&r);
+    pw += kAlpha[r % n];
+  }
+  return pw;
+}
+
+// Generate a stable 9-digit numeric ID once, if the store has none yet. The
+// password is minted here too (not left empty) so every account/session shares
+// one shareable credential and viewer-only windows can display it.
 static std::string EnsureMachineId() {
   std::string id, pw;
-  if (LoadMachineCreds(id, pw) && !id.empty()) return id;
+  if (LoadMachineCreds(id, pw) && !id.empty()) {
+    if (pw.empty()) {  // legacy/blank store: mint a password now
+      pw = GenMachinePassword();
+      SaveMachineCreds(id, pw);
+      Log(L"svc", L"minted machine password for existing id");
+    }
+    return id;
+  }
   // No id yet: mint one from a crypto-quality source.
   unsigned int r1 = 0, r2 = 0;
   rand_s(&r1);
@@ -144,8 +169,9 @@ static std::string EnsureMachineId() {
   char num[16];
   sprintf(num, "%09llu", v);
   id = num;
-  SaveMachineCreds(id, pw);  // pw may be empty until the user sets one
-  Log(L"svc", L"minted machine id %hs", id.c_str());
+  pw = GenMachinePassword();  // mint a default password alongside the id
+  SaveMachineCreds(id, pw);
+  Log(L"svc", L"minted machine id %hs + password", id.c_str());
   return id;
 }
 
