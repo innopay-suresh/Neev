@@ -2,12 +2,17 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'constants/app_constants.dart';
+
 /// Human-readable build stamp so a field log unambiguously identifies which
-/// build produced it (the pubspec version is a static 1.0.0 and can't). Bump
-/// this every time we ship a diagnostic/fix build to hardware.
+/// build produced it (the pubspec version is a static 1.0.0 and can't).
+/// Defaults to the SAME visible [AppConstants.buildTag] shown in the UI top bar
+/// — the build never passed a BUILD_STAMP dart-define, so the old hardcoded
+/// default silently lied in every field log. Now the log and the on-screen
+/// stamp always agree.
 const String kBuildStamp = String.fromEnvironment(
   'BUILD_STAMP',
-  defaultValue: '2026-07-09-diag1',
+  defaultValue: AppConstants.buildTag,
 );
 
 /// Persistent, best-effort file logger for the parts of the app the native
