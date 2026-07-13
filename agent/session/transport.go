@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"os"
@@ -276,6 +277,40 @@ func (t *Transport) broadcastClip(text string) {
 	}
 }
 
+// broadcastClipImage relays a host clipboard IMAGE (PNG) to every viewer as
+// chunked {"k":"clip","img":1,"i","n","d"} control-channel messages — the exact
+// format the Flutter viewer reassembles (48 KB base64 chunks, in order).
+func (t *Transport) broadcastClipImage(png []byte) {
+	b64 := base64.StdEncoding.EncodeToString(png)
+	const chunk = 48 * 1024
+	total := (len(b64) + chunk - 1) / chunk
+	if total < 1 {
+		total = 1
+	}
+	t.mu.Lock()
+	sessions := make([]*peerSession, 0, len(t.peers))
+	for _, ps := range t.peers {
+		sessions = append(sessions, ps)
+	}
+	t.mu.Unlock()
+	for i := 0; i < total; i++ {
+		start := i * chunk
+		end := start + chunk
+		if end > len(b64) {
+			end = len(b64)
+		}
+		msg, err := json.Marshal(map[string]interface{}{
+			"k": "clip", "img": 1, "i": i, "n": total, "d": b64[start:end],
+		})
+		if err != nil {
+			return
+		}
+		for _, ps := range sessions {
+			_ = ps.peer.SendControlText(string(msg))
+		}
+	}
+}
+
 // announceHostOS tells the viewer this host is Windows so it un-hides the
 // Windows-only Privacy/Login buttons and applies ⌘↔Ctrl mapping. The control DC
 // can open a beat after the peer connects, so retry until a send succeeds. pion
@@ -397,6 +432,16 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 			t.workerMu.Unlock()
 			if current {
 				t.broadcastClip(string(payload))
+			}
+			continue
+		}
+		// Host clipboard image changed → chunk + relay to viewers.
+		if kind == ipc.KindClipboardImage {
+			t.workerMu.Lock()
+			current := t.worker == conn
+			t.workerMu.Unlock()
+			if current {
+				t.broadcastClipImage(payload)
 			}
 			continue
 		}

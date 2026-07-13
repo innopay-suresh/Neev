@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +26,25 @@ type clipSync struct {
 	conn net.Conn
 	mu   sync.Mutex
 	last string // last text seen/set, to break the copy echo loop
+
+	// Inbound image reassembly (viewer→host, chunked base64 PNG).
+	imgParts []string
+	imgNext  int
+	imgTotal int
+	// Echo guard for images: skip re-sending an image we just applied, and skip
+	// re-reading the (large) clipboard image unless the clipboard changed.
+	lastSeq     uint32
+	lastImgHash uint64
+}
+
+// hashBytes is a cheap FNV-1a change-detector for clipboard images.
+func hashBytes(b []byte) uint64 {
+	var h uint64 = 1469598103934665603
+	for _, c := range b {
+		h ^= uint64(c)
+		h *= 1099511628211
+	}
+	return h
 }
 
 func newClipSync(conn net.Conn) *clipSync {
@@ -43,12 +64,16 @@ func (c *clipSync) handleInbound(payload []byte) bool {
 		K   string `json:"k"`
 		T   string `json:"t"`
 		Img int    `json:"img"`
+		I   int    `json:"i"`
+		N   int    `json:"n"`
+		D   string `json:"d"`
 	}
 	if err := json.Unmarshal(payload, &m); err != nil || m.K != "clip" {
 		return false
 	}
 	if m.Img != 0 {
-		return true // image clipboard not carried over the transport yet — drop
+		c.recvImageChunk(m.I, m.N, m.D)
+		return true
 	}
 	c.mu.Lock()
 	c.last = m.T
@@ -57,6 +82,48 @@ func (c *clipSync) handleInbound(payload []byte) bool {
 		log.Warn().Err(err).Msg("worker: set clipboard failed")
 	}
 	return true
+}
+
+// recvImageChunk accumulates the viewer's chunked image ({"k":"clip","img":1,
+// "i","n","d"}) and, on the last in-order chunk, decodes the PNG and writes it
+// to the host clipboard. Out-of-order/stale chunks reset the buffer.
+func (c *clipSync) recvImageChunk(i, n int, d string) {
+	c.mu.Lock()
+	if i == 0 {
+		c.imgParts = make([]string, n)
+		c.imgTotal = n
+		c.imgNext = 0
+	}
+	if c.imgTotal == 0 || n != c.imgTotal || i != c.imgNext || i >= len(c.imgParts) {
+		c.imgParts, c.imgTotal, c.imgNext = nil, 0, 0
+		c.mu.Unlock()
+		return
+	}
+	c.imgParts[i] = d
+	c.imgNext++
+	done := c.imgNext == c.imgTotal
+	var b64 string
+	if done {
+		b64 = strings.Join(c.imgParts, "")
+		c.imgParts, c.imgTotal, c.imgNext = nil, 0, 0
+	}
+	c.mu.Unlock()
+	if !done {
+		return
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		log.Warn().Err(err).Msg("worker: decode clipboard image failed")
+		return
+	}
+	c.mu.Lock()
+	c.lastImgHash = hashBytes(raw) // don't echo it back to the viewer
+	c.mu.Unlock()
+	if err := writeClipboardImagePNG(raw); err != nil {
+		log.Warn().Err(err).Msg("worker: set clipboard image failed")
+		return
+	}
+	log.Info().Int("bytes", len(raw)).Msg("worker: applied viewer clipboard image")
 }
 
 // poll watches the host clipboard and pushes text changes to the transport
@@ -70,6 +137,32 @@ func (c *clipSync) poll(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+		// Image clipboard (host→viewer): only re-read the (large) bitmap when the
+		// clipboard actually changed, and only send when the image content changed
+		// (echo-guarded against images we just applied from the viewer).
+		if seq := clipboardSeq(); seq != 0 {
+			c.mu.Lock()
+			seqChanged := seq != c.lastSeq
+			c.lastSeq = seq
+			c.mu.Unlock()
+			if seqChanged {
+				if img, ok := readClipboardImagePNG(); ok {
+					h := hashBytes(img)
+					c.mu.Lock()
+					imgChanged := h != c.lastImgHash
+					if imgChanged {
+						c.lastImgHash = h
+					}
+					c.mu.Unlock()
+					if imgChanged {
+						if err := ipc.WriteMessage(c.conn, ipc.KindClipboardImage, img); err != nil {
+							return
+						}
+						continue // don't also emit text this tick
+					}
+				}
+			}
 		}
 		cur, err := clipboard.ReadAll()
 		if err != nil || cur == "" {

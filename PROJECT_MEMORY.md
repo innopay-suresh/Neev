@@ -206,6 +206,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-13 — TransportMode Phase B, batch 2: image clipboard both ways
+  (r33-imgclip) — pending hardware validation.** Extends clipboard-over-transport
+  from text to images. New `clipimg_windows.go` reads the host clipboard's CF_DIB
+  → PNG and writes a viewer PNG back as a top-down 32bpp CF_DIB (hand-rolled
+  syscall, no cgo/dep; `clipimg_other.go` stubs). `clipboard.go`: poll gated on
+  `GetClipboardSequenceNumber` re-reads the bitmap only on change and pushes it
+  via new `ipc.KindClipboardImage`; `handleInbound` reassembles the viewer's
+  chunked `{"k":"clip","img":1,"i","n","d"}` (48 KB base64, in order) → decode →
+  write; FNV hash + seq echo-guard both ways. `transport.go` `broadcastClipImage`
+  chunks the worker's PNG to viewers in the exact Flutter format. Viewer side
+  unchanged (its clip watcher `_ensureClipboardSync` already runs on connect and
+  the transport relays over the control channel). r32 also shipped: reliable
+  host-OS announce (retry until control DC open) so Privacy/Login buttons appear.
+  STILL OPEN: file transfer (import/export), chat, privacy-mode execution, SAS.
 - **2026-07-13 — TransportMode Phase B, batch 1: host-OS announce + session
   commands (r31-cmds) — pending hardware validation.** r30 confirmed the crop
   fix; user's r31 test surfaced the remaining TransportMode parity gaps (the

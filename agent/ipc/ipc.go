@@ -58,6 +58,13 @@ const (
 	// payload = UTF-8 clipboard text. Viewer→host clipboard rides KindInput (the
 	// viewer's {"k":"clip",...} arrives on the control channel like other input).
 	KindClipboard byte = 0x06
+
+	// Worker -> transport: the host's clipboard IMAGE changed. payload = the raw
+	// PNG bytes. The transport base64-chunks it into {"k":"clip","img":1,...}
+	// control-channel messages for viewers (matching the Flutter host format).
+	// Viewer→host image chunks ride KindInput like other control messages and are
+	// reassembled by the worker.
+	KindClipboardImage byte = 0x07
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.
