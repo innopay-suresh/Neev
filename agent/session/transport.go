@@ -45,6 +45,15 @@ type Transport struct {
 
 	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
 	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
+
+	// Input-path observability (post-July-9 split diagnostics). Viewer input now
+	// travels transport → worker over IPC instead of being injected in-process;
+	// these sampled counters make a dead-input session visible in transport.log:
+	// where each event was routed (worker vs secure/elevated bridge) and how many
+	// were dropped for lack of an attached worker.
+	inToWorker atomic.Uint64
+	inToBridge atomic.Uint64
+	inDropped  atomic.Uint64
 }
 
 type peerSession struct {
@@ -209,8 +218,21 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		switch label {
 		case "control", "cursor":
 			if t.bridge != nil && (t.bridge.SecureActive() || t.bridge.ElevatedActive()) {
+				if n := t.inToBridge.Add(1); n == 1 || n%256 == 0 {
+					log.Info().Uint64("n", n).
+						Bool("secure", t.bridge.SecureActive()).
+						Bool("elevated", t.bridge.ElevatedActive()).
+						Msg("transport: input → secure/elevated bridge")
+				}
 				t.bridge.SendInput(data)
 			} else {
+				if n := t.inToWorker.Add(1); n == 1 || n%256 == 0 {
+					t.workerMu.Lock()
+					has := t.worker != nil
+					t.workerMu.Unlock()
+					log.Info().Uint64("n", n).Bool("worker", has).
+						Str("label", label).Msg("transport: input → capture worker")
+				}
 				t.sendInputToWorker(data)
 			}
 		}
@@ -253,8 +275,18 @@ func (t *Transport) sendInputToWorker(raw []byte) {
 	t.workerMu.Lock()
 	conn := t.worker
 	t.workerMu.Unlock()
-	if conn != nil {
-		_ = ipc.WriteMessage(conn, ipc.KindInput, raw)
+	if conn == nil {
+		// No worker attached (mid-swap, or the per-session worker never spawned):
+		// input is silently lost. Sample-log so this shows up as the cause of a
+		// "video works, clicks dead" session instead of failing invisibly.
+		if n := t.inDropped.Add(1); n <= 5 || n%256 == 0 {
+			log.Warn().Uint64("dropped", n).
+				Msg("transport: viewer input dropped — no capture worker attached")
+		}
+		return
+	}
+	if err := ipc.WriteMessage(conn, ipc.KindInput, raw); err != nil {
+		log.Warn().Err(err).Msg("transport: forward input to worker failed")
 	}
 }
 

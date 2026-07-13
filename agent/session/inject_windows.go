@@ -4,8 +4,11 @@ package session
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
+
+	"github.com/rs/zerolog/log"
 )
 
 // inputSink injects viewer input into the worker's (active user) session. The
@@ -30,7 +33,63 @@ var (
 	moduser32         = syscall.NewLazyDLL("user32.dll")
 	procSendInput     = moduser32.NewProc("SendInput")
 	procMapVirtualKey = moduser32.NewProc("MapVirtualKeyW")
+
+	modkernel32            = syscall.NewLazyDLL("kernel32.dll")
+	procGetCurrentThreadId = modkernel32.NewProc("GetCurrentThreadId")
+	procGetThreadDesktop   = moduser32.NewProc("GetThreadDesktop")
+	procGetUserObjectInfo  = moduser32.NewProc("GetUserObjectInformationW")
 )
+
+// uoiName selects the desktop's name in GetUserObjectInformationW.
+const uoiName = 2
+
+// injectSeq counts injection attempts so SendInput failures can be sample-logged
+// (loud on the first few, then throttled) rather than flooding at move rates.
+var injectSeq atomic.Uint64
+
+// currentDesktopName returns the desktop the calling thread is bound to (e.g.
+// "Default", "Winlogon"). SendInput only lands on the desktop that currently has
+// the input focus, so if the worker's inject thread is not on "Default" while
+// the user sits at a normal desktop, every event silently no-ops — exactly the
+// "video works, clicks dead" failure the July-9 process split can introduce.
+func currentDesktopName() string {
+	tid, _, _ := procGetCurrentThreadId.Call()
+	hdesk, _, _ := procGetThreadDesktop.Call(tid)
+	if hdesk == 0 {
+		return "?"
+	}
+	var buf [256]uint16
+	var needed uint32
+	r, _, _ := procGetUserObjectInfo.Call(hdesk, uoiName,
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)*2),
+		uintptr(unsafe.Pointer(&needed)))
+	if r == 0 {
+		return "?"
+	}
+	return syscall.UTF16ToString(buf[:])
+}
+
+// sendInput wraps SendInput and makes a non-landing injection observable. On
+// Windows SendInput returns the number of events inserted; 0 means the OS
+// rejected it (wrong desktop / UIPI integrity / locked input) — the event
+// vanished. That return was previously discarded, so a fully dead input path
+// looked identical to a working one.
+func sendInput(ptr unsafe.Pointer, size uintptr) {
+	n, _, errno := procSendInput.Call(1, uintptr(ptr), size)
+	seq := injectSeq.Add(1)
+	if n == 0 {
+		if seq <= 5 || seq%256 == 0 {
+			log.Warn().Uint64("seq", seq).Str("desktop", currentDesktopName()).
+				Str("err", errno.Error()).
+				Msg("worker: SendInput inserted 0 events — input not landing on desktop")
+		}
+		return
+	}
+	if seq == 1 {
+		log.Info().Str("desktop", currentDesktopName()).
+			Msg("worker: first viewer input injected OK")
+	}
+}
 
 const (
 	inputMouse    = 0
@@ -232,6 +291,8 @@ func (s *winInputSink) Post(raw []byte) {
 func (s *winInputSink) Close() { close(s.done) }
 
 func (s *winInputSink) run() {
+	log.Info().Str("desktop", currentDesktopName()).
+		Msg("worker: input injector started")
 	for {
 		select {
 		case <-s.done:
@@ -327,7 +388,7 @@ func sendMouseAbsolute(nx, ny float64, flags, mouseData uint32) {
 	in.Dy = int32(ny * 65535.0)
 	in.MouseData = mouseData
 	in.DwFlags = flags | mouseeventfAbsolute
-	procSendInput.Call(1, uintptr(unsafe.Pointer(&in)), unsafe.Sizeof(in))
+	sendInput(unsafe.Pointer(&in), unsafe.Sizeof(in))
 }
 
 func sendKey(vk uint16, down bool) {
@@ -351,5 +412,5 @@ func sendKey(vk uint16, down bool) {
 	if isExtendedVk(vk) {
 		in.DwFlags |= keyeventfExtended
 	}
-	procSendInput.Call(1, uintptr(unsafe.Pointer(&in)), unsafe.Sizeof(in))
+	sendInput(unsafe.Pointer(&in), unsafe.Sizeof(in))
 }
