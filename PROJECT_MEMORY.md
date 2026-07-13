@@ -203,6 +203,22 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-13 — TransportMode capture: DPI-aware + capture-size logging
+  (r30-capture-dpi) — pending hardware validation.** With the viewer CONFIRMED on
+  r29-view (app.log stamp now truthful) the remote screen STILL cropped → the crop
+  is the TransportMode Go-worker capture, not the viewer render (Contain is
+  correct). The Go host exe had no DPI manifest → DPI-UNAWARE: on a scaled display
+  the GDI capture (`GetSystemMetrics(SM_CXSCREEN)`, logical) and `Bounds`
+  (`GetDeviceCaps(DESKTOPHORZRES)`, physical) disagree — a classic lost-right/
+  bottom-edge cause. Fix: `setProcessDpiAware()` (new `dpi_windows.go`,
+  PER_MONITOR_AWARE_V2 via `SetProcessDpiAwarenessContext`; no-op stub
+  `dpi_other.go`) called in `RunCaptureWorker` BEFORE `NewPlatformCapture`, so
+  capture grabs the full PHYSICAL desktop across 125/150/175%. Added worker.log
+  lines for `capture bounds` and `captured frame size` to confirm on hardware
+  whether the frame equals the full screen. Viewer/transport/input/secure-desktop
+  untouched. NEXT (still open): clipboard + file-transfer over the transport are
+  Phase B (never carried) — user wants them; separate follow-up after the crop is
+  confirmed fixed.
 - **2026-07-13 — REGRESSION + FIX: viewer full-screen restored (r27-view broke it,
   reverted to r20 render) — VIEW-ONLY.** Report: host screen cut off (right/bottom
   pushed off-view) on `r27-view`, while `r20` showed the full host desktop edge to

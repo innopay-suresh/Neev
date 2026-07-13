@@ -35,6 +35,10 @@ const (
 // user switch; the transport connection is unaffected.
 func RunCaptureWorker(ctx context.Context, port int) error {
 	setupFileLog("worker.log")
+	// Make the capture process DPI-aware BEFORE creating any capture DC, so on a
+	// scaled display (125/150/175%) the capture grabs the FULL physical desktop
+	// instead of losing the right/bottom edges to a logical/physical mismatch.
+	setProcessDpiAware()
 	if port == 0 {
 		port = ipc.DefaultPort
 	}
@@ -96,6 +100,8 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	defer capturer.Close()
 
 	w, h := capturer.Bounds()
+	log.Info().Int("bounds_w", w).Int("bounds_h", h).
+		Msg("worker: capture bounds (should equal the host's full physical screen)")
 	enc, err := encode.NewEncoder(w, h, workerFPS, workerBitrate)
 	if err != nil {
 		return err
@@ -139,6 +145,12 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 
 		// Resolution change (e.g. DPI/monitor) → rebuild encoder + tell transport.
 		if fw, fh := frame.Bounds().Dx(), frame.Bounds().Dy(); fw != enc.Width() || fh != enc.Height() {
+			// If this captured frame is SMALLER than the reported bounds, the
+			// source is cropped (edges lost) — log it loudly so a "screen cut off"
+			// report is pinpointed to capture vs. render.
+			log.Info().Int("frame_w", fw).Int("frame_h", fh).
+				Int("prev_enc_w", enc.Width()).Int("prev_enc_h", enc.Height()).
+				Msg("worker: captured frame size (encoder resized to match — this is what the viewer receives)")
 			enc.Close()
 			enc, err = encode.NewEncoder(fw, fh, workerFPS, enc.Bitrate())
 			if err != nil {
