@@ -208,6 +208,13 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		if t.bridge != nil {
 			t.bridge.requestKeyframe()
 		}
+		// Announce the host OS (like the Flutter host does) so the viewer enables
+		// OS-specific controls — WITHOUT it `remoteHostOs` stays empty and the
+		// viewer hides the Windows-only Privacy/Login buttons and skips ⌘↔Ctrl
+		// mapping. The transport/worker only run on Windows, so it's "windows".
+		if err := peer.SendControlText(`{"k":"os","v":"windows"}`); err != nil {
+			log.Debug().Err(err).Msg("transport: host-os announce deferred (control DC not open yet)")
+		}
 	}
 
 	// Viewer input (mouse/keyboard) arrives on the control + cursor channels.

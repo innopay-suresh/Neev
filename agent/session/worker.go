@@ -84,9 +84,14 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 			case ipc.KindKeyframeReq:
 				wantKeyframe.Store(true)
 			case ipc.KindInput:
-				// A viewer clipboard update rides the control channel too; apply
-				// it to the host clipboard rather than injecting it as input.
-				if !clip.handleInbound(payload) {
+				// The control channel multiplexes several message types. Apply
+				// clipboard updates and session commands (lock/logoff/reboot) here
+				// in the user session; anything else is real mouse/keyboard input.
+				if clip.handleInbound(payload) {
+					// consumed as a clipboard update
+				} else if handleCommand(payload) {
+					// consumed as a session command
+				} else {
 					injector.Post(payload)
 				}
 			}

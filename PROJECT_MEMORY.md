@@ -131,6 +131,9 @@ moves to **Working Features** after it is confirmed working on real hardware.
 - File **copy** no longer becomes **move** (Preferred DropEffect = Copy).
 - Clipboard text/image sync; clipboard sync on/off toggle.
 - SYSTEM helper: secure-desktop capture + send (helper log verified 2026-07-08).
+- TransportMode capture shows the FULL host screen on scaled displays — DPI-aware
+  worker (`setProcessDpiAware`, r30). **Hardware-confirmed 2026-07-13** (user: "screen
+  layout fixed"; also text copy/paste, UAC dialog, switch-user all working on r30).
 - Viewer shows the FULL host screen by default (r20 behavior: `objectFit: Contain`
   off the host's actual frame size — correct across resolutions + Windows DPI),
   with an optional Fit/Fill toggle in the session toolbar (Fill = `Cover`/crop).
@@ -203,6 +206,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-13 — TransportMode Phase B, batch 1: host-OS announce + session
+  commands (r31-cmds) — pending hardware validation.** r30 confirmed the crop
+  fix; user's r31 test surfaced the remaining TransportMode parity gaps (the
+  transport carries video+input+text-clipboard, but the viewer's chat/cmd/ft/
+  image-clip messages ride the control channel and were dropped by the worker).
+  Batch 1: (a) transport announces `{"k":"os","v":"windows"}` on viewer connect
+  (`transport.go` OnConnected) — the viewer gates the Windows-only Privacy/Login
+  toolbar buttons on `remoteHostOs=='windows'`, so without this they were HIDDEN
+  (user issue "privacy button missing"); (b) `handleCommand` (new
+  `command_windows.go`, no-op `command_other.go`) runs lock/logoff/reboot in the
+  worker's user session (LockWorkStation / ExitWindowsEx + SeShutdownPrivilege),
+  wired into the worker's control-channel reader before input injection (user
+  issue "lock not working"). STILL OPEN (later batches): chat relay, file
+  transfer (import/export), image clipboard, privacy-mode execution, SAS.
 - **2026-07-13 — TransportMode capture: DPI-aware + capture-size logging
   (r30-capture-dpi) — pending hardware validation.** With the viewer CONFIRMED on
   r29-view (app.log stamp now truthful) the remote screen STILL cropped → the crop
