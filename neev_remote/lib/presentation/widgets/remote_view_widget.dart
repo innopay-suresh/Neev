@@ -14,17 +14,6 @@ import '../../data/services/input_event.dart';
 /// stops sending after a click vs. the host stops injecting.
 const bool kLogRemoteInput = false;
 
-/// How the remote host frame is scaled into the viewer window. The viewer owns
-/// this geometry itself (see [_RemoteViewWidgetState._videoRect]) rather than
-/// relying on the platform renderer's objectFit, so Fit is guaranteed to show
-/// the whole host screen on every platform.
-///   • [fit]      — entire host screen visible, letterbox bars allowed. DEFAULT
-///                  (nothing is ever hidden).
-///   • [fill]     — cover the window preserving aspect ratio, cropping overflow.
-///   • [original] — actual 1:1 pixels, centered (may clip if the host screen is
-///                  larger than the viewer window).
-enum RemoteViewMode { fit, fill, original }
-
 /// Renders the remote video stream and, unless [viewOnly], captures local
 /// mouse + keyboard input and forwards it as normalized [InputEvent]s via
 /// [onInput].
@@ -53,9 +42,9 @@ class RemoteViewWidget extends StatefulWidget {
   /// 0 = UAC prompt, 1 = login screen, 2 = locked session.
   final int uacKind;
 
-  /// How the remote host frame is scaled into the window. Defaults to
-  /// [RemoteViewMode.fit] so the whole host screen is always visible.
-  final RemoteViewMode viewMode;
+  /// When true, the remote video fills the window (cover); else it's letterboxed
+  /// (contain / fit).
+  final bool fillMode;
 
   /// When true, keyboard input is NOT forwarded to the remote and the video
   /// won't steal focus — so an in-app text field (chat, transmit-login dialog)
@@ -78,7 +67,7 @@ class RemoteViewWidget extends StatefulWidget {
     this.uacW = 0,
     this.uacH = 0,
     this.uacKind = 0,
-    this.viewMode = RemoteViewMode.fit,
+    this.fillMode = false,
     this.inputPaused = false,
     this.onUacClick,
     this.onUacApprove,
@@ -158,12 +147,6 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
 
   Future<void> _initRenderer() async {
     await _renderer.initialize();
-    // We size the video ourselves off the stream's real pixel dimensions, so
-    // rebuild whenever the host resolution becomes known or changes (first
-    // frame, host DPI/resolution change) to keep Fit/Fill/1:1 geometry correct.
-    _renderer.onResize = () {
-      if (mounted) setState(() {});
-    };
     if (widget.remoteStream != null) {
       _renderer.srcObject = widget.remoteStream;
       _startFrameWatchdog();
@@ -271,60 +254,28 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
 
   bool get _controlEnabled => !widget.viewOnly && widget.onInput != null;
 
-  /// The rectangle (in the widget's local space) the remote video occupies for
-  /// the current [RemoteViewWidget.viewMode], given the available [area] and the
-  /// stream's real pixel size. The layout AND input mapping both read this, so
-  /// what you see and where a click lands can never disagree. Returns the full
-  /// area until the stream's real dimensions are known.
-  Rect _videoRect(Size area) {
+  /// Maps a pointer position within [size] to normalized 0..1 coordinates over
+  /// the letterboxed ("contain") video rect. Returns null if outside the video.
+  Offset? _normalize(Offset local, Size size) {
     final vw = _renderer.videoWidth.toDouble();
     final vh = _renderer.videoHeight.toDouble();
-    if (vw <= 0 || vh <= 0 || area.width <= 0 || area.height <= 0) {
-      return Offset.zero & area;
-    }
-    final ar = vw / vh;
-    final wider = area.width / area.height > ar;
-    double dispW, dispH;
-    switch (widget.viewMode) {
-      case RemoteViewMode.original:
-        // Actual pixels, centered (clips if larger than the window).
-        dispW = vw;
-        dispH = vh;
-        break;
-      case RemoteViewMode.fill:
-        // Smallest aspect-correct box that COVERS the area (crops overflow).
-        if (wider) {
-          dispW = area.width;
-          dispH = dispW / ar;
-        } else {
-          dispH = area.height;
-          dispW = dispH * ar;
-        }
-        break;
-      case RemoteViewMode.fit:
-        // Largest aspect-correct box that FITS inside the area (letterbox).
-        if (wider) {
-          dispH = area.height;
-          dispW = dispH * ar;
-        } else {
-          dispW = area.width;
-          dispH = dispW / ar;
-        }
-        break;
-    }
-    return Rect.fromLTWH(
-        (area.width - dispW) / 2, (area.height - dispH) / 2, dispW, dispH);
-  }
-
-  /// Maps a pointer position within [size] to normalized 0..1 coordinates over
-  /// the current video rect. Returns null if outside the visible video.
-  Offset? _normalize(Offset local, Size size) {
-    final r = _videoRect(size);
-    if (r.width <= 0 || r.height <= 0 || size.width <= 0 || size.height <= 0) {
+    if (vw <= 0 || vh <= 0 || size.width <= 0 || size.height <= 0) {
+      // Fall back to the whole widget area.
       return Offset(local.dx / size.width, local.dy / size.height);
     }
-    final nx = (local.dx - r.left) / r.width;
-    final ny = (local.dy - r.top) / r.height;
+    final ar = vw / vh;
+    double dispW, dispH;
+    if (size.width / size.height > ar) {
+      dispH = size.height;
+      dispW = dispH * ar;
+    } else {
+      dispW = size.width;
+      dispH = dispW / ar;
+    }
+    final left = (size.width - dispW) / 2;
+    final top = (size.height - dispH) / 2;
+    final nx = (local.dx - left) / dispW;
+    final ny = (local.dy - top) / dispH;
     if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
     return Offset(nx, ny);
   }
@@ -481,31 +432,15 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = constraints.biggest;
-          // The renderer only reports the true resolution after the first frame;
-          // until then fill the area so there's no blank flash. Once known, we
-          // place the video in an exact aspect-correct rect ourselves (Fit/Fill/
-          // 1:1) and clip overflow — this does NOT rely on the platform
-          // renderer's objectFit, so Fit reliably shows the whole host screen.
-          final rtc = RTCVideoView(
-            _renderer,
-            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-            mirror: false,
-          );
-          Widget video;
-          if (!_initialized) {
-            video = const ColoredBox(color: Colors.black);
-          } else if (_renderer.videoWidth <= 0 || _renderer.videoHeight <= 0) {
-            video = rtc;
-          } else {
-            final rect = _videoRect(size);
-            video = ClipRect(
-              child: Stack(
-                children: [
-                  Positioned.fromRect(rect: rect, child: rtc),
-                ],
-              ),
-            );
-          }
+          Widget video = _initialized
+              ? RTCVideoView(
+                  _renderer,
+                  objectFit: widget.fillMode
+                      ? RTCVideoViewObjectFit.RTCVideoViewObjectFitCover
+                      : RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                  mirror: false,
+                )
+              : const ColoredBox(color: Colors.black);
 
           if (_controlEnabled) {
             video = Focus(

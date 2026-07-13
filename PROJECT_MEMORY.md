@@ -131,6 +131,11 @@ moves to **Working Features** after it is confirmed working on real hardware.
 - File **copy** no longer becomes **move** (Preferred DropEffect = Copy).
 - Clipboard text/image sync; clipboard sync on/off toggle.
 - SYSTEM helper: secure-desktop capture + send (helper log verified 2026-07-08).
+- Viewer shows the FULL host screen by default (r20 behavior: `objectFit: Contain`
+  off the host's actual frame size — correct across resolutions + Windows DPI),
+  with an optional Fit/Fill toggle in the session toolbar (Fill = `Cover`/crop).
+  Restored 2026-07-13 (`r28-viewfix`) after the `r27-view` hand-rolled-geometry
+  regression; do NOT reintroduce manual video sizing.
 
 ## Known Problems (open)
 
@@ -198,34 +203,31 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
-- **2026-07-13 — Viewer view-mode toggle (Fit / Fill / 1:1) + build stamp bump
-  — VIEW-ONLY, pending hardware validation.** Report: host screen "edges cut
-  off / part missing." Diagnosis (single monitor both ends, confirmed with user):
-  NOT host capture — both paths send the whole screen at true resolution and are
-  DPI-safe (worker rebuilds its encoder to the actual frame + reports real dims;
-  Flutter `getDisplayMedia` scales-to-fit). NOT viewer scaling in source either —
-  the viewer already defaulted to Fit. Leading cause: the viewer relied on
-  `flutter_webrtc`'s `objectFit` (`Contain`/`Cover`), which appears unreliable on
-  the Windows renderer, so "Fit" didn't actually letterbox. Fix (viewer only,
-  nothing else touched): the viewer now OWNS the video geometry — `_videoRect`
-  computes an exact aspect-correct rect from the STREAM's real pixel size
-  (`_renderer.videoWidth/Height`, not a hardcoded size) and places the video via
-  `Positioned.fromRect` inside a `ClipRect`, independent of `objectFit`. Three
-  modes: **Fit** (default — whole screen, letterbox, guaranteed nothing hidden),
-  **Fill** (cover/crop), **Original 1:1** (actual pixels, centered). Toolbar
-  button cycles Fit→Fill→1:1. Input mapping (`_normalize`) reads the SAME
-  `_videoRect` so clicks always land correctly in every mode. `onResize` hook
-  rebuilds on host resolution change. Build stamp bumped `r20`→`r27-view` so the
-  running build is finally identifiable (the constant had been frozen at r20).
-  NO change to capture, transport, worker swap, secure-desktop, UAC, input, or
-  clipboard. Multi-monitor / full-virtual-desktop capture NOT needed here
-  (single monitor) — deferred. Moves to Working Features after hardware confirm.
-- **2026-07-13 — Diag: transport→worker input path made observable (Go).**
+- **2026-07-13 — REGRESSION + FIX: viewer full-screen restored (r27-view broke it,
+  reverted to r20 render) — VIEW-ONLY.** Report: host screen cut off (right/bottom
+  pushed off-view) on `r27-view`, while `r20` showed the full host desktop edge to
+  edge. Root cause = a change I made in `r27-view` (`831220a`): it REPLACED r20's
+  proven one-liner — `RTCVideoView(objectFit: fillMode ? Cover : Contain)`, which
+  lets the renderer scale the whole frame to fit (Contain) off the host's ACTUAL
+  decoded resolution — with a hand-rolled geometry layer (`_videoRect` +
+  `Positioned.fromRect` inside `ClipRect`/`Stack`, bypassing objectFit). The
+  premise ("objectFit unreliable on Windows") was WRONG; r20 proves Contain works.
+  The manual Positioned/Stack sizing didn't fill the viewer area the way objectFit
+  does → the video overflowed and the ClipRect cropped the right/bottom. Fix:
+  `git revert 831220a` — restores r20's `objectFit` render + the existing Fit/Fill
+  toggle (`_fillModeProvider`, default Fit=Contain=full screen; Fill=Cover),
+  keeping the r25 stuck-modifier + taskbar-overlap fixes intact. Build stamp
+  bumped `r27-view`→`r28-viewfix` so the restored build is identifiable. LESSON:
+  do NOT hand-roll video geometry — `objectFit: Contain` already scales correctly
+  across resolutions and Windows DPI (125/150%) off the real frame size, no
+  hardcoding. NO change to capture/transport/worker/secure-desktop/UAC/input/
+  clipboard. Original 1:1 mode deliberately NOT added (a hand-rolled sizing mode
+  is exactly what regressed; revisit separately only if needed).
+- **2026-07-13 — Diag: transport→worker input path made observable (Go, `acae7aa`).**
   Sampled logging of input routing (worker vs secure/elevated bridge), dropped
   input when no worker attached, and `SendInput` non-landing + inject-thread
   desktop name → `transport.log`/`worker.log`. Diagnostic only, no behavior
-  change. (Superseded as the active issue once the user confirmed input works;
-  retained for future input debugging.)
+  change. (Input later confirmed working by the user; retained for future debug.)
 - **2026-07-09 — Fix: two host identities (viewer landed on user-app host with
   no input) → collapse to ONE service-owned host + clipboard over transport;
   implements LD-11/LD-12, pending hardware validation.** Logs showed a SYSTEM
