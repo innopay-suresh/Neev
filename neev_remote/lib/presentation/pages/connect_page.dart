@@ -365,8 +365,55 @@ final _chatOpenProvider = StateProvider<bool>((_) => false);
 /// dialog) — pauses remote key forwarding so typing lands in the field.
 final _typingLockProvider = StateProvider<bool>((_) => false);
 
-/// Remote video view mode: false = fit (letterbox), true = fill (cover).
-final _fillModeProvider = StateProvider<bool>((_) => false);
+/// Remote video view mode. Defaults to [RemoteViewMode.fit] so the whole host
+/// screen is always visible (nothing cropped) unless the user chooses otherwise.
+final _viewModeProvider =
+    StateProvider<RemoteViewMode>((_) => RemoteViewMode.fit);
+
+/// Next mode in the Fit → Fill → 1:1 → Fit cycle (session toolbar toggle).
+RemoteViewMode _nextViewMode(RemoteViewMode m) {
+  switch (m) {
+    case RemoteViewMode.fit:
+      return RemoteViewMode.fill;
+    case RemoteViewMode.fill:
+      return RemoteViewMode.original;
+    case RemoteViewMode.original:
+      return RemoteViewMode.fit;
+  }
+}
+
+IconData _viewModeIcon(RemoteViewMode m) {
+  switch (m) {
+    case RemoteViewMode.fit:
+      return Icons.fit_screen_outlined;
+    case RemoteViewMode.fill:
+      return Icons.aspect_ratio_rounded;
+    case RemoteViewMode.original:
+      return Icons.crop_original_outlined;
+  }
+}
+
+String _viewModeLabel(RemoteViewMode m) {
+  switch (m) {
+    case RemoteViewMode.fit:
+      return 'Fit';
+    case RemoteViewMode.fill:
+      return 'Fill';
+    case RemoteViewMode.original:
+      return '1:1';
+  }
+}
+
+String _viewModeTooltip(RemoteViewMode m) {
+  switch (m) {
+    case RemoteViewMode.fit:
+      return 'Fit: whole screen, letterbox — tap for Fill';
+    case RemoteViewMode.fill:
+      return 'Fill: cover the window, crop edges — tap for 1:1';
+    case RemoteViewMode.original:
+      return 'Original 1:1: actual pixels — tap for Fit';
+  }
+}
 
 /// Whether the on-screen annotation (pen) overlay is active.
 final _annotateProvider = StateProvider<bool>((_) => false);
@@ -2058,7 +2105,7 @@ class _ConnectedSession extends ConsumerWidget {
                     uacW: service.uacW,
                     uacH: service.uacH,
                     uacKind: service.uacKind,
-                    fillMode: ref.watch(_fillModeProvider),
+                    viewMode: ref.watch(_viewModeProvider),
                     inputPaused: ref.watch(_chatOpenProvider) ||
                         ref.watch(_typingLockProvider) ||
                         ref.watch(_annotateProvider),
@@ -2500,16 +2547,12 @@ class _SessionToolbar extends ConsumerWidget {
                   },
                 ),
                 _ToolButton(
-                  icon: ref.watch(_fillModeProvider)
-                      ? Icons.fit_screen_outlined
-                      : Icons.aspect_ratio_rounded,
-                  label: ref.watch(_fillModeProvider) ? 'Fill' : 'Fit',
-                  tooltip: ref.watch(_fillModeProvider)
-                      ? 'Filling the window — click to fit (letterbox)'
-                      : 'Fit to window — click to fill',
-                  active: ref.watch(_fillModeProvider),
-                  onPressed: () => ref.read(_fillModeProvider.notifier).state =
-                      !ref.read(_fillModeProvider),
+                  icon: _viewModeIcon(ref.watch(_viewModeProvider)),
+                  label: _viewModeLabel(ref.watch(_viewModeProvider)),
+                  tooltip: _viewModeTooltip(ref.watch(_viewModeProvider)),
+                  active: ref.watch(_viewModeProvider) != RemoteViewMode.fit,
+                  onPressed: () => ref.read(_viewModeProvider.notifier).state =
+                      _nextViewMode(ref.read(_viewModeProvider)),
                 ),
                 _ToolButton(
                   icon: Icons.edit_outlined,

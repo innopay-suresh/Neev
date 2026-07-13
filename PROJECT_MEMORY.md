@@ -198,6 +198,34 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-13 — Viewer view-mode toggle (Fit / Fill / 1:1) + build stamp bump
+  — VIEW-ONLY, pending hardware validation.** Report: host screen "edges cut
+  off / part missing." Diagnosis (single monitor both ends, confirmed with user):
+  NOT host capture — both paths send the whole screen at true resolution and are
+  DPI-safe (worker rebuilds its encoder to the actual frame + reports real dims;
+  Flutter `getDisplayMedia` scales-to-fit). NOT viewer scaling in source either —
+  the viewer already defaulted to Fit. Leading cause: the viewer relied on
+  `flutter_webrtc`'s `objectFit` (`Contain`/`Cover`), which appears unreliable on
+  the Windows renderer, so "Fit" didn't actually letterbox. Fix (viewer only,
+  nothing else touched): the viewer now OWNS the video geometry — `_videoRect`
+  computes an exact aspect-correct rect from the STREAM's real pixel size
+  (`_renderer.videoWidth/Height`, not a hardcoded size) and places the video via
+  `Positioned.fromRect` inside a `ClipRect`, independent of `objectFit`. Three
+  modes: **Fit** (default — whole screen, letterbox, guaranteed nothing hidden),
+  **Fill** (cover/crop), **Original 1:1** (actual pixels, centered). Toolbar
+  button cycles Fit→Fill→1:1. Input mapping (`_normalize`) reads the SAME
+  `_videoRect` so clicks always land correctly in every mode. `onResize` hook
+  rebuilds on host resolution change. Build stamp bumped `r20`→`r27-view` so the
+  running build is finally identifiable (the constant had been frozen at r20).
+  NO change to capture, transport, worker swap, secure-desktop, UAC, input, or
+  clipboard. Multi-monitor / full-virtual-desktop capture NOT needed here
+  (single monitor) — deferred. Moves to Working Features after hardware confirm.
+- **2026-07-13 — Diag: transport→worker input path made observable (Go).**
+  Sampled logging of input routing (worker vs secure/elevated bridge), dropped
+  input when no worker attached, and `SendInput` non-landing + inject-thread
+  desktop name → `transport.log`/`worker.log`. Diagnostic only, no behavior
+  change. (Superseded as the active issue once the user confirmed input works;
+  retained for future input debugging.)
 - **2026-07-09 — Fix: two host identities (viewer landed on user-app host with
   no input) → collapse to ONE service-owned host + clipboard over transport;
   implements LD-11/LD-12, pending hardware validation.** Logs showed a SYSTEM
