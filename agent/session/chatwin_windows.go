@@ -33,8 +33,6 @@ var (
 	procTranslateMessageC = modUser32Chat.NewProc("TranslateMessage")
 	procDispatchMessageWC = modUser32Chat.NewProc("DispatchMessageW")
 	procLoadCursorWC     = modUser32Chat.NewProc("LoadCursorW")
-	procOpenInputDesktopC = modUser32Chat.NewProc("OpenInputDesktop")
-	procSetThreadDesktopC = modUser32Chat.NewProc("SetThreadDesktop")
 	procGetStockObjectC  = syscall.NewLazyDLL("gdi32.dll").NewProc("GetStockObject")
 	procGetModuleHandleWC = syscall.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW")
 )
@@ -118,17 +116,9 @@ func chatWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 
 func chatLoop() {
 	runtime.LockOSThread()
-	// Bind this thread to the interactive input desktop so window creation is
-	// permitted — a service-spawned worker can land on a non-interactive desktop
-	// for GUI even though SendInput (input desktop) works. Must happen before any
-	// window is created on this thread.
-	if hdesk, _, _ := procOpenInputDesktopC.Call(0, 0, 0x10000000 /*GENERIC_ALL*/); hdesk != 0 {
-		if r, _, err := procSetThreadDesktopC.Call(hdesk); r == 0 {
-			log.Warn().Str("err", err.Error()).Msg("worker: chat SetThreadDesktop failed")
-		} else {
-			log.Info().Msg("worker: chat bound to input desktop")
-		}
-	}
+	// Bind to the interactive input desktop so window creation is permitted — a
+	// service-spawned worker can be denied GUI even though SendInput works.
+	bindInputDesktop()
 	className, _ := syscall.UTF16PtrFromString("NeevChatWindow")
 	editClass, _ := syscall.UTF16PtrFromString("EDIT")
 	btnClass, _ := syscall.UTF16PtrFromString("BUTTON")
@@ -147,11 +137,17 @@ func chatLoop() {
 	}
 	atom, _, regErr := procRegisterClassWC.Call(uintptr(unsafe.Pointer(&wc)))
 
-	// 0x80000000 = CW_USEDEFAULT
-	const cwUseDefault = 0x80000000
+	// Compact chat window, docked to the top-right of the primary screen so it
+	// doesn't cover the host's work area (it's resizable/movable if needed).
+	const winW, winH = 300, 380
+	scrW, _, _ := procGetSystemMetricsPriv.Call(0) // SM_CXSCREEN
+	x := int(scrW) - winW - 24
+	if x < 0 {
+		x = 24
+	}
 	parent, _, createErr := procCreateWindowExWC.Call(0,
 		uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
-		wsOverlapped, cwUseDefault, cwUseDefault, 420, 360, 0, 0, hInst, 0)
+		wsOverlapped, uintptr(x), 48, winW, winH, 0, 0, hInst, 0)
 	if parent == 0 {
 		log.Warn().Uint64("atom", uint64(atom)).
 			Str("regErr", regErr.Error()).Str("createErr", createErr.Error()).

@@ -206,6 +206,16 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — Chat WORKS (r39 confirmed on hardware); r40 shrinks it + fixes
+  the export picker's desktop.** r39 desktop-binding fix worked — bidirectional
+  chat confirmed (host chat window shows viewer msgs + host replies reach viewer).
+  r40: chat window shrunk 420×360 → 300×380 docked top-right (was covering the
+  host work area); shared `bindInputDesktop()` (`deskbind_windows.go`/`_other.go`)
+  now also applied to the file-EXPORT picker thread (`serveExport`) — the picker
+  ran on an unbound goroutine so it likely failed the same way the chat window
+  did. IMAGE + file-IMPORT still reported not working but NOT yet seen in a
+  worker.log (need `receiving clipboard image` / `receiving file` lines to tell
+  arrived-but-native-fails vs not-arriving).
 - **2026-07-14 — FIX: worker GUI windows (chat/privacy) failed to create
   (r39-chatwin) — pending hardware validation.** r38 confirmed the routing fix
   (worker.log: `chat message received from viewer`), but `chat window create

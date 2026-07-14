@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,6 +110,11 @@ func (f *fileReceiver) handle(payload []byte) bool {
 // viewer as {k:'ft',offer/data/end} over the transport (which relays it onto the
 // viewer's 'file' channel). 36 KB raw chunks (→ ~48 KB base64) match the viewer.
 func (f *fileReceiver) serveExport() {
+	// The picker is a GUI dialog — bind this thread to the interactive desktop
+	// first (same reason the chat window needed it), or it can fail to appear.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	bindInputDesktop()
 	path, ok := showOpenFileDialog()
 	if !ok {
 		return // cancelled
