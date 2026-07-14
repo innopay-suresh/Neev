@@ -93,6 +93,7 @@ func (c *clipSync) recvImageChunk(i, n int, d string) {
 		c.imgParts = make([]string, n)
 		c.imgTotal = n
 		c.imgNext = 0
+		log.Info().Int("chunks", n).Msg("worker: receiving clipboard image from viewer")
 	}
 	if c.imgTotal == 0 || n != c.imgTotal || i != c.imgNext || i >= len(c.imgParts) {
 		c.imgParts, c.imgTotal, c.imgNext = nil, 0, 0
@@ -159,6 +160,7 @@ func (c *clipSync) poll(ctx context.Context) {
 						if err := ipc.WriteMessage(c.conn, ipc.KindClipboardImage, img); err != nil {
 							return
 						}
+						log.Info().Int("bytes", len(img)).Msg("worker: sent host clipboard image to viewer")
 						continue // don't also emit text this tick
 					}
 				}

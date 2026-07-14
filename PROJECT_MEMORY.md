@@ -206,6 +206,19 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — FIX: clip/chat/file/cmd dropped to secure-bridge while
+  elevated (r38-route-fix) — root cause of "chat + image not working."** Field
+  logs (helper 6 / transport 2) showed the host constantly `foreground elevated
+  -> YES` / `input desktop -> Winlogon`; transport routed ALL control-channel
+  messages to the secure/elevated bridge in that state, but the bridge only
+  injects mouse/keyboard — so chat/image/file/command messages were silently
+  dropped whenever the host was elevated/secure (frequent on this machine; text
+  clipboard "worked" only because it was tested while not elevated). Fix
+  (`transport.go`): new `workerOnlyMessage` — only real input goes to the bridge;
+  `{k:clip|chat|ft|cmd}` ALWAYS go to the worker (it handles them regardless of
+  desktop). Added worker.log diagnostics: chat received/window-created, image
+  send/receive, so the native paths are observable. LD-9/LD-3 note: bridge is
+  input-only; worker owns clipboard/chat/files/commands even during secure/UAC.
 - **2026-07-14 — TransportMode Phase B, batch 6: chat (r37-chat) — Phase B
   feature-complete, pending hardware validation.** The worker renders a native
   Win32 chat window on the host (`chatwin_windows.go`: log edit + input edit +

@@ -230,7 +230,17 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 			t.sendToWorker(ipc.KindFileData, data)
 			return
 		case "control", "cursor":
-			if t.bridge != nil && (t.bridge.SecureActive() || t.bridge.ElevatedActive()) {
+			// Only real mouse/keyboard INPUT ever needs the secure/elevated bridge
+			// (only SYSTEM can inject into Winlogon/elevated windows). Clipboard,
+			// chat, file and command messages are handled by the worker regardless
+			// of which desktop is up, so they must NOT go to the bridge (it would
+			// drop them) — this machine is elevated/secure often, which is why
+			// chat + image clipboard were failing.
+			bridgeUp := t.bridge != nil && (t.bridge.SecureActive() || t.bridge.ElevatedActive())
+			if bridgeUp && label == "control" && workerOnlyMessage(data) {
+				bridgeUp = false
+			}
+			if bridgeUp {
 				if n := t.inToBridge.Add(1); n == 1 || n%256 == 0 {
 					log.Info().Uint64("n", n).
 						Bool("secure", t.bridge.SecureActive()).
@@ -314,6 +324,25 @@ func (t *Transport) broadcastClipImage(png []byte) {
 			_ = ps.peer.SendControlText(string(msg))
 		}
 	}
+}
+
+// workerOnlyMessage reports whether a control-channel payload is a clipboard /
+// chat / file / command message (handled by the worker in the user session) as
+// opposed to real mouse/keyboard input (which may need the secure bridge). Such
+// messages must always reach the worker, even while a secure/elevated desktop is
+// up. Unparseable or input payloads return false (default to the input path).
+func workerOnlyMessage(data []byte) bool {
+	var m struct {
+		K string `json:"k"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	switch m.K {
+	case "clip", "chat", "ft", "cmd":
+		return true
+	}
+	return false
 }
 
 // announceHostOS tells the viewer this host is Windows so it un-hides the

@@ -145,6 +145,7 @@ func chatLoop() {
 		return
 	}
 	chatParent = parent
+	log.Info().Uint64("hwnd", uint64(parent)).Msg("worker: chat window created")
 	chatLog, _, _ = procCreateWindowExWC.Call(0,
 		uintptr(unsafe.Pointer(editClass)), 0,
 		wsChild|wsVisible|wsVScroll|wsBorder|esMultiline|esReadonly|esAutoVScroll,
