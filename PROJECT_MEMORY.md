@@ -206,6 +206,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — File import CONFIRMED working; image read fix (r41-imgfmt).**
+  worker.log (host) proved file import works — `receiving file
+  path=C:\Users\manickam.c\Downloads\… size=452` → `file transfer finished` (user
+  thought "files not working" but the file landed in Downloads; may have meant
+  export, fixed r40). Image showed ZERO worker activity → root cause found:
+  `readClipboardImagePNG` only accepted `BI_RGB` and rejected `BI_BITFIELDS`, but
+  most apps put 32bpp BI_BITFIELDS on the clipboard → host→viewer image silently
+  bailed. Fix (`clipimg_windows.go`): accept BI_BITFIELDS (skip the 3 mask DWORDs,
+  assume BGRA); poll (`clipboard.go`) no longer skips image when the clipboard
+  sequence number is 0. Viewer→host still needs a retest (no `receiving clipboard
+  image` seen — may be viewer-side Pasteboard).
 - **2026-07-14 — Chat WORKS (r39 confirmed on hardware); r40 shrinks it + fixes
   the export picker's desktop.** r39 desktop-binding fix worked — bidirectional
   chat confirmed (host chat window shows viewer msgs + host replies reach viewer).

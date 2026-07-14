@@ -139,30 +139,30 @@ func (c *clipSync) poll(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		// Image clipboard (host→viewer): only re-read the (large) bitmap when the
-		// clipboard actually changed, and only send when the image content changed
-		// (echo-guarded against images we just applied from the viewer).
-		if seq := clipboardSeq(); seq != 0 {
-			c.mu.Lock()
-			seqChanged := seq != c.lastSeq
-			c.lastSeq = seq
-			c.mu.Unlock()
-			if seqChanged {
-				if img, ok := readClipboardImagePNG(); ok {
-					h := hashBytes(img)
-					c.mu.Lock()
-					imgChanged := h != c.lastImgHash
-					if imgChanged {
-						c.lastImgHash = h
+		// Image clipboard (host→viewer): re-read the bitmap when the clipboard
+		// changed (sequence number) and send when the image content changed
+		// (hash, echo-guarded). If the sequence number is unavailable (0), fall
+		// back to always checking so image sync still works.
+		seq := clipboardSeq()
+		c.mu.Lock()
+		seqChanged := seq == 0 || seq != c.lastSeq
+		c.lastSeq = seq
+		c.mu.Unlock()
+		if seqChanged {
+			if img, ok := readClipboardImagePNG(); ok {
+				h := hashBytes(img)
+				c.mu.Lock()
+				imgChanged := h != c.lastImgHash
+				if imgChanged {
+					c.lastImgHash = h
+				}
+				c.mu.Unlock()
+				if imgChanged {
+					if err := ipc.WriteMessage(c.conn, ipc.KindClipboardImage, img); err != nil {
+						return
 					}
-					c.mu.Unlock()
-					if imgChanged {
-						if err := ipc.WriteMessage(c.conn, ipc.KindClipboardImage, img); err != nil {
-							return
-						}
-						log.Info().Int("bytes", len(img)).Msg("worker: sent host clipboard image to viewer")
-						continue // don't also emit text this tick
-					}
+					log.Info().Int("bytes", len(img)).Msg("worker: sent host clipboard image to viewer")
+					continue // don't also emit text this tick
 				}
 			}
 		}

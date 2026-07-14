@@ -38,6 +38,7 @@ const (
 	cfDIB        = 8
 	gmemMoveable = 0x0002
 	biRGB        = 0
+	biBitfields  = 3
 )
 
 type bitmapInfoHeader struct {
@@ -91,9 +92,13 @@ func readClipboardImagePNG() ([]byte, bool) {
 	if err := binary.Read(bytes.NewReader(raw[:40]), binary.LittleEndian, &hdr); err != nil {
 		return nil, false
 	}
-	// Support the common truecolor uncompressed variants; skip exotic ones.
-	if hdr.Size < 40 || hdr.Width <= 0 || hdr.Compression != biRGB ||
-		(hdr.BitCount != 24 && hdr.BitCount != 32) {
+	// Accept 24/32bpp truecolor DIBs. BI_RGB (uncompressed) AND BI_BITFIELDS —
+	// most apps (browsers, Snip & Sketch, Office) put 32bpp BI_BITFIELDS on the
+	// clipboard with the standard BGRA masks, so rejecting it (as before) made
+	// host→viewer image silently fail.
+	if hdr.Size < 40 || hdr.Width <= 0 ||
+		(hdr.BitCount != 24 && hdr.BitCount != 32) ||
+		(hdr.Compression != biRGB && hdr.Compression != biBitfields) {
 		return nil, false
 	}
 	width := int(hdr.Width)
@@ -106,6 +111,9 @@ func readClipboardImagePNG() ([]byte, bool) {
 	bpp := int(hdr.BitCount) / 8
 	stride := ((width*int(hdr.BitCount) + 31) / 32) * 4
 	pixOff := int(hdr.Size) // truecolor DIBs have no palette
+	if hdr.Compression == biBitfields {
+		pixOff += 12 // three color-mask DWORDs follow the header (assume BGRA)
+	}
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
 		srcY := y
