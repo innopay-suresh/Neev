@@ -206,6 +206,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — TransportMode Phase B, batch 5: privacy-mode execution
+  (r36-privacy) — pending hardware validation.** Ports privacy_mode.cpp to the
+  worker: `{k:'cmd',c:'privacy',on:bool}` → `setPrivacy` (new
+  `privacy_windows.go`, `privacy_other.go` stub). A full-virtual-screen black
+  layered/click-through/no-activate window with
+  `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` (viewer keeps seeing the
+  real desktop, local user sees black) + `BlockInput` (blocks local physical
+  input; remote SendInput still lands — the shipped Flutter behavior). Runs on
+  its own OS thread with a PeekMessage pump; toggled via a channel. `command_
+  windows.go` now parses `on` and routes privacy. RISK: Win32 window/message-loop
+  + BlockInput-vs-SendInput are native/untested-here. STILL OPEN: **chat** — in
+  the unattended seamless model the host has no operator UI, so bidirectional
+  chat needs a native chat window in the worker OR routing to the host Flutter
+  app (design choice pending); lowest value in this mode.
 - **2026-07-14 — TransportMode Phase B, batch 4: file transfer EXPORT host→viewer
   (r35-fileexport) — pending hardware validation.** Completes file transfer both
   ways. On a viewer `{k:'ft',t:'request'}`, the worker pops a native Windows

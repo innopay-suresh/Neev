@@ -81,8 +81,9 @@ func enableShutdownPrivilege() {
 // re-interpret it as input), whether or not the specific command is supported.
 func handleCommand(payload []byte) bool {
 	var m struct {
-		K string `json:"k"`
-		C string `json:"c"`
+		K  string `json:"k"`
+		C  string `json:"c"`
+		On bool   `json:"on"`
 	}
 	if err := json.Unmarshal(payload, &m); err != nil || m.K != "cmd" {
 		return false
@@ -95,6 +96,8 @@ func handleCommand(payload []byte) bool {
 	case "reboot":
 		enableShutdownPrivilege()
 		procExitWindowsEx.Call(ewxReboot|ewxForceIfHung, 0)
+	case "privacy":
+		setPrivacy(m.On) // blank the local screen (excluded from capture) + block local input
 	default:
 		// sas / privacy / anything new: consume it (don't inject as input) but
 		// note it's not yet carried over the transport.
