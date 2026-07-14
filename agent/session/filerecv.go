@@ -4,26 +4,33 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/neev/remote-agent/agent/ipc"
 )
 
-// fileReceiver writes viewer→host file transfers (the {k:'ft'} protocol carried
-// on the dedicated 'file' data channel) to the logged-in user's Downloads folder
-// in TransportMode, where the app is UI-only and no longer hosts. The 'file'
-// channel is reliable + ordered, so chunks arrive (and are appended) in order.
+// fileReceiver carries file transfers over the transport in TransportMode (the
+// app is UI-only and no longer hosts). Viewer→host (import) chunks are written
+// to the user's Downloads folder; host→viewer (export) pops a native picker on
+// the user's desktop and streams the chosen file back. The 'file' channel is
+// reliable + ordered, so chunks arrive/append in order.
 type fileReceiver struct {
+	conn net.Conn // to send export data back to the transport
 	mu   sync.Mutex
 	open map[string]*os.File
 	dir  string
+	seq  atomic.Uint64
 }
 
-func newFileReceiver() *fileReceiver {
-	return &fileReceiver{open: map[string]*os.File{}, dir: downloadsDir()}
+func newFileReceiver(conn net.Conn) *fileReceiver {
+	return &fileReceiver{conn: conn, open: map[string]*os.File{}, dir: downloadsDir()}
 }
 
 // downloadsDir returns the user's Downloads folder (the worker runs as that
@@ -90,11 +97,53 @@ func (f *fileReceiver) handle(payload []byte) bool {
 			log.Info().Str("id", m.ID).Str("t", m.T).Msg("worker: file transfer finished")
 		}
 	case "request":
-		// Viewer asked the host to pick a file to send back. Needs a native file
-		// picker on the (headless) host desktop — deferred.
-		log.Info().Msg("worker: file 'request' (host→viewer export) not yet supported over transport")
+		// Viewer asked the host for a file → pop a native picker on the host
+		// desktop and stream the selection back. Runs off the reader goroutine so
+		// the blocking modal dialog doesn't stall inbound messages.
+		go f.serveExport()
 	}
 	return true
+}
+
+// serveExport shows the host file picker and streams the chosen file to the
+// viewer as {k:'ft',offer/data/end} over the transport (which relays it onto the
+// viewer's 'file' channel). 36 KB raw chunks (→ ~48 KB base64) match the viewer.
+func (f *fileReceiver) serveExport() {
+	path, ok := showOpenFileDialog()
+	if !ok {
+		return // cancelled
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("worker: read export file failed")
+		return
+	}
+	id := fmt.Sprintf("hx-%d", f.seq.Add(1))
+	name := filepath.Base(path)
+	f.sendFT(map[string]interface{}{"k": "ft", "t": "offer", "id": id, "name": name, "size": len(data)})
+	const chunk = 36 * 1024
+	seq := 0
+	for off := 0; off < len(data); off += chunk {
+		end := off + chunk
+		if end > len(data) {
+			end = len(data)
+		}
+		f.sendFT(map[string]interface{}{
+			"k": "ft", "t": "data", "id": id, "seq": seq,
+			"d": base64.StdEncoding.EncodeToString(data[off:end]),
+		})
+		seq++
+	}
+	f.sendFT(map[string]interface{}{"k": "ft", "t": "end", "id": id})
+	log.Info().Str("name", name).Int("bytes", len(data)).Msg("worker: sent file to viewer")
+}
+
+func (f *fileReceiver) sendFT(m map[string]interface{}) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = ipc.WriteMessage(f.conn, ipc.KindFileData, b)
 }
 
 // closeAll releases any half-open transfers (worker shutdown / session swap).

@@ -69,8 +69,9 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	clip := newClipSync(conn)
 	go clip.poll(ctx)
 
-	// Viewer→host file transfers land in the user's Downloads folder.
-	files := newFileReceiver()
+	// File transfer both ways: viewer→host lands in Downloads; host→viewer pops a
+	// picker and streams back over the same conn.
+	files := newFileReceiver(conn)
 	defer files.closeAll()
 
 	// Reader: transport -> worker messages (keyframe requests, input, clipboard).

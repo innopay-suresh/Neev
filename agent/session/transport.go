@@ -454,6 +454,25 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 			}
 			continue
 		}
+		// Host→viewer file export (picker result) → relay onto each viewer's
+		// 'file' channel as TEXT (the viewer ignores binary there).
+		if kind == ipc.KindFileData {
+			t.workerMu.Lock()
+			current := t.worker == conn
+			t.workerMu.Unlock()
+			if current {
+				t.mu.Lock()
+				sessions := make([]*peerSession, 0, len(t.peers))
+				for _, ps := range t.peers {
+					sessions = append(sessions, ps)
+				}
+				t.mu.Unlock()
+				for _, ps := range sessions {
+					_ = ps.peer.SendFileTransferText(string(payload))
+				}
+			}
+			continue
+		}
 		// Host clipboard image changed → chunk + relay to viewers.
 		if kind == ipc.KindClipboardImage {
 			t.workerMu.Lock()

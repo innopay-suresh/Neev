@@ -206,6 +206,19 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — TransportMode Phase B, batch 4: file transfer EXPORT host→viewer
+  (r35-fileexport) — pending hardware validation.** Completes file transfer both
+  ways. On a viewer `{k:'ft',t:'request'}`, the worker pops a native Windows
+  picker on the user's desktop (`filedlg_windows.go`, `GetOpenFileNameW` — it runs
+  its own modal loop, called on a locked OS thread; `filedlg_other.go` stub) —
+  the viewer, controlling that desktop, selects the file; the worker reads it and
+  streams {offer/data/end} (36 KB→base64 chunks) back over `ipc.KindFileData`.
+  `transport.go` relays worker→transport KindFileData onto each viewer's 'file'
+  channel as TEXT via new `Peer.SendFileTransferText` (viewer ignores binary
+  there); `CreateAgentOffer` now stores `FileTransferDC`. `fileReceiver` gained
+  the conn + an id counter. Bundled with r34 (import + image clipboard) → r35.
+  RISK: native picker struct layout / dialog focus on the remote desktop are
+  untested-on-hardware. STILL OPEN: chat, privacy-mode execution, SAS.
 - **2026-07-13 — TransportMode Phase B, batch 3: file transfer viewer→host
   (import) (r34-filexfer) — pending hardware validation.** Viewer→host file send
   now works in TransportMode: `transport.go` routes the 'file' data channel

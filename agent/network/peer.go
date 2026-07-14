@@ -405,9 +405,12 @@ func (p *Peer) CreateAgentOffer(ctx context.Context) error {
 		})
 	}
 
-	// file: reliable, ordered — created so the viewer binds it (bytes carried in
-	// a later parity phase); harmless if unused.
+	// file: reliable, ordered — viewer→host import rides this; host→viewer export
+	// (file-picker result) is sent back on it via SendFileTransferText.
 	if fileDC, err := p.pc.CreateDataChannel("file", nil); err == nil {
+		p.mu.Lock()
+		p.FileTransferDC = fileDC
+		p.mu.Unlock()
 		fileDC.OnMessage(func(m webrtc.DataChannelMessage) {
 			if p.OnData != nil {
 				p.OnData("file", m.Data, m.IsString)
@@ -558,6 +561,19 @@ func (p *Peer) SendFileTransfer(data []byte) error {
 		return fmt.Errorf("file transfer channel not open")
 	}
 	return dc.Send(data)
+}
+
+// SendFileTransferText sends a TEXT message on the file transfer DataChannel.
+// The Flutter viewer only routes TEXT messages on 'file' into its file-transfer
+// handler (binary is ignored), so host→viewer export uses this.
+func (p *Peer) SendFileTransferText(s string) error {
+	p.mu.Lock()
+	dc := p.FileTransferDC
+	p.mu.Unlock()
+	if dc == nil {
+		return fmt.Errorf("file transfer channel not open")
+	}
+	return dc.SendText(s)
 }
 
 // Close tears down the peer connection.
