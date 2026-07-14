@@ -75,6 +75,14 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	files := newFileReceiver(conn)
 	defer files.closeAll()
 
+	// File CLIPBOARD (Ctrl+C a file → Ctrl+V on the other machine), reusing the
+	// clipf* protocol + the neev_helper clipagent. Polls the host clipboard for
+	// file copies; handles viewer clipf* over the same file channel.
+	cfiles := newClipFiles(conn)
+	clipFilesStop := make(chan struct{})
+	go cfiles.poll(clipFilesStop)
+	defer close(clipFilesStop)
+
 	// Host chat window: shows viewer messages; host replies stream back to viewers
 	// over the transport. Started lazily on the first message either way.
 	chatEnsure(func(reply string) {
@@ -112,8 +120,12 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					injector.Post(payload)
 				}
 			case ipc.KindFileData:
-				// Viewer→host file transfer chunk → write into Downloads.
-				files.handle(payload)
+				// The file channel carries both explicit transfers ({k:ft}) and
+				// file-clipboard control ({k:clipf*}). Try the transfer receiver
+				// first; anything else is a clipboard-file message.
+				if !files.handle(payload) {
+					cfiles.handle(payload)
+				}
 			}
 		}
 	}()

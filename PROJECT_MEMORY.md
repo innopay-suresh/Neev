@@ -206,6 +206,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — File clipboard: Ctrl+C file → Ctrl+V on other machine
+  (r42-fileclip) — pending hardware validation.** User wants Explorer-style file
+  copy-paste (NOT the auto-listener idea, dropped). Implemented the HOST end in
+  the worker (`clipfiles_windows.go`/`_other.go`), REUSING the existing clipf*
+  protocol (`clipfann`/`clipfreq`/`clipfdat` on the file channel — the viewer
+  already implements the other end incl. delayed-render) and the neev_helper
+  `clipagent` (127.0.0.1:47922, `'R'`/`'W'` = CF_HDROP read/write). Host SOURCE:
+  poll clipagent 'R' → clipfann → on clipfreq read bytes → clipfdat chunks
+  (deliver-on-paste, reuses viewer delayed-render). Host DESTINATION: clipfann →
+  eager clipfreq → assemble clipfdat → temp file → clipagent 'W' → host
+  clipboard. Routed over the existing `ipc.KindFileData` path (worker↔transport↔
+  viewer file channel); `fileReceiver.handle` tried first, else clipf*. No new
+  clipboard system, no Flutter bridge. Manual file-transfer button untouched.
+  Images: r41 BI_BITFIELDS fix still needs a user test (Ctrl+C image→Ctrl+V).
 - **2026-07-14 — File import CONFIRMED working; image read fix (r41-imgfmt).**
   worker.log (host) proved file import works — `receiving file
   path=C:\Users\manickam.c\Downloads\… size=452` → `file transfer finished` (user
