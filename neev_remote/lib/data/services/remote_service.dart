@@ -693,6 +693,11 @@ class RemoteService extends ChangeNotifier {
     required String targetId,
     required String password,
   }) async {
+    // The relay matches IDs exactly, so strip any grouping the user typed or
+    // pasted ("532-034-441" / "532 034 441" → "532034441"). A legacy Mac host may
+    // still be registered dashed; entering the dashes also works, but normalizing
+    // means the plain form always matches a plain-registered host.
+    targetId = targetId.replaceAll(RegExp(r'[^0-9A-Za-z]'), '');
     await disconnectViewer(keepAutoReconnect: true);
     _resolvedIce = await _resolveIceServers(relayUrl);
 
@@ -2023,23 +2028,28 @@ class RemoteService extends ChangeNotifier {
 
   static const _kPersistentAgentId = 'persistentAgentId';
 
-  /// Returns this install's stable agent ID, generating and persisting one the
-  /// first time. Format matches the server's `%03d-%03d-%03d` (e.g. 123-456-789)
-  /// so existing routing/UI conventions keep working.
+  /// Returns this install's stable agent ID (plain 9 digits, e.g. 123456789).
+  /// MUST be dash-free: the relay matches IDs EXACTLY, and the Windows/service
+  /// host registers plain digits — a legacy dashed id ("123-456-789") would never
+  /// be found by a peer typing "123456789". Normalizes any stored dashed id.
   Future<String> _persistentAgentId() async {
     final prefs = await SharedPreferences.getInstance();
-    var id = prefs.getString(_kPersistentAgentId);
-    if (id == null || id.isEmpty) {
-      id = _generateAgentId();
+    final stored = prefs.getString(_kPersistentAgentId);
+    final normalized = stored?.replaceAll(RegExp(r'[^0-9A-Za-z]'), '') ?? '';
+    if (normalized.isEmpty) {
+      final id = _generateAgentId();
       await prefs.setString(_kPersistentAgentId, id);
+      return id;
     }
-    return id;
+    if (normalized != stored) {
+      await prefs.setString(_kPersistentAgentId, normalized); // strip legacy dashes
+    }
+    return normalized;
   }
 
   String _generateAgentId() {
     final n = Random.secure().nextInt(1000000000); // 0 .. 999,999,999
-    final s = n.toString().padLeft(9, '0');
-    return '${s.substring(0, 3)}-${s.substring(3, 6)}-${s.substring(6, 9)}';
+    return n.toString().padLeft(9, '0'); // plain, matches the service host
   }
 
   /// The real machine hostname (via dart:io on native targets, so Discovery

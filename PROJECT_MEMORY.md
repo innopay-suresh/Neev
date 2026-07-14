@@ -206,6 +206,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — FIX: Mac "agent not found" — Mac registered a DASHED id
+  (r44-idfix).** Relay logs (deploy-server-1) were definitive: Mac registered
+  `id="532-034-441"` (host Admins-MacBook-Pro) while Windows registers plain
+  `958897411`; the relay matches IDs EXACTLY, so a Windows peer typing `532034441`
+  never found the Mac. Root cause: Flutter `_generateAgentId()` returned
+  `%03d-%03d-%03d` (dashes baked in) and registered it. Fix (`remote_service.dart`,
+  Flutter so it lands on Mac+Windows app): generate PLAIN 9 digits;
+  `_persistentAgentId` normalizes any stored dashed id (strips + re-saves);
+  `connectToHost` strips non-alnum from the target so typing dashes or plain both
+  match. NOTE: also must publish the updated MAC installer to the portal (was
+  stale from 07-09). Mac app.log lives at `~/.neev_remote/app.log`.
 - **2026-07-14 — W2W CLIPBOARD/FILES largely WORKING; raise file-clip cap to 2GB
   + stream (r43-bigfiles).** User: Windows↔Windows "almost everything working" —
   clipboard file copy-paste works for pdf/text/exe/image; zip/dmg/mp4/mp3 failed.
