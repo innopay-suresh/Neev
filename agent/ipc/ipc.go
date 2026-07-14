@@ -70,6 +70,11 @@ const (
 	// 'file' data channel ({"k":"ft","t":"offer|data|end|cancel",...}). The
 	// worker writes received files to the logged-in user's Downloads folder.
 	KindFileData byte = 0x08
+
+	// Worker -> transport: a host chat reply typed into the worker's chat window.
+	// payload = {"k":"chat","t":...} JSON; the transport relays it to viewers on
+	// the control channel.
+	KindChat byte = 0x09
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

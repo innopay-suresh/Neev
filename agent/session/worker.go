@@ -11,6 +11,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"time"
@@ -74,6 +75,15 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	files := newFileReceiver(conn)
 	defer files.closeAll()
 
+	// Host chat window: shows viewer messages; host replies stream back to viewers
+	// over the transport. Started lazily on the first message either way.
+	chatEnsure(func(reply string) {
+		msg, err := json.Marshal(map[string]string{"k": "chat", "t": reply})
+		if err == nil {
+			_ = ipc.WriteMessage(conn, ipc.KindChat, msg)
+		}
+	})
+
 	// Reader: transport -> worker messages (keyframe requests, input, clipboard).
 	// Ends when the transport goes away, which also unblocks the capture loop via
 	// ctx.
@@ -96,6 +106,8 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					// consumed as a clipboard update
 				} else if handleCommand(payload) {
 					// consumed as a session command
+				} else if handleChat(payload) {
+					// consumed as a chat message
 				} else {
 					injector.Post(payload)
 				}

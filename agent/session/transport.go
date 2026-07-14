@@ -454,6 +454,25 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 			}
 			continue
 		}
+		// Host chat reply (typed in the worker's chat window) → relay to viewers
+		// on the control channel as TEXT.
+		if kind == ipc.KindChat {
+			t.workerMu.Lock()
+			current := t.worker == conn
+			t.workerMu.Unlock()
+			if current {
+				t.mu.Lock()
+				sessions := make([]*peerSession, 0, len(t.peers))
+				for _, ps := range t.peers {
+					sessions = append(sessions, ps)
+				}
+				t.mu.Unlock()
+				for _, ps := range sessions {
+					_ = ps.peer.SendControlText(string(payload))
+				}
+			}
+			continue
+		}
 		// Host→viewer file export (picker result) → relay onto each viewer's
 		// 'file' channel as TEXT (the viewer ignores binary there).
 		if kind == ipc.KindFileData {

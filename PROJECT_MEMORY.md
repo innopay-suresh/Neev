@@ -206,6 +206,19 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — TransportMode Phase B, batch 6: chat (r37-chat) — Phase B
+  feature-complete, pending hardware validation.** The worker renders a native
+  Win32 chat window on the host (`chatwin_windows.go`: log edit + input edit +
+  Send button, custom wndproc for WM_COMMAND/WM_SIZE/WM_CLOSE, own OS thread +
+  PeekMessage pump; `chatwin_other.go` stub). Viewer `{k:'chat'}` rides the
+  control channel → worker `handleChat` (`chat.go`) → `chatShow`; host replies go
+  worker→transport via new `ipc.KindChat` → `transport.go` relays to viewers on
+  the control channel (SendControlText). RISK: native window + child controls +
+  message routing untested-on-hardware. **Phase B parity now complete** (screen,
+  input, lock/logoff/reboot, privacy button+execution, text+image clipboard, file
+  import+export, chat). NOTE: r33–r37 native features are all built but NOT yet
+  hardware-validated; portal 172.17.17.77 was DOWN at ship time so r34–r37 went
+  to the GitHub ci-windows release only — push to portal when reachable.
 - **2026-07-14 — TransportMode Phase B, batch 5: privacy-mode execution
   (r36-privacy) — pending hardware validation.** Ports privacy_mode.cpp to the
   worker: `{k:'cmd',c:'privacy',on:bool}` → `setPrivacy` (new
