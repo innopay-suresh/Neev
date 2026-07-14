@@ -206,6 +206,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — FIX: worker GUI windows (chat/privacy) failed to create
+  (r39-chatwin) — pending hardware validation.** r38 confirmed the routing fix
+  (worker.log: `chat message received from viewer`), but `chat window create
+  failed` — the service-spawned worker was denied window creation even though
+  SendInput works (its thread lands on a non-interactive desktop for GUI). Fix:
+  `OpenInputDesktop`+`SetThreadDesktop` bind the chat/privacy loop thread to the
+  interactive input desktop before creating the window; also fixed a bad
+  `hbrBackground` (was GetStockObject(NULL_BRUSH)+1 → now (HBRUSH)(COLOR_WINDOW+1))
+  and added `GetLastError` logging on RegisterClass/CreateWindowEx so the exact
+  failure is visible if it persists. IMAGE: not exercised in the r38 logs (only
+  chat was) — needs a retest; the r38 routing fix should have unblocked it too.
 - **2026-07-14 — FIX: clip/chat/file/cmd dropped to secure-bridge while
   elevated (r38-route-fix) — root cause of "chat + image not working."** Field
   logs (helper 6 / transport 2) showed the host constantly `foreground elevated

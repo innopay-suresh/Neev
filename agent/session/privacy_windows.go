@@ -99,6 +99,11 @@ func privacyWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 
 func privacyLoop() {
 	runtime.LockOSThread()
+	// Bind to the interactive input desktop so the overlay window can be created
+	// (see chatLoop) — a service-spawned worker may otherwise be denied GUI.
+	if hdesk, _, _ := procOpenInputDesktopC.Call(0, 0, 0x10000000 /*GENERIC_ALL*/); hdesk != 0 {
+		procSetThreadDesktopC.Call(hdesk)
+	}
 	className, _ := syscall.UTF16PtrFromString("NeevPrivacyBlank")
 	hInst, _, _ := procGetModuleHandleWPriv.Call(0)
 	if !privacyClassOK {

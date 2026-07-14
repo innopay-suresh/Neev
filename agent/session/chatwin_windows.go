@@ -33,6 +33,8 @@ var (
 	procTranslateMessageC = modUser32Chat.NewProc("TranslateMessage")
 	procDispatchMessageWC = modUser32Chat.NewProc("DispatchMessageW")
 	procLoadCursorWC     = modUser32Chat.NewProc("LoadCursorW")
+	procOpenInputDesktopC = modUser32Chat.NewProc("OpenInputDesktop")
+	procSetThreadDesktopC = modUser32Chat.NewProc("SetThreadDesktop")
 	procGetStockObjectC  = syscall.NewLazyDLL("gdi32.dll").NewProc("GetStockObject")
 	procGetModuleHandleWC = syscall.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW")
 )
@@ -116,6 +118,17 @@ func chatWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 
 func chatLoop() {
 	runtime.LockOSThread()
+	// Bind this thread to the interactive input desktop so window creation is
+	// permitted — a service-spawned worker can land on a non-interactive desktop
+	// for GUI even though SendInput (input desktop) works. Must happen before any
+	// window is created on this thread.
+	if hdesk, _, _ := procOpenInputDesktopC.Call(0, 0, 0x10000000 /*GENERIC_ALL*/); hdesk != 0 {
+		if r, _, err := procSetThreadDesktopC.Call(hdesk); r == 0 {
+			log.Warn().Str("err", err.Error()).Msg("worker: chat SetThreadDesktop failed")
+		} else {
+			log.Info().Msg("worker: chat bound to input desktop")
+		}
+	}
 	className, _ := syscall.UTF16PtrFromString("NeevChatWindow")
 	editClass, _ := syscall.UTF16PtrFromString("EDIT")
 	btnClass, _ := syscall.UTF16PtrFromString("BUTTON")
@@ -123,25 +136,26 @@ func chatLoop() {
 	sendLabel, _ := syscall.UTF16PtrFromString("Send")
 	hInst, _, _ := procGetModuleHandleWC.Call(0)
 	cursor, _, _ := procLoadCursorWC.Call(0, idcArrow)
-	brush, _, _ := procGetStockObjectC.Call(colorWindow)
 	font, _, _ := procGetStockObjectC.Call(defaultGUIFont)
 
 	wc := wndClassW{
 		lpfnWndProc:   syscall.NewCallback(chatWndProc),
 		hInstance:     hInst,
 		hCursor:       cursor,
-		hbrBackground: brush + 1, // (HBRUSH)(COLOR_WINDOW+1)
+		hbrBackground: uintptr(colorWindow + 1), // (HBRUSH)(COLOR_WINDOW+1)
 		lpszClassName: className,
 	}
-	procRegisterClassWC.Call(uintptr(unsafe.Pointer(&wc)))
+	atom, _, regErr := procRegisterClassWC.Call(uintptr(unsafe.Pointer(&wc)))
 
 	// 0x80000000 = CW_USEDEFAULT
 	const cwUseDefault = 0x80000000
-	parent, _, _ := procCreateWindowExWC.Call(0,
+	parent, _, createErr := procCreateWindowExWC.Call(0,
 		uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
 		wsOverlapped, cwUseDefault, cwUseDefault, 420, 360, 0, 0, hInst, 0)
 	if parent == 0 {
-		log.Warn().Msg("worker: chat window create failed")
+		log.Warn().Uint64("atom", uint64(atom)).
+			Str("regErr", regErr.Error()).Str("createErr", createErr.Error()).
+			Msg("worker: chat window create failed")
 		return
 	}
 	chatParent = parent
