@@ -115,7 +115,7 @@ func (cf *clipFiles) announce(paths []string) {
 	cf.send(map[string]interface{}{"k": "clipfann", "token": token, "files": files})
 }
 
-const clipFileMaxBytes = 64 * 1024 * 1024 // 64 MB cap, matches the viewer
+const clipFileMaxBytes = 2 * 1024 * 1024 * 1024 // 2 GB cap (streamed, so memory-safe)
 
 // handle routes an inbound clipf* message (from the viewer via the file channel).
 // Returns true if it was a clipf* message.
@@ -172,28 +172,40 @@ func (cf *clipFiles) handle(payload []byte) bool {
 	return false
 }
 
-// serveBytes reads a host file and streams it to the viewer in 48KB base64 chunks.
+// serveBytes STREAMS a host file to the viewer in base64 chunks without loading
+// the whole file into memory (so large zip/mp4/dmg work). Each non-final chunk
+// is exactly 36 KB of raw bytes — a multiple of 3 — so its base64 has no interior
+// padding and the concatenation the viewer decodes stays valid.
 func (cf *clipFiles) serveBytes(token string, index int, path string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	fail := func() {
 		cf.send(map[string]interface{}{"k": "clipfdat", "token": token, "index": index, "ok": false, "seq": 0, "total": 1})
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		fail()
 		return
 	}
-	b64 := base64.StdEncoding.EncodeToString(data)
-	const chunk = 48 * 1024
-	total := (len(b64) + chunk - 1) / chunk
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		fail()
+		return
+	}
+	const rawChunk = 36 * 1024 // 36KB raw → 48KB base64, multiple of 3
+	total := int((fi.Size() + rawChunk - 1) / rawChunk)
 	if total < 1 {
 		total = 1
 	}
+	buf := make([]byte, rawChunk)
 	for i := 0; i < total; i++ {
-		start := i * chunk
-		end := start + chunk
-		if end > len(b64) {
-			end = len(b64)
+		n, err := io.ReadFull(f, buf)
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+			fail()
+			return
 		}
 		cf.send(map[string]interface{}{
 			"k": "clipfdat", "token": token, "index": index, "ok": true,
-			"seq": i, "total": total, "d": b64[start:end],
+			"seq": i, "total": total, "d": base64.StdEncoding.EncodeToString(buf[:n]),
 		})
 	}
 }

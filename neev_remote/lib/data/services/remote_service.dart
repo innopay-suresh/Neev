@@ -1734,7 +1734,7 @@ class RemoteService extends ChangeNotifier {
 
   // Detect files freshly copied to the local clipboard and mirror them to the
   // peer's clipboard. Small files only (chunked base64 over the data channel).
-  static const int _clipFileMaxBytes = 64 * 1024 * 1024; // 64 MB cap
+  static const int _clipFileMaxBytes = 2 * 1024 * 1024 * 1024; // 2 GB cap
   Future<void> _pollClipFiles() async {
     if (_clipFileSuppress > 0) {
       _clipFileSuppress--;

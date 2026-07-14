@@ -206,6 +206,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-14 — W2W CLIPBOARD/FILES largely WORKING; raise file-clip cap to 2GB
+  + stream (r43-bigfiles).** User: Windows↔Windows "almost everything working" —
+  clipboard file copy-paste works for pdf/text/exe/image; zip/dmg/mp4/mp3 failed.
+  Root cause = the 64 MB size cap (NOT file type). Raised `_clipFileMaxBytes`
+  (Dart) and `clipFileMaxBytes` (Go) to 2 GB; `serveBytes` now STREAMS the host
+  file in 36 KB raw chunks (base64, mult-of-3 so concatenation stays valid) so
+  large files don't load into memory. (Viewer→host still assembles in memory —
+  large uploads may be heavy; follow-up.) OPEN cross-platform items (Mac):
+  keyboard-capture + privacy are `supported => windows` (Windows-only by design,
+  absent on Mac viewer); Mac↔Windows import/export + some clip file types + the
+  ID "agent not found" need Mac-side logs/testing (dev Mac limits per notes).
 - **2026-07-14 — File clipboard: Ctrl+C file → Ctrl+V on other machine
   (r42-fileclip) — pending hardware validation.** User wants Explorer-style file
   copy-paste (NOT the auto-listener idea, dropped). Implemented the HOST end in
