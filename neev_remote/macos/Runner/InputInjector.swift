@@ -134,8 +134,14 @@ class InputInjector {
     case "whl":
       let dy = (args["dy"] as? Double) ?? 0
       let dx = (args["dx"] as? Double) ?? 0
-      if let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
-                         wheelCount: 2, wheel1: Int32(-dy), wheel2: Int32(-dx),
+      // LINE units, not pixel: a remote mouse's wheel delta as raw pixels either
+      // overshoots or is ignored by most macOS apps, so scrolling appeared dead.
+      // Map to a small signed line count (>=1 line in the scroll direction). Sign
+      // keeps the previous -dy/-dx convention.
+      if let e = CGEvent(scrollWheelEvent2Source: source, units: .line,
+                         wheelCount: 2,
+                         wheel1: InputInjector.scrollLines(dy),
+                         wheel2: InputInjector.scrollLines(dx),
                          wheel3: 0) {
         e.setIntegerValueField(.eventSourceUserData, value: InputInjector.injectedTag)
         e.post(tap: .cghidEventTap)
@@ -213,6 +219,15 @@ class InputInjector {
       e.setIntegerValueField(.eventSourceUserData, value: InputInjector.injectedTag)
       e.post(tap: .cghidEventTap)
     }
+  }
+
+  /// Converts a viewer wheel delta (roughly pixels) to a small signed line count
+  /// for CGEvent line-unit scrolling. Sign is negated to match the -dy/-dx wheel
+  /// convention; magnitude is clamped so a fast flick can't scroll pages at once.
+  static func scrollLines(_ v: Double) -> Int32 {
+    if v == 0 { return 0 }
+    let mag = max(Int32(1), min(Int32((abs(v) / 30).rounded()), 6))
+    return v > 0 ? -mag : mag
   }
 
   /// Maps a USB HID modifier usage to its CGEventFlags bit.

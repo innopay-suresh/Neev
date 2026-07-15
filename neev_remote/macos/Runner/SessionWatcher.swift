@@ -25,6 +25,15 @@ class SessionWatcher {
     let watcher = SessionWatcher(messenger: messenger)
     SessionWatcher.retained = watcher
     watcher.start()
+    // Also handle inbound calls: the host activates itself before opening a file
+    // picker so the panel is frontmost and visible to the controlling viewer
+    // (otherwise a backgrounded host shows the picker behind its window).
+    watcher.channel.setMethodCallHandler { call, result in
+      if call.method == "activateApp" {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+      }
+      result(nil)
+    }
   }
 
   private func start() {

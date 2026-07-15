@@ -198,6 +198,9 @@ class RemoteService extends ChangeNotifier {
   Future<void> _onFileRequest() async {
     try {
       DiagLog.log('file', 'peer requested a file — opening picker');
+      // macOS: a backgrounded host would show the picker behind its window,
+      // invisible to the viewer — bring the app frontmost first.
+      await SessionWatcher.activateApp();
       final f = await openFile();
       if (f == null) {
         DiagLog.log('file', 'picker cancelled');

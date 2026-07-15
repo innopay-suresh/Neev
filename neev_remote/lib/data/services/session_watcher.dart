@@ -49,4 +49,13 @@ class SessionWatcher {
       _started = false;
     }
   }
+
+  /// macOS: bring the app frontmost so a file picker opened for a remote import
+  /// request is visible to the controlling viewer. No-op elsewhere.
+  static Future<void> activateApp() async {
+    if (!supported) return;
+    try {
+      await _channel.invokeMethod('activateApp');
+    } catch (_) {}
+  }
 }
