@@ -31,6 +31,11 @@ if [ -f "$AGENT_BIN" ]; then
   DAEMON_DST="$APP_PATH/Contents/Resources/daemon"
   mkdir -p "$DAEMON_DST"
   install -m 0755 "$AGENT_BIN" "$DAEMON_DST/neev-agent"
+  # Give the agent a STABLE code-sign identifier so Screen Recording / Accessibility
+  # TCC grants stick to it (the linker's default 'a.out' identity is not durable).
+  # Ad-hoc here; a Developer-ID re-sign downstream keeps the same identifier.
+  codesign --force --sign - --identifier com.neev.agent --timestamp=none \
+    "$DAEMON_DST/neev-agent" 2>/dev/null || echo "   (agent re-sign skipped)"
   cp "$REPO_ROOT/packaging/mac/com.neev.transport.plist" "$DAEMON_DST/"
   cp "$REPO_ROOT/packaging/mac/com.neev.worker.plist" "$DAEMON_DST/"
   install -m 0755 "$REPO_ROOT/packaging/mac/install-daemon.sh" "$DAEMON_DST/"
