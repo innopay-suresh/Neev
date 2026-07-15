@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/services/mac_daemon.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
 
@@ -29,6 +30,8 @@ class SettingsPage extends ConsumerStatefulWidget {
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   int _section = 0;
+  bool _daemonBusy = false;
+  String? _daemonMsg;
 
   @override
   Widget build(BuildContext context) {
@@ -238,7 +241,96 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ref.read(settingsProvider.notifier).setClipboardSync(v),
                 ),
               ]),
+              ..._macDaemonCard(),
     ];
+  }
+
+  /// macOS-only: install/remove the lock-screen + switch-user daemon. Only shown
+  /// when the build actually bundled the daemon payload.
+  List<Widget> _macDaemonCard() {
+    if (!MacDaemon.canInstall) return const [];
+    final installed = MacDaemon.isInstalled;
+    return [
+      const SizedBox(height: AppSpacing.lg),
+      _buildSectionHeader('Unattended access (macOS)'),
+      _buildSettingsCard([
+        Padding(
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                installed
+                    ? 'Lock-screen daemon: installed'
+                    : 'Lock-screen daemon: not installed',
+                style: AppTypography.body.copyWith(
+                    color: installed ? AppColors.success : AppColors.textPrimary),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Runs a background service so viewers keep seeing this Mac across '
+                'lock, logout and fast-user-switch — including the login window. '
+                'After installing, grant it Screen Recording and Accessibility in '
+                'System Settings → Privacy & Security.',
+                style: AppTypography.caption
+                    .copyWith(color: AppColors.textSecondary),
+              ),
+              if (_daemonMsg != null) ...[
+                const SizedBox(height: AppSpacing.xs),
+                Text(_daemonMsg!,
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.warning)),
+              ],
+              const SizedBox(height: AppSpacing.sm),
+              Row(
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _daemonBusy
+                        ? null
+                        : () => _runDaemon(installed ? 'uninstall' : 'install'),
+                    icon: _daemonBusy
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : Icon(installed
+                            ? Icons.delete_outline
+                            : Icons.download_rounded),
+                    label: Text(installed
+                        ? 'Remove daemon'
+                        : 'Install lock-screen daemon'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ]),
+    ];
+  }
+
+  Future<void> _runDaemon(String action) async {
+    setState(() {
+      _daemonBusy = true;
+      _daemonMsg = null;
+    });
+    final err = action == 'install'
+        ? await MacDaemon.install()
+        : await MacDaemon.uninstall();
+    if (!mounted) return;
+    setState(() {
+      _daemonBusy = false;
+      if (err == null) {
+        _daemonMsg = action == 'install'
+            ? 'Installed. Now grant Screen Recording + Accessibility in System '
+                'Settings, then log out and back in once.'
+            : 'Removed.';
+      } else if (err == 'cancelled') {
+        _daemonMsg = 'Cancelled.';
+      } else {
+        _daemonMsg = 'Failed: $err';
+      }
+    });
   }
 
   Widget _buildSectionHeader(String title) {
