@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Per-session capture worker. Installed to /Library/LaunchAgents so launchd
+         starts one instance in EACH graphical context, selected by
+         LimitLoadToSessionType:
+           Aqua        → a normal logged-in user desktop (runs as that user)
+           LoginWindow → the login / lock / fast-user-switch screen (runs as root)
+         The LoginWindow instance is what lets a viewer see and drive the login
+         window — the macOS analog of the Windows secure-desktop capture. A plain
+         LaunchDaemon CANNOT do this: it lives in the system Mach bootstrap namespace
+         and its ScreenCaptureKit/CGDisplayStream returns empty frames pre-login.
+         Each instance dials the root transport (com.neev.transport) over IPC 47930
+         and streams frames; the transport swaps between them across session changes
+         so the remote viewer never disconnects.
+
+         REQUIRES Screen Recording (+ Accessibility for input) TCC granted to
+         /Library/Application Support/NeevRemote/neev-agent — no prompt can appear
+         at the login window, so it must be pre-authorized (System Settings, MDM
+         PPPC profile, or a signed build with the persistent-content-capture
+         entitlement). -->
+    <key>Label</key>
+    <string>com.neev.worker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application Support/NeevRemote/neev-agent</string>
+        <string>--capture-worker</string>
+    </array>
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+        <string>LoginWindow</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NO_BROWSER</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Application Support/NeevRemote/worker.err.log</string>
+    <key>StandardOutPath</key>
+    <string>/Library/Application Support/NeevRemote/worker.out.log</string>
+</dict>
+</plist>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Persistent, root-owned WebRTC transport. The macOS equivalent of the
+         Windows SYSTEM service (session-0): it owns the relay registration and
+         peer connections and survives fast-user-switch / lock, while a per-session
+         capture worker (com.neev.worker) attaches over loopback IPC 47930 and feeds
+         it frames. Installed to /Library/LaunchDaemons (loads as root at boot). -->
+    <key>Label</key>
+    <string>com.neev.transport</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application Support/NeevRemote/neev-agent</string>
+        <string>--transport</string>
+        <string>--relay</string>
+        <string>__RELAY_URL__</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NO_BROWSER</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Application Support/NeevRemote/transport.err.log</string>
+    <key>StandardOutPath</key>
+    <string>/Library/Application Support/NeevRemote/transport.out.log</string>
+</dict>
+</plist>

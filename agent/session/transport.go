@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -586,30 +587,20 @@ func (t *Transport) distributeFrame(vp8 []byte) {
 // writeCreds records the transport's id + password so a headless (session 0)
 // transport is reachable during testing. Written to ProgramData\NeevRemote.
 func (t *Transport) writeCreds() {
-	dir := os.Getenv("ProgramData")
-	if dir == "" {
-		dir = os.TempDir()
-	}
-	dir = dir + string(os.PathSeparator) + "NeevRemote"
-	_ = os.MkdirAll(dir, 0o755)
-	path := dir + string(os.PathSeparator) + "transport.txt"
+	path := filepath.Join(dataDir(), "transport.txt")
 	content := "id=" + t.sigClient.AgentID + "\npassword=" + t.password + "\n"
 	_ = os.WriteFile(path, []byte(content), 0o600)
 	log.Info().Str("path", path).Msg("transport creds written")
 }
 
-// loadMachineCreds reads the SYSTEM helper's machine-wide id + password from
-// C:\ProgramData\NeevRemote\machine.dat (line 1 = id, line 2 = password; the
-// password may be empty until the user sets one). Returns ("","") if absent —
-// the caller then falls back to env/random. Windows-only in practice; on other
-// OSes ProgramData is unset so this returns empty.
+// loadMachineCreds reads the privileged installer's machine-wide id + password
+// from <dataDir>/machine.dat (line 1 = id, line 2 = password; the password may
+// be empty until the user sets one). Returns ("","") if absent — the caller then
+// falls back to env/random. dataDir() resolves to ProgramData on Windows and
+// /Library/Application Support/NeevRemote on macOS, so the same machine identity
+// is shared between the root transport and per-session workers on both.
 func loadMachineCreds() (id, password string) {
-	dir := os.Getenv("ProgramData")
-	if dir == "" {
-		return "", ""
-	}
-	data, err := os.ReadFile(dir + string(os.PathSeparator) + "NeevRemote" +
-		string(os.PathSeparator) + "machine.dat")
+	data, err := os.ReadFile(filepath.Join(dataDir(), "machine.dat"))
 	if err != nil {
 		return "", ""
 	}

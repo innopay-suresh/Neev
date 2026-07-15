@@ -16,14 +16,7 @@ import (
 // alone is discarded there, which left TransportMode undiagnosable in the field.
 // Best-effort: on any error it leaves the existing (stderr) logger in place.
 func setupFileLog(name string) {
-	dir := os.Getenv("ProgramData")
-	if dir == "" {
-		dir = os.TempDir()
-	}
-	dir = filepath.Join(dir, "NeevRemote")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
+	dir := dataDir()
 	path := filepath.Join(dir, name)
 	// Roll if it grew past ~4 MB so it can't fill the disk over long uptimes.
 	if fi, err := os.Stat(path); err == nil && fi.Size() > 4*1024*1024 {
