@@ -134,17 +134,28 @@ class InputInjector {
     case "whl":
       let dy = (args["dy"] as? Double) ?? 0
       let dx = (args["dx"] as? Double) ?? 0
-      // LINE units, not pixel: a remote mouse's wheel delta as raw pixels either
-      // overshoots or is ignored by most macOS apps, so scrolling appeared dead.
-      // Map to a small signed line count (>=1 line in the scroll direction). Sign
-      // keeps the previous -dy/-dx convention.
-      if let e = CGEvent(scrollWheelEvent2Source: source, units: .line,
-                         wheelCount: 2,
-                         wheel1: InputInjector.scrollLines(dy),
-                         wheel2: InputInjector.scrollLines(dx),
-                         wheel3: 0) {
-        e.setIntegerValueField(.eventSourceUserData, value: InputInjector.injectedTag)
-        e.post(tap: .cghidEventTap)
+      // Two very different inputs arrive here:
+      //  • a mouse WHEEL sends a few LARGE notch deltas → LINE units (reliable
+      //    across apps; raw pixels were ignored, so scrolling looked dead).
+      //  • a touchpad sends MANY small precise deltas → PIXEL units (smooth 1:1);
+      //    forcing each tiny delta to a whole line over-scrolled ("not working
+      //    properly with the touchpad").
+      // Classify by magnitude and pick the matching unit.
+      let precise = abs(dy) < 20 && abs(dx) < 20
+      let e: CGEvent?
+      if precise {
+        e = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
+                    wheelCount: 2, wheel1: Int32(-dy), wheel2: Int32(-dx),
+                    wheel3: 0)
+      } else {
+        e = CGEvent(scrollWheelEvent2Source: source, units: .line,
+                    wheelCount: 2,
+                    wheel1: InputInjector.scrollLines(dy),
+                    wheel2: InputInjector.scrollLines(dx), wheel3: 0)
+      }
+      if let ev = e {
+        ev.setIntegerValueField(.eventSourceUserData, value: InputInjector.injectedTag)
+        ev.post(tap: .cghidEventTap)
       }
     case "key":
       let usage = (args["u"] as? Int) ?? 0
