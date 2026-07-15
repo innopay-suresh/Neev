@@ -206,6 +206,25 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-15 — macOS parity: native privacy (r46) + keyboard capture (r47) —
+  pending Mac hardware validation.** Ported two Windows-only features to macOS:
+  `PrivacyMode.swift` (black window on every screen, `sharingType=.none` so it's
+  excluded from capture, + a CGEventTap blocking local input while letting
+  remote-injected input through — injected events tagged via `eventSourceUserData`
+  in `InputInjector.swift`); `KeyHook.swift` (session CGEventTap capturing all
+  keys incl. reserved combos → HID usages → drained by Dart; keyCode→HID reverse
+  map + flagsChanged modifier handling). Registered in `MainFlutterWindow.swift`;
+  Dart `PrivacyMode.supported`/`KeyboardHook.supported` + the viewer Privacy
+  button now include macOS. FILE CLIPBOARD (Ctrl+C/V files) on Mac needs NO new
+  code — it already works via the cross-platform `pasteboard` package
+  (`Pasteboard.files()`/`writeFiles()`); the SANDBOX was blocking it, so r45
+  un-sandbox unblocks it. PARITY STATUS: input/screen/clipboard(text/image/file)/
+  file-transfer/chat/privacy/keyboard-capture all now cross-platform (pending Mac
+  test). ONLY remaining gap = **Mac switch-user/lock-screen capture** — the login
+  window is a protected macOS context needing a privileged ROOT LaunchDaemon
+  (the macOS equivalent of the Windows SYSTEM service/TransportMode); a dedicated
+  project that CANNOT be done blind and needs Mac hardware per iteration. I can't
+  run macOS here, so r45–r47 native features need the user's Mac to validate.
 - **2026-07-15 — GOAL: full cross-platform parity (win↔win, win↔mac, mac↔win,
   mac↔mac) like AnyDesk. STEP 1: un-sandbox the macOS app (r45-mac-nosandbox).**
   Root cause of Mac host crashing / "cursor moves but can't click" / import-export
