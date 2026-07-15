@@ -25,6 +25,7 @@ import 'input_event.dart';
 import 'input_injector.dart';
 import 'keyboard_hook.dart';
 import 'privacy_mode.dart';
+import 'clipboard_monitor.dart';
 import 'screen_capture_service.dart';
 import 'session_watcher.dart';
 import 'signaling_service.dart';
@@ -156,9 +157,15 @@ class RemoteService extends ChangeNotifier {
       _lastClipFiles = [path];
       // Write with an explicit COPY drop-effect so Ctrl+V copies (not moves) the
       // file — otherwise the mirrored file vanishes from its folder on paste.
+      //  0. macOS → native ClipboardMonitor (NSPasteboard file URLs = COPY, and
+      //     changeCount echo-suppression). Fixes files pasting as a MOVE.
       //  1. SYSTEM host → the user-context clip agent (writes COPY).
       //  2. Attended Windows → our runner's native writer (writes COPY).
-      //  3. Anything else (macOS/Linux) → Pasteboard; no move semantics there.
+      //  3. Anything else (Linux) → Pasteboard; no move semantics there.
+      if (NativeClipboardMonitor.supported) {
+        await _clipMonitor.writeFiles([path]);
+        return;
+      }
       final ok = await _clipAgent.writeFiles([path]) ||
           await ClipboardWriter.writeFilesCopy([path]);
       if (!ok) await Pasteboard.writeFiles([path]);
@@ -167,11 +174,14 @@ class RemoteService extends ChangeNotifier {
 
   /// Export: send a picked file to the connected peer (viewer→host or
   /// host→viewers).
-  Future<FileTransfer?> sendFile(String name, Uint8List bytes) =>
-      _files.sendFile(name, bytes);
+  Future<FileTransfer?> sendFile(String name, Uint8List bytes) {
+    DiagLog.log('file', 'send "$name" (${bytes.length} B)');
+    return _files.sendFile(name, bytes);
+  }
 
   /// Import: ask the connected peer to pick a file and send it to us.
   void requestFileFromPeer() {
+    DiagLog.log('file', 'request file from peer');
     _sendFileData(jsonEncode({'k': 'ft', 't': 'request'}));
   }
 
@@ -187,11 +197,19 @@ class RemoteService extends ChangeNotifier {
   // The peer sent an import request — open a picker here and send the choice.
   Future<void> _onFileRequest() async {
     try {
+      DiagLog.log('file', 'peer requested a file — opening picker');
       final f = await openFile();
-      if (f == null) return;
+      if (f == null) {
+        DiagLog.log('file', 'picker cancelled');
+        return;
+      }
       final bytes = await f.readAsBytes();
       await _files.sendFile(f.name, bytes);
-    } catch (_) {}
+    } catch (e) {
+      // Was a silent black hole — surface picker/read failures so a failed
+      // Mac↔Win import can actually be diagnosed from the log.
+      DiagLog.log('file', 'file request failed: $e');
+    }
   }
 
   void clearFinishedTransfers() => _files.clearFinished();
@@ -333,6 +351,16 @@ class RemoteService extends ChangeNotifier {
   // ---- Clipboard sync (shared across roles) ----
   Timer? _clipTimer;
   String? _lastClip;
+  // macOS ONLY: native NSPasteboard.changeCount monitor. Replaces the Dart
+  // content-poll on macOS (the poll wedged after the first sync — see
+  // ClipboardMonitor.swift). Never constructed/started off macOS, so the
+  // Windows/Linux Dart poller path below is byte-for-byte unchanged.
+  late final NativeClipboardMonitor _clipMonitor = NativeClipboardMonitor(
+    onText: _onLocalClipText,
+    onImage: _onLocalClipImage,
+    onFiles: _announceClipFiles,
+  );
+  bool _clipMonitorStarted = false;
   // Clipboard image sync (chunked, since images are large).
   int _lastClipImgHash = 0;
   int _clipTick = 0;
@@ -782,7 +810,22 @@ class RemoteService extends ChangeNotifier {
     } else {
       _viewerPeer?.sendData(event.encode());
     }
+    // A3 diagnostic (post-user-switch "can't click"): if input keeps arriving but
+    // there's no live viewer peer, it's dropped HERE (viewer-side). If the peer is
+    // live but the host still doesn't move, the drop is host-side (the Go worker
+    // logs "SendInput inserted 0 events"). Throttled so the hot mouse path is cheap.
+    final connected = _viewerPeer?.isDataChannelOpen ?? false;
+    if (!connected) {
+      final now = _inputClock.elapsedMilliseconds;
+      if (now - _lastInputDropLogMs > 1000) {
+        _lastInputDropLogMs = now;
+        DiagLog.log('viewer',
+            'input ${event.kind} dropped — no live viewer peer (post-switch?)');
+      }
+    }
   }
+
+  int _lastInputDropLogMs = -10000;
 
   // Keys the host currently believes are pressed (by HID usage). Used to release
   // a modifier whose key-up was swallowed by a focus change.
@@ -855,6 +898,12 @@ class RemoteService extends ChangeNotifier {
   /// Viewer: lock the remote machine (its sign-in screen).
   void lockRemote() =>
       _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': 'lock'}));
+
+  /// Viewer: send a raw host command over the control channel. Used by shortcuts
+  /// that must NOT be injected as synthetic keys — notably Win+L, which Windows
+  /// ignores when injected, so it has to lock via the command path instead.
+  void sendHostCommand(String c) =>
+      _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': c}));
 
   /// Viewer: sign the remote user out (log off).
   void signOutRemote() =>
@@ -1307,7 +1356,14 @@ class RemoteService extends ChangeNotifier {
       final text = m['t'] as String?;
       if (text != null) {
         _lastClip = text; // avoid echoing it straight back
-        await Clipboard.setData(ClipboardData(text: text));
+        // macOS: write through the native monitor so it records the changeCount
+        // and never re-broadcasts our own write (the old wedge). Elsewhere use the
+        // cross-platform Clipboard API exactly as before.
+        if (NativeClipboardMonitor.supported) {
+          await _clipMonitor.writeText(text);
+        } else {
+          await Clipboard.setData(ClipboardData(text: text));
+        }
         if (kRemoteVerboseLog) {
           debugPrint('[clip] received ${text.length} chars -> local clipboard');
         }
@@ -1678,6 +1734,15 @@ class RemoteService extends ChangeNotifier {
   }
 
   void _ensureClipboardSync() {
+    // macOS: change-detection is done natively (NSPasteboard.changeCount); the
+    // Dart content-poll below is never started there. Windows/Linux keep the
+    // poll exactly as before.
+    if (NativeClipboardMonitor.supported) {
+      if (_clipMonitorStarted) return;
+      _clipMonitorStarted = true;
+      _clipMonitor.start();
+      return;
+    }
     if (_clipTimer != null) return;
     // Prime _lastClip so we don't immediately broadcast the existing clipboard.
     Clipboard.getData('text/plain').then((d) => _lastClip = d?.text);
@@ -1693,6 +1758,26 @@ class RemoteService extends ChangeNotifier {
       if (_clipTick.isEven) await _pollClipImage(); // images ~every 1.2s
       if (_clipTick % 3 == 0) await _pollClipFiles(); // files ~every 1.8s
     });
+  }
+
+  // macOS native monitor callbacks (local user copied something). These run only
+  // on macOS; the Windows/Linux broadcast path is via _pollClip* above.
+  void _onLocalClipText(String text) {
+    // Mac→Windows line-ending translation: Windows apps expect CRLF, macOS emits
+    // LF. Convert ONLY when the peer is Windows (idempotent: normalise to LF then
+    // to CRLF). A Mac↔Mac copy stays LF, and NO Windows-side code is touched — the
+    // Go/Windows host receives CRLF exactly as it would from a Windows viewer.
+    var out = text;
+    if (remoteHostOs == 'windows') {
+      out = text.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n');
+    }
+    _lastClip = text;
+    _broadcastClip(out);
+  }
+
+  void _onLocalClipImage(Uint8List bytes) {
+    _lastClipImgHash = _imgHash(bytes);
+    _broadcastClipImage(bytes);
   }
 
   Future<void> _pollClipText() async {
@@ -1766,7 +1851,13 @@ class RemoteService extends ChangeNotifier {
         try {
           final bytes = base64Decode(_clipImgBuf.toString());
           _lastClipImgHash = _imgHash(bytes); // don't echo it straight back
-          Pasteboard.writeImage(bytes);
+          // macOS: write via the native monitor (changeCount echo-suppression);
+          // elsewhere the cross-platform Pasteboard as before.
+          if (NativeClipboardMonitor.supported) {
+            _clipMonitor.writeImage(bytes);
+          } else {
+            Pasteboard.writeImage(bytes);
+          }
         } catch (_) {}
         _clipImgBuf.clear();
         _clipImgNext = 0;
@@ -1809,9 +1900,14 @@ class RemoteService extends ChangeNotifier {
       if (same) return;
     }
     _lastClipFiles = List.of(paths);
-    // ANNOUNCE-ON-COPY (AnyDesk model): send only names + sizes now, keep the
-    // paths locally, and stream the bytes only when the other side actually
-    // pastes (a 'clipfreq' comes back). No bytes cross the wire on copy.
+    await _announceClipFiles(paths);
+  }
+
+  // ANNOUNCE-ON-COPY (AnyDesk model): send only names + sizes now, keep the
+  // paths locally, and stream the bytes only when the other side actually
+  // pastes (a 'clipfreq' comes back). No bytes cross the wire on copy. Reused by
+  // both the Dart poller (Windows/Linux) and the native macOS ClipboardMonitor.
+  Future<void> _announceClipFiles(List<String> paths) async {
     final entries = <Map<String, Object>>[];
     final kept = <String>[];
     for (final p in paths) {
@@ -2019,6 +2115,10 @@ class RemoteService extends ChangeNotifier {
   void _stopClipboardSync() {
     _clipTimer?.cancel();
     _clipTimer = null;
+    if (_clipMonitorStarted) {
+      _clipMonitor.stop();
+      _clipMonitorStarted = false;
+    }
     _stopClipFetchPoller();
     // Fail any paste still blocked in the native layer so Explorer doesn't hang.
     for (final key in _clipRecv.keys.toList()) {

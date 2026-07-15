@@ -33,6 +33,7 @@
 		AA0000010000000000000003 /* PrivacyMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000004 /* PrivacyMode.swift */; };
 		AA0000010000000000000005 /* KeyHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000006 /* KeyHook.swift */; };
 		AA0000010000000000000007 /* SessionWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000008 /* SessionWatcher.swift */; };
+		AA0000010000000000000009 /* ClipboardMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000000A /* ClipboardMonitor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -93,6 +94,7 @@
 		AA0000010000000000000004 /* PrivacyMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyMode.swift; sourceTree = "<group>"; };
 		AA0000010000000000000006 /* KeyHook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyHook.swift; sourceTree = "<group>"; };
 		AA0000010000000000000008 /* SessionWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWatcher.swift; sourceTree = "<group>"; };
+		AA000001000000000000000A /* ClipboardMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardMonitor.swift; sourceTree = "<group>"; };
 		C91F1910120AE03FCABCB746 /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
 		C9A40C2D7D2ED64F6E590A04 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		F441AEE909EEDA7713C2B645 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
@@ -189,6 +191,7 @@
 				AA0000010000000000000004 /* PrivacyMode.swift */,
 				AA0000010000000000000006 /* KeyHook.swift */,
 				AA0000010000000000000008 /* SessionWatcher.swift */,
+				AA000001000000000000000A /* ClipboardMonitor.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -454,6 +457,7 @@
 				AA0000010000000000000003 /* PrivacyMode.swift in Sources */,
 				AA0000010000000000000005 /* KeyHook.swift in Sources */,
 				AA0000010000000000000007 /* SessionWatcher.swift in Sources */,
+				AA0000010000000000000009 /* ClipboardMonitor.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);

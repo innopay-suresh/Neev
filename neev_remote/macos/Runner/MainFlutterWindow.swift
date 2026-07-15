@@ -14,6 +14,7 @@ class MainFlutterWindow: NSWindow {
     PrivacyMode.register(messenger: flutterViewController.engine.binaryMessenger)
     KeyHook.register(messenger: flutterViewController.engine.binaryMessenger)
     SessionWatcher.register(messenger: flutterViewController.engine.binaryMessenger)
+    ClipboardMonitor.register(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }

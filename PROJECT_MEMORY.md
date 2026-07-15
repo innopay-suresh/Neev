@@ -119,6 +119,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
   per-session worker. Sources never interleave on one decoder (a keyframe is
   forced on every source switch), and input is routed to that single owner, so
   two workers can never contend (the login-screen input-break cause).
+- **LD-13 — Cross-platform uses a common OS-agnostic wire format + per-OS
+  implementations + a translation layer; the Windows-to-Windows path is
+  platform-guarded and must never be altered by cross-platform changes.** The
+  wire is OS-neutral (mouse normalized 0..1, keys = USB-HID usages, JSON for
+  clip/ft/cmd). Each OS keeps its own native impl (Windows: `ClipboardWriter` /
+  `ClipAgentBridge` / Go clipboard+input; macOS: `ClipboardMonitor.swift` using
+  NSPasteboard.changeCount + CoreGraphics/Cocoa). Format differences that cross a
+  boundary are translated (text LF↔CRLF, image PNG, file COPY-effect) — never by
+  forcing one OS's format on the other. Every macOS/cross-platform branch sits
+  behind a `TargetPlatform.macOS` guard (`NativeClipboardMonitor.supported`) or a
+  source-OS check, so a Windows↔Windows session takes the exact same code path it
+  did before. Do NOT modify a shared Win↔Win function (input_windows.go,
+  command_windows.go, clipimg_windows.go, ClipboardWriter, the secure-desktop
+  bridge) in a way that changes its Win↔Win behavior.
 
 ---
 
@@ -139,6 +153,28 @@ moves to **Working Features** after it is confirmed working on real hardware.
   with an optional Fit/Fill toggle in the session toolbar (Fill = `Cover`/crop).
   Restored 2026-07-13 (`r28-viewfix`) after the `r27-view` hand-rolled-geometry
   regression; do NOT reintroduce manual video sizing.
+
+## Working Features — per platform pair (status)
+
+Legend: ✅ hardware-confirmed · 🟡 built + local-build-validated, awaiting hardware
+test · ❌ known gap.
+
+- **Win → Win** ✅ (baseline, must never regress): capture, input, user-switch,
+  secure desktop, clipboard text/image/file, file transfer. Unchanged by r53.
+- **Mac → Win** (Mac viewer, Win host): Lock 🟡 (r53 routes Win+L shortcut via
+  command; "Lock device" action already worked); clipboard text 🟡 (r53 native
+  monitor + LF→CRLF), image 🟡, files 🟡; input/click 🟡 baseline but **A3
+  after-switch click NOT pinned** — r53 adds diagnostics, needs HW; file
+  import/export 🟡 (cross-platform + r53 logging).
+- **Win → Mac** (Win viewer, Mac host): clipboard text/image/file repeatable 🟡
+  (r53 native changeCount monitor fixes the "once then stops" wedge + file COPY
+  semantics); file import/export 🟡.
+- **Mac → Mac** 🟡: clipboard via native monitor; unlock/switch capture-recovery
+  (r49); daemon for login-window 🟡 (needs TCC + HW).
+
+All r53 macOS work is platform-guarded (LD-13) so Win→Win is byte-for-byte
+unchanged. The 🟡 items need the user's two-machine (Mac + Windows) test to
+confirm — I cannot run a live two-endpoint session.
 
 ## Known Problems (open)
 
@@ -206,6 +242,40 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-15 — Cross-platform Mac↔Windows: clipboard/Lock/input/file-transfer
+  fixes (r53), platform-guarded so Win↔Win is byte-for-byte unchanged.** Diagnosed
+  each by cross-platform root cause (3 parallel code investigations) before coding.
+  • **B1 (Win→Mac clipboard "works once then stops") + A2 (Mac→Win copy fails):**
+    ROOT CAUSE = macOS change-detection was done by *reading + hashing content*
+    every poll; after writing a received item the next read couldn't be told from a
+    fresh user copy (cheap-hash collisions + write/read round-trips) → wedged. FIX =
+    native `ClipboardMonitor.swift` using **NSPasteboard.changeCount** (records the
+    count OUR writes cause → precise echo-suppression). Dart `clipboard_monitor.dart`
+    + integration in remote_service (`_ensureClipboardSync` starts the native
+    monitor on macOS instead of the Dart poll; receive-writes go through it).
+  • **A2 text:** Mac emits LF, Windows apps want CRLF. FIX = convert LF→CRLF on the
+    Mac VIEWER send side ONLY when `remoteHostOs=='windows'` (idempotent) — so the
+    Go/Windows host receives CRLF exactly as from a Windows viewer; **zero Windows
+    code touched**.
+  • **B2 (Win→Mac file export = files vanish):** `Pasteboard.writeFiles` pasted as
+    a MOVE. FIX = native NSPasteboard file-URL write (COPY semantics) in
+    ClipboardMonitor; macOS receive-writes route to it.
+  • **A1 (Mac→Win Lock):** the "Lock device" action already worked (sends
+    `cmd/lock`); the failing path was the **Win+L shortcut** — Windows IGNORES an
+    injected Win+L (protected hotkey), so it was a no-op from ANY viewer. FIX =
+    `_Shortcut.command` routes Win+L through `sendHostCommand('lock')`. Improves
+    Win→Win too (shortcut was already a no-op there — no working behavior changed).
+  • **A3 (Mac→Win can't click after user-switch):** all 3 investigations found the
+    input pipeline OS-agnostic (normalized 0..1 coords + HID; viewer routes to the
+    LIVE peer after reconnect). Not pinned to Mac-specific code → added a throttled
+    diagnostic (viewer logs "input dropped — no live peer" vs host's existing
+    "SendInput inserted 0 events"). NEEDS the two-machine hardware test to localise.
+  • **A4 (Mac↔Win file transfer):** path is cross-platform (`file_selector` +
+    `FileStore` → ~/Downloads/NeevRemote, `file_selector_macos.framework` ships).
+    De-blackholed the silent `catch(_)` in `_onFileRequest` + added transfer logs.
+  ALL macOS clipboard/file code is behind `NativeClipboardMonitor.supported`
+  (`TargetPlatform.macOS`); Windows/Linux take the identical branch as before.
+  Builds + links locally (Xcode 26.6) + analyzes clean.
 - **2026-07-15 — macOS switch-user/lock-screen daemon: FEASIBILITY PROVEN +
   full buildable scaffolding shipped (r49–r51).** The dev Mac now has the full
   toolchain (Xcode 26.6 + CocoaPods + Go 1.26.3 + brew ffmpeg/x264/libvpx), so

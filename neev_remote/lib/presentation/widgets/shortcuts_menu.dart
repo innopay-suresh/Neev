@@ -3,9 +3,14 @@ import 'package:flutter/material.dart';
 import '../../data/services/remote_service.dart';
 
 class _Shortcut {
-  const _Shortcut(this.label, this.keys);
+  const _Shortcut(this.label, this.keys, {this.command});
   final String label;
   final List<int> keys; // USB HID usage codes
+  // When set, dispatch as a host command instead of synthetic keystrokes. Win+L
+  // MUST use this: Windows silently ignores an injected Win+L (it's a protected
+  // secure hotkey), so "Lock" as keystrokes never worked from ANY viewer — it has
+  // to go over the command channel (the same path the "Lock device" action uses).
+  final String? command;
 }
 
 // HID usages: LGUI 0xE3, LCtrl 0xE0, LShift 0xE1, LAlt 0xE2; R 0x15, E 0x08,
@@ -15,11 +20,20 @@ const List<_Shortcut> _shortcuts = [
   _Shortcut('Win + R  ·  Run', [0xE3, 0x15]),
   _Shortcut('Win + E  ·  File Explorer', [0xE3, 0x08]),
   _Shortcut('Win + D  ·  Show desktop', [0xE3, 0x07]),
-  _Shortcut('Win + L  ·  Lock', [0xE3, 0x0F]),
+  _Shortcut('Win + L  ·  Lock', [0xE3, 0x0F], command: 'lock'),
   _Shortcut('Alt + Tab', [0xE2, 0x2B]),
   _Shortcut('Alt + F4', [0xE2, 0x3D]),
   _Shortcut('Task Manager  ·  Ctrl+Shift+Esc', [0xE0, 0xE1, 0x29]),
 ];
+
+// Send a shortcut as either a host command (Win+L → lock) or synthetic keys.
+void _dispatchShortcut(RemoteService service, _Shortcut s) {
+  if (s.command != null) {
+    service.sendHostCommand(s.command!);
+  } else {
+    service.sendKeyCombo(s.keys);
+  }
+}
 
 /// Actions the viewer can trigger on the remote (AnyDesk-style ⚡ menu). UI
 /// feedback (toasts / confirms) is handled by the caller via [onAction].
@@ -96,7 +110,7 @@ class ActionsMenu extends StatelessWidget {
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
         for (final s in _shortcuts)
           PopupMenuItem<void>(
-            onTap: () => service.sendKeyCombo(s.keys),
+            onTap: () => _dispatchShortcut(service, s),
             child: Text(s.label, style: const TextStyle(fontSize: 13)),
           ),
       ],
@@ -115,24 +129,24 @@ class ShortcutsMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<List<int>>(
+    return PopupMenuButton<_Shortcut>(
       tooltip: 'Send a keyboard shortcut to the remote PC',
       icon: Icon(Icons.bolt_rounded, size: 19, color: color),
       iconSize: 19,
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
       position: PopupMenuPosition.under,
-      onSelected: service.sendKeyCombo,
+      onSelected: (s) => _dispatchShortcut(service, s),
       itemBuilder: (_) => [
-        const PopupMenuItem<List<int>>(
+        const PopupMenuItem<_Shortcut>(
           enabled: false,
           height: 28,
           child: Text('Send to remote',
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
         ),
         for (final s in _shortcuts)
-          PopupMenuItem<List<int>>(
-            value: s.keys,
+          PopupMenuItem<_Shortcut>(
+            value: s,
             child: Text(s.label, style: const TextStyle(fontSize: 13)),
           ),
       ],
