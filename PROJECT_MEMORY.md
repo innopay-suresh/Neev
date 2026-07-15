@@ -159,22 +159,28 @@ moves to **Working Features** after it is confirmed working on real hardware.
 Legend: ✅ hardware-confirmed · 🟡 built + local-build-validated, awaiting hardware
 test · ❌ known gap.
 
-- **Win → Win** ✅ (baseline, must never regress): capture, input, user-switch,
-  secure desktop, clipboard text/image/file, file transfer. Unchanged by r53.
-- **Mac → Win** (Mac viewer, Win host): Lock 🟡 (r53 routes Win+L shortcut via
-  command; "Lock device" action already worked); clipboard text 🟡 (r53 native
-  monitor + LF→CRLF), image 🟡, files 🟡; input/click 🟡 baseline but **A3
-  after-switch click NOT pinned** — r53 adds diagnostics, needs HW; file
-  import/export 🟡 (cross-platform + r53 logging).
-- **Win → Mac** (Win viewer, Mac host): clipboard text/image/file repeatable 🟡
-  (r53 native changeCount monitor fixes the "once then stops" wedge + file COPY
-  semantics); file import/export 🟡.
-- **Mac → Mac** 🟡: clipboard via native monitor; unlock/switch capture-recovery
-  (r49); daemon for login-window 🟡 (needs TCC + HW).
+HARDWARE-TESTED 2026-07-15 (user's "Neev remote Test 1.xlsx", r53 Mac + Jul-14 Win):
+- **Win → Win** ✅ ALL pass (control, clipboard text/image/file, transfer, lock,
+  UAC/secure-desktop). EXCEPT Ctrl+Alt+Del ❌ — pre-existing: the Go TransportMode
+  worker consumes `sas` but never executes it (command_windows.go); NOT a
+  regression. Optional fix: SYSTEM SendSAS in the Go transport.
+- **Mac → Win** ✅ ALL 11 pass: control, multi-line text (LF→CRLF ✅), image both
+  ways repeatable (B1/A2 ✅), clipboard files, lock action, file transfer all
+  types, **click-after-user-switch WORKS** (A3 was never broken for Mac→Win),
+  keyboard capture. (MW-7 "Win+L" is a menu item = lock command; no physical Win+L
+  on a Mac — not a bug.)
+- **Win → Mac** mostly ✅ (control, clipboard text/image/file repeatable — wedge
+  gone; file COPY stays in source = B2 ✅; same-user unlock recovery = r49 ✅).
+  Fixed in **r55**: scroll (InputInjector `.pixel`→`.line`), import (activate host
+  before openFile picker). WM-6 privacy button was just a STALE Windows viewer
+  (Jul-14, predates the remoteHostOs=='macos' gate) — fixed by publishing Win r55.
+  Switch-to-DIFFERENT-user still freezes (needs daemon+TCC — expected).
+- **Mac → Mac** 🟡: not yet tested by user.
 
-All r53 macOS work is platform-guarded (LD-13) so Win→Win is byte-for-byte
-unchanged. The 🟡 items need the user's two-machine (Mac + Windows) test to
-confirm — I cannot run a live two-endpoint session.
+r55 published BOTH macOS + Windows to the portal (first Windows publish since
+Jul-14 — the viewer-side r53 fixes only reach the user once Windows is updated).
+All macOS work is platform-guarded (LD-13); Win→Win byte-for-byte unchanged +
+hardware-confirmed intact.
 
 ## Known Problems (open)
 
