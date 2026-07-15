@@ -17,7 +17,9 @@ class KeyboardHook {
   bool _on = false;
 
   static bool get supported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   Future<void> setCapture(bool on) async {
     if (!supported || on == _on) return;
