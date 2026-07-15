@@ -26,6 +26,7 @@ import 'input_injector.dart';
 import 'keyboard_hook.dart';
 import 'privacy_mode.dart';
 import 'screen_capture_service.dart';
+import 'session_watcher.dart';
 import 'signaling_service.dart';
 import 'system_command.dart';
 import 'uac_bridge.dart';
@@ -115,6 +116,17 @@ class RemoteService extends ChangeNotifier {
   SignalingService? _hostSignaling;
   final ScreenCaptureService _capture = ScreenCaptureService();
   final InputInjector _injector = InputInjector();
+
+  // The monitor currently being streamed (null = primary). Tracked so we can
+  // re-capture the SAME screen after a macOS lock/unlock or user switch.
+  String? _currentSourceId;
+
+  // macOS: re-acquire the capture stream when the session resumes (unlock /
+  // switch-back / wake) — the frozen-video-after-unlock fix. Started lazily
+  // the first time we host.
+  late final SessionWatcher _sessionWatcher =
+      SessionWatcher(onResume: _onSessionResume);
+  bool _sessionWatcherStarted = false;
 
   // Privileged UAC helper bridge (Windows host only; no-op elsewhere). Streams
   // the secure desktop to viewers and injects their Yes/No into consent.exe.
@@ -636,6 +648,11 @@ class RemoteService extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    // Recover the stream after a macOS lock/unlock or fast-user-switch.
+    if (!_sessionWatcherStarted && SessionWatcher.supported) {
+      _sessionWatcherStarted = true;
+      _sessionWatcher.start();
+    }
 
     final peer = WebRTCService();
     peer.onDataMessage = (raw) => _handleData(raw, isHost: true);
@@ -1089,6 +1106,7 @@ class RemoteService extends ChangeNotifier {
   // connected viewer (no renegotiation).
   Future<void> _switchMonitor(String? id) async {
     if (id == null) return;
+    _currentSourceId = id;
     try {
       final stream = await _capture.startCapture(
           sourceId: id, fps: 30, maxWidth: 1920, maxHeight: 1200);
@@ -1100,6 +1118,28 @@ class RemoteService extends ChangeNotifier {
         await peer.replaceVideoTrack(track);
       }
     } catch (_) {}
+  }
+
+  // macOS: on unlock / switch-back / wake, the frozen capture stream must be
+  // re-acquired or the viewer stays stuck on the last pre-lock frame. Re-capture
+  // the SAME monitor and hot-swap the fresh track onto every connected viewer
+  // (no renegotiation) — the same mechanism used for monitor switching.
+  Future<void> _onSessionResume(String reason) async {
+    if (_hostPeers.isEmpty) return; // only matters while hosting
+    DiagLog.log('host', 'session resume ($reason) — re-acquiring capture');
+    try {
+      final stream = await _capture.startCapture(
+          sourceId: _currentSourceId, fps: 30, maxWidth: 1920, maxHeight: 1200);
+      final track = stream?.getVideoTracks().isNotEmpty == true
+          ? stream!.getVideoTracks().first
+          : _capture.videoTrack;
+      if (track == null) return;
+      for (final peer in _hostPeers.values) {
+        await peer.replaceVideoTrack(track);
+      }
+    } catch (e) {
+      DiagLog.log('host', 'session resume re-acquire failed: $e');
+    }
   }
 
   Future<void> _onViewerMessage(SignalingMessage msg) async {
@@ -2083,6 +2123,7 @@ class RemoteService extends ChangeNotifier {
     _statsTimerMaybeStop();
     _stopClipboardSync();
     _uac.dispose();
+    _sessionWatcher.dispose();
     stopHosting();
     disconnectViewer();
     super.dispose();

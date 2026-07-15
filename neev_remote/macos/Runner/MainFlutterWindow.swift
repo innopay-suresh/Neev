@@ -13,6 +13,7 @@ class MainFlutterWindow: NSWindow {
     InputInjector.register(messenger: flutterViewController.engine.binaryMessenger)
     PrivacyMode.register(messenger: flutterViewController.engine.binaryMessenger)
     KeyHook.register(messenger: flutterViewController.engine.binaryMessenger)
+    SessionWatcher.register(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }
