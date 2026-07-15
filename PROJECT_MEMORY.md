@@ -206,6 +206,40 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-15 — macOS switch-user/lock-screen daemon: FEASIBILITY PROVEN +
+  full buildable scaffolding shipped (r49–r51).** The dev Mac now has the full
+  toolchain (Xcode 26.6 + CocoaPods + Go 1.26.3 + brew ffmpeg/x264/libvpx), so
+  macOS is now built + validated LOCALLY, not blind. Key proofs THIS session, all
+  on real hardware: (1) the entire Go TransportMode agent COMPILES, LINKS, RUNS
+  and REGISTERS with the relay on macOS (capture_darwin.go/input_darwin.go were
+  already full impls, not stubs); (2) the transport+worker split + loopback IPC
+  47930 works on macOS end-to-end (worker attaches to transport) — only blocker to
+  live capture is Screen Recording + Accessibility TCC. Shipped:
+  • **r49 Stage 1** — same-user lock/unlock + fast-user-switch video RECOVERY:
+    native `SessionWatcher.swift` (screenIsLocked/Unlocked + NSWorkspace session/
+    wake) → Dart `session_watcher.dart` → RemoteService re-acquires capture and
+    hot-swaps the track on every viewer (fixes the "same user, video frozen after
+    unlock" symptom). No elevated perms. Does NOT capture the login window itself.
+  • **r50 Stage 2 scaffold** — `session/datadir.go` (cross-platform machine-wide
+    dir: ProgramData / **/Library/Application Support/NeevRemote** / /var/lib so
+    root transport + per-session workers share one machine.dat); launchd plists
+    `packaging/mac/com.neev.transport.plist` (root LaunchDaemon --transport) +
+    `com.neev.worker.plist` (LaunchAgent --capture-worker, **LimitLoadToSessionType
+    [Aqua, LoginWindow]** — the LoginWindow instance is what captures the login/
+    lock screen; a plain daemon canNOT — empty frames); `install-daemon.sh`; CI
+    builds neev-agent (darwin/arm64) + build_macos.sh bundles it into
+    Contents/Resources/daemon. macOS CI job GREEN.
+  • **r51 handoff + install UI** — `HostMode` defers hosting to the daemon on
+    macOS when its plist is installed (app stays viewer/control-only, matching
+    Windows TransportMode); `mac_daemon.dart` installs/removes via osascript admin
+    prompt; Settings → Security "Install lock-screen daemon" card.
+  REMAINING (HARDWARE-ONLY, user must do): grant Screen Recording + Accessibility
+  TCC to /Library/Application Support/NeevRemote/neev-agent (no prompt possible at
+  login window), then validate login-window capture across an actual lock / user
+  switch with a second device viewing. Distribution needs Developer-ID signing +
+  notarization (CI is ad-hoc) and possibly the restricted persistent-content-
+  capture entitlement for unattended TCC. See [[flutter-build-env]] for the local
+  build/sign + Go-agent-on-Mac recipes.
 - **2026-07-15 — macOS parity: native privacy (r46) + keyboard capture (r47) —
   pending Mac hardware validation.** Ported two Windows-only features to macOS:
   `PrivacyMode.swift` (black window on every screen, `sharingType=.none` so it's
