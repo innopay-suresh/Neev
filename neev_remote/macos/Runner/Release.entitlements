@@ -2,15 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- A remote-desktop host must control the WHOLE machine: capture the screen,
+	     inject mouse/keyboard into ANY app, and read/write arbitrary files. The
+	     App Sandbox forbids all of that (a sandboxed app cannot even be granted
+	     Accessibility to control other apps), which is why the Mac host crashed /
+	     couldn't click / couldn't transfer files. Non-sandboxed + hardened
+	     runtime, like AnyDesk/TeamViewer. -->
 	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
-	<key>com.apple.security.files.user-selected.read-write</key>
-	<true/>
-	<key>com.apple.security.files.downloads.read-write</key>
+	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 </dict>
 </plist>

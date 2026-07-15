@@ -206,6 +206,21 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Change Log
 
+- **2026-07-15 — GOAL: full cross-platform parity (win↔win, win↔mac, mac↔win,
+  mac↔mac) like AnyDesk. STEP 1: un-sandbox the macOS app (r45-mac-nosandbox).**
+  Root cause of Mac host crashing / "cursor moves but can't click" / import-export
+  broken = the macOS app was **App-Sandboxed** (`com.apple.security.app-sandbox`
+  =true). A sandboxed app cannot inject CGEvents into other apps, cannot be
+  granted Accessibility to control other apps, and can't access arbitrary files —
+  fatal for a remote-desktop host. Fixed: both `Release.entitlements` +
+  `DebugProfile.entitlements` → app-sandbox=false + hardened-runtime entitlements
+  (allow-jit, disable-library-validation, apple-events, network). Bonus: Mac log
+  now at real `~/.neev_remote/app.log` (was sandbox container). User must grant
+  **Screen Recording + Accessibility** (TCC) after reinstall. STILL TODO for
+  parity (all need Mac hardware to validate; I can't run macOS): Mac clipboard
+  files, Mac switch-user/lock-screen (needs a privileged macOS helper like the
+  Windows SYSTEM service — large), Mac stability confirm, privacy on Mac. Mac app
+  is `com.neev.neevRemote`; input via `InputInjector.swift` (CGEvent, solid).
 - **2026-07-14 — FIX: Mac "agent not found" — Mac registered a DASHED id
   (r44-idfix).** Relay logs (deploy-server-1) were definitive: Mac registered
   `id="532-034-441"` (host Admins-MacBook-Pro) while Windows registers plain
