@@ -8,6 +8,11 @@ import FlutterMacOS
 /// (System Settings → Privacy & Security → Accessibility) to post events to
 /// other applications.
 class InputInjector {
+  /// Stamped onto every injected event's userData so privacy mode's input tap
+  /// can tell remote-injected input (let through) from the local user's physical
+  /// input (blocked). Physical events don't carry this value.
+  static let injectedTag: Int64 = 0x4E56494E4A // "NVINJ"
+
   private let source = CGEventSource(stateID: .hidSystemState)
   private var leftDown = false
   private var rightDown = false
@@ -132,6 +137,7 @@ class InputInjector {
       if let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
                          wheelCount: 2, wheel1: Int32(-dy), wheel2: Int32(-dx),
                          wheel3: 0) {
+        e.setIntegerValueField(.eventSourceUserData, value: InputInjector.injectedTag)
         e.post(tap: .cghidEventTap)
       }
     case "key":
@@ -144,6 +150,7 @@ class InputInjector {
          let e = CGEvent(keyboardEventSource: source, virtualKey: vk,
                          keyDown: down) {
         e.flags = modifierFlags
+        e.setIntegerValueField(.eventSourceUserData, value: InputInjector.injectedTag)
         e.post(tap: .cghidEventTap)
       }
     default:
@@ -203,6 +210,7 @@ class InputInjector {
       if let cs = clickState {
         e.setIntegerValueField(.mouseEventClickState, value: cs)
       }
+      e.setIntegerValueField(.eventSourceUserData, value: InputInjector.injectedTag)
       e.post(tap: .cghidEventTap)
     }
   }

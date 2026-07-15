@@ -2572,7 +2572,9 @@ class _SessionToolbar extends ConsumerWidget {
                     onPressed: () =>
                         _showTransmitCredentials(context, ref, service),
                   ),
-                if (win)
+                // Privacy works on Windows AND macOS hosts (both have a native
+                // blank-overlay + input-block).
+                if (win || service.remoteHostOs == 'macos')
                   _ToolButton(
                     icon: Icons.blur_on,
                     label: 'Privacy',
