@@ -240,6 +240,14 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 			t.sendToWorker(ipc.KindFileData, data)
 			return
 		case "control", "cursor":
+			// Ctrl+Alt+Del must fire from a SYSTEM process (session 0) — the worker
+			// (user session) can't, which is why it was a no-op. Intercept it here in
+			// the transport and call SendSAS directly. Other commands still go to the
+			// worker below.
+			if label == "control" && isSASCommand(data) {
+				triggerSAS()
+				return
+			}
 			// Only real mouse/keyboard INPUT ever needs the secure/elevated bridge
 			// (only SYSTEM can inject into Winlogon/elevated windows). Clipboard,
 			// chat, file and command messages are handled by the worker regardless
@@ -353,6 +361,19 @@ func workerOnlyMessage(data []byte) bool {
 		return true
 	}
 	return false
+}
+
+// isSASCommand reports whether a payload is the viewer's Ctrl+Alt+Del request
+// ({"k":"cmd","c":"sas"}) — handled by the transport (SYSTEM) via SendSAS.
+func isSASCommand(data []byte) bool {
+	var m struct {
+		K string `json:"k"`
+		C string `json:"c"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	return m.K == "cmd" && m.C == "sas"
 }
 
 // announceHostOS tells the viewer this host is Windows so it un-hides the

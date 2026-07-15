@@ -349,11 +349,15 @@ func (s *winInputSink) handle(raw []byte) {
 		sendMouseAbsolute(nx, ny, mouseeventfMove|btnFlag, 0)
 		s.lastNx, s.lastNy = nx, ny
 	case "whl":
+		// Wheel events must NOT carry MOUSEEVENTF_ABSOLUTE — the old code routed
+		// them through sendMouseAbsolute, which OR-ed in the absolute flag (+a move
+		// to 0,0), and Windows then dropped the scroll entirely. Send a pure wheel
+		// event at the current cursor position instead.
 		if dy := num(e.DY); dy != 0 {
-			sendMouseAbsolute(0, 0, mouseeventfWheel, uint32(int32(-dy)))
+			sendWheel(int32(-dy), false)
 		}
 		if dx := num(e.DX); dx != 0 {
-			sendMouseAbsolute(0, 0, mouseeventfHWheel, uint32(int32(dx)))
+			sendWheel(int32(dx), true)
 		}
 	case "key":
 		usage := 0
@@ -388,6 +392,31 @@ func sendMouseAbsolute(nx, ny float64, flags, mouseData uint32) {
 	in.Dy = int32(ny * 65535.0)
 	in.MouseData = mouseData
 	in.DwFlags = flags | mouseeventfAbsolute
+	sendInput(unsafe.Pointer(&in), unsafe.Sizeof(in))
+}
+
+// sendWheel injects a vertical or horizontal wheel event at the current cursor
+// position — NO absolute positioning (that flag suppressed scrolling). [delta] is
+// a signed value in wheel units; Windows accumulates sub-notch deltas so a viewer's
+// raw wheel/trackpad delta scrolls smoothly.
+func sendWheel(delta int32, horizontal bool) {
+	var in struct {
+		Type        uint32
+		Pad0        uint32
+		Dx          int32
+		Dy          int32
+		MouseData   uint32
+		DwFlags     uint32
+		Time        uint32
+		DwExtraInfo uintptr
+	}
+	in.Type = inputMouse
+	in.MouseData = uint32(delta)
+	if horizontal {
+		in.DwFlags = mouseeventfHWheel
+	} else {
+		in.DwFlags = mouseeventfWheel
+	}
 	sendInput(unsafe.Pointer(&in), unsafe.Sizeof(in))
 }
 
