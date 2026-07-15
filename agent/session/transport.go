@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +49,14 @@ type Transport struct {
 
 	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
 	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
+
+	// Readiness heartbeat (unix nanos of the last time we refreshed the ready
+	// file). Written to <dataDir>/transport.ready only while a worker is actually
+	// producing frames — i.e. Screen Recording is granted. The macOS Flutter app
+	// checks this file's freshness to decide the daemon is genuinely hosting
+	// before it defers its own hosting; without it an installed-but-permission-
+	// denied daemon strands the app "Offline" with no video anywhere.
+	lastReadyNs atomic.Int64
 
 	// Input-path observability (post-July-9 split diagnostics). Viewer input now
 	// travels transport → worker over IPC instead of being injected in-process;
@@ -561,8 +570,26 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 			t.requestKeyframe()
 			continue
 		}
+		t.markProducing()
 		t.distributeFrame(vp8)
 	}
+}
+
+// markProducing refreshes <dataDir>/transport.ready, at most every 2s. Its
+// presence + freshness proves the daemon is genuinely hosting (a worker is
+// attached AND producing frames, so Screen Recording is granted) — the signal
+// the macOS app uses to decide whether to defer its own hosting.
+func (t *Transport) markProducing() {
+	now := time.Now().UnixNano()
+	last := t.lastReadyNs.Load()
+	if now-last < int64(2*time.Second) {
+		return
+	}
+	if !t.lastReadyNs.CompareAndSwap(last, now) {
+		return
+	}
+	path := filepath.Join(dataDir(), "transport.ready")
+	_ = os.WriteFile(path, []byte(strconv.FormatInt(now/int64(time.Second), 10)), 0o644)
 }
 
 // distributeFrame packetizes a VP8 frame onto every connected viewer's track.

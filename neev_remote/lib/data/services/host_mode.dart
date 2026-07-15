@@ -13,30 +13,42 @@ import 'package:flutter/services.dart';
 class HostMode {
   static const MethodChannel _channel = MethodChannel('neev_remote/hostmode');
 
-  /// macOS: the root transport daemon (com.neev.transport) owns hosting exactly
-  /// when it's installed. Its LaunchDaemon plist existing is a reliable, native-
-  /// code-free signal (the app is un-sandboxed so it can stat /Library). When
-  /// present, the Flutter app must stay viewer/control-only just like Windows
-  /// TransportMode — otherwise it double-registers the machine id and fights the
-  /// daemon across user switches.
+  /// macOS: the root transport daemon (com.neev.transport) owns hosting only when
+  /// it is genuinely HOSTING — installed AND actively producing video. Merely
+  /// installing it is NOT enough: without Screen Recording permission its capture
+  /// worker crash-loops and produces nothing, so deferring to it would strand the
+  /// app "Offline" with no video anywhere (the regression this guard prevents).
+  ///
+  /// The daemon writes a `transport.ready` file every ~2s WHILE producing
+  /// frames; we treat the daemon as owning hosting only if that heartbeat is
+  /// fresh. The app is un-sandboxed so it can stat /Library directly (no native
+  /// code). When the daemon is truly hosting, the Flutter app stays viewer/
+  /// control-only like Windows TransportMode.
   static const String _macTransportPlist =
       '/Library/LaunchDaemons/com.neev.transport.plist';
+  static const String _macReadyFile =
+      '/Library/Application Support/NeevRemote/transport.ready';
+  static const Duration _macReadyMaxAge = Duration(seconds: 15);
 
-  static bool _macDaemonInstalled() {
+  static bool _macDaemonHosting() {
     if (defaultTargetPlatform != TargetPlatform.macOS) return false;
     try {
-      return File(_macTransportPlist).existsSync();
+      if (!File(_macTransportPlist).existsSync()) return false;
+      final ready = File(_macReadyFile);
+      if (!ready.existsSync()) return false;
+      final age = DateTime.now().difference(ready.lastModifiedSync());
+      return age <= _macReadyMaxAge; // fresh ⇒ worker is really producing video
     } catch (_) {
       return false;
     }
   }
 
   /// True if this instance should host. Non-Windows always hosts (unchanged),
-  /// EXCEPT macOS when the transport daemon is installed (it hosts instead).
+  /// EXCEPT macOS when the transport daemon is actively hosting (producing video).
   static Future<bool> shouldAutoHost() async {
     if (kIsWeb) return true;
     if (defaultTargetPlatform == TargetPlatform.macOS) {
-      return !_macDaemonInstalled();
+      return !_macDaemonHosting();
     }
     if (defaultTargetPlatform != TargetPlatform.windows) return true;
     try {
@@ -63,7 +75,7 @@ class HostMode {
   static Future<bool> serviceOwnsHosting() async {
     if (kIsWeb) return false;
     if (defaultTargetPlatform == TargetPlatform.macOS) {
-      return _macDaemonInstalled();
+      return _macDaemonHosting();
     }
     if (defaultTargetPlatform != TargetPlatform.windows) return false;
     try {
