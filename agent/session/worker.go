@@ -43,6 +43,12 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	if port == 0 {
 		port = ipc.DefaultPort
 	}
+	// macOS session-follow: only the session on the physical console may stream.
+	// Block here until we're on-console (no-op off macOS) so a worker spawned into
+	// a backgrounded user's session idles instead of streaming the wrong desktop.
+	if err := waitUntilOnConsole(ctx); err != nil {
+		return err
+	}
 	// Retry the dial: the persistent transport (session 0) may not be accepting
 	// at the instant the service spawns us on a user switch. Without retrying, a
 	// single connection-refused would fatally exit the worker, leaving the
@@ -53,6 +59,29 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	}
 	defer conn.Close()
 	log.Info().Int("port", port).Msg("capture worker connected to transport")
+
+	// Stop streaming the instant this session leaves the physical console (a
+	// fast-user-switch). Cancelling runCtx unwinds the capture loop + helpers; the
+	// worker exits and launchd (KeepAlive) respawns it, which then blocks in
+	// waitUntilOnConsole until this user is back on console. No-op off macOS.
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+	go func() {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-t.C:
+				if !isOnConsole() {
+					log.Info().Msg("worker: session left the console; yielding for respawn")
+					runCancel()
+					return
+				}
+			}
+		}
+	}()
 
 	// A keyframe request from the transport (viewer PLI) sets this; the capture
 	// loop clears it after forcing a keyframe.
@@ -68,7 +97,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	// Text clipboard both ways (viewer↔host) so copy-paste keeps working in
 	// TransportMode where the app no longer hosts. Runs as the logged-in user.
 	clip := newClipSync(conn)
-	go clip.poll(ctx)
+	go clip.poll(runCtx)
 
 	// File transfer both ways: viewer→host lands in Downloads; host→viewer pops a
 	// picker and streams back over the same conn.
@@ -153,8 +182,8 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	framesSinceKey := 0
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-runCtx.Done():
+			return runCtx.Err()
 		case <-readerDone:
 			return nil // transport disconnected
 		case <-ticker.C:
@@ -211,6 +240,25 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 			ipc.EncodeVideoFrame(out.IsKeyframe, out.Data)); err != nil {
 			log.Info().Err(err).Msg("worker: transport disconnected")
 			return err
+		}
+	}
+}
+
+// waitUntilOnConsole blocks until this session owns the physical console (macOS
+// fast-user-switch). No-op off macOS, where isOnConsole is always true.
+func waitUntilOnConsole(ctx context.Context) error {
+	if isOnConsole() {
+		return nil
+	}
+	log.Info().Msg("worker: session not on console yet; waiting")
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			if isOnConsole() {
+				return nil
+			}
 		}
 	}
 }

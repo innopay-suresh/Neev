@@ -134,6 +134,19 @@ moves to **Working Features** after it is confirmed working on real hardware.
   command_windows.go, clipimg_windows.go, ClipboardWriter, the secure-desktop
   bridge) in a way that changes its Win↔Win behavior.
 
+- **LD-14 — On macOS, the daemon must FOLLOW the active console session on user
+  switch and re-point capture/input to the on-console session — viewer always
+  matches the host's physical screen.** macOS fast-user-switch keeps EVERY user's
+  session alive, so multiple per-session capture workers (the `Aqua`+`LoginWindow`
+  LaunchAgent) run at once, each capturing ITS OWN session's framebuffer. Without
+  an on-console check the transport streams whichever worker attached last — often
+  the backgrounded previous user — so viewer and host diverge (D-4). Every worker
+  MUST gate on `CGSessionCopyCurrentDictionary()` → `kCGSessionOnConsoleKey`: block
+  until on-console before attaching, and stop/exit the moment it leaves the console
+  (launchd KeepAlive respawns it to wait again). Exactly ONE on-console producer.
+  This is the macOS analogue of the Windows `WTSQueryUserToken` spawn-into-active-
+  session rule (LD-7) — never regress it into "last worker wins".
+
 ---
 
 ## Working Features (confirmed)
@@ -251,6 +264,28 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-15 — Mac→Mac: daemon follows console session (D-4) + file size cap
+  (MM-2/3) (r59).**
+  • **D-4 (viewer showed the PREVIOUS user after a switch):** ROOT CAUSE = macOS
+    fast-user-switch keeps all sessions alive; each session's LaunchAgent worker
+    captures its OWN framebuffer and attaches to the transport, which streamed the
+    last-attached one (often the backgrounded old user). ZERO on-console detection
+    existed in `agent/`. FIX (LD-14): new `console_darwin.go` (cgo
+    `CGSessionCopyCurrentDictionary` + `kCGSessionOnConsoleKey`) + `console_other.go`
+    stub (always true → Windows/Linux behavior byte-identical). Worker now
+    `waitUntilOnConsole()` before dialing, and a 500ms watcher cancels `runCtx` the
+    moment the session leaves the console, so it stops streaming and launchd
+    respawns it to wait. Exactly one on-console producer.
+  • **MM-2/3 (.dmg/.pkg/.exe fail both ways):** ROOT CAUSE = `maxFile` was a 200 MB
+    in-memory cap — real installers exceed it and were silently rejected on send
+    (`sendFile` returned null) and errored on receive. NOT a type/`public.file-url`
+    bug: the native `ClipboardMonitor` read/writeObjects(NSURL) is type-agnostic.
+    FIX = cap raised to 2 GB (matches the clipboard-file cap). Send already base64s
+    per-slice, so only raw bytes sit in memory. Multi-GB streaming-to-disk deferred
+    (shared web-safe path; not worth the Windows-regression risk now).
+  • **.app bundles** still unsupported (directories are skipped by
+    `_announceClipFiles`) — needs zip-on-send; separate additive piece.
+  • **MM-1 privacy NOT fixed** — see Known Problems: needs runtime facts first.
 - **2026-07-15 — Viewer captures TRACKPAD two-finger scroll (r58).** A mouse WHEEL
   scrolled the host fine, but a trackpad two-finger scroll did nothing. Flutter
   delivers precision-trackpad scroll as PAN-ZOOM events

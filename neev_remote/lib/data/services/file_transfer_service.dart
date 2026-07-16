@@ -86,8 +86,11 @@ class FileTransferManager {
   /// Pause sending while more than this many bytes are queued locally.
   static const int _highWater = 4 * 1024 * 1024;
 
-  /// Phase-1 in-memory size cap (200 MB) to avoid OOM.
-  static const int maxFile = 200 * 1024 * 1024;
+  /// In-memory size cap. Raised to 2 GB (was 200 MB, which silently rejected
+  /// real installers — .dmg/.pkg/.exe — so they "failed both ways"). Matches the
+  /// clipboard-file cap. Chunks are base64'd per-slice on send, so only the raw
+  /// bytes sit in memory; multi-GB streaming-to-disk is a later refinement.
+  static const int maxFile = 2 * 1024 * 1024 * 1024;
 
   final _uuid = const Uuid();
   final List<FileTransfer> transfers = [];
