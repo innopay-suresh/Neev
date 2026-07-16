@@ -144,6 +144,9 @@ moves to **Working Features** after it is confirmed working on real hardware.
 - Discovery shows real machine names (LAN UDP + relay-assisted).
 - File **copy** no longer becomes **move** (Preferred DropEffect = Copy).
 - Clipboard text/image sync; clipboard sync on/off toggle.
+- Viewer captures TRACKPAD two-finger scroll (`PointerPanZoom`) in addition to the
+  mouse wheel (`PointerScroll`), forwarded through the existing scroll pipeline to
+  the existing host injection (r58; mouse-wheel win-win/mac-win already confirmed).
 - SYSTEM helper: secure-desktop capture + send (helper log verified 2026-07-08).
 - TransportMode capture shows the FULL host screen on scaled displays — DPI-aware
   worker (`setProcessDpiAware`, r30). **Hardware-confirmed 2026-07-13** (user: "screen
@@ -248,6 +251,25 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-15 — Viewer captures TRACKPAD two-finger scroll (r58).** A mouse WHEEL
+  scrolled the host fine, but a trackpad two-finger scroll did nothing. Flutter
+  delivers precision-trackpad scroll as PAN-ZOOM events
+  (`PointerPanZoomUpdateEvent.panDelta`), NOT `PointerScrollEvent`, and the viewer's
+  `Listener` only wired `onPointerSignal` → trackpad scroll was dropped before being
+  sent. Fix (viewer-side only, `remote_view_widget.dart`): added
+  `onPointerPanZoom{Start,Update,End}`; the update handler converts `panDelta` into
+  the SAME `InputEvent.wheel` message the mouse wheel sends, through the existing
+  pipeline → existing (UNCHANGED) host injection. Negated to match scrollDelta sign,
+  scaled ×2 (`_kTrackpadScrollScale`, tunable). Purely additive — mouse-wheel path
+  and host injection untouched; no platform branching. Temp `scroll` diag log
+  confirms event type/direction on first HW test.
+- **2026-07-15 — Windows-host scroll + Ctrl+Alt+Del (r57).** Scroll: the Go host's
+  `whl` handler went through `sendMouseAbsolute` (OR-ed MOUSEEVENTF_ABSOLUTE + move
+  to 0,0 onto the wheel → Windows dropped it); new `sendWheel()` sends a pure wheel
+  event at the cursor (mouse + touchpad both scroll). Ctrl+Alt+Del: was a no-op in
+  TransportMode (viewer's `sas` reached the user worker, which can't SAS); now the
+  transport (SYSTEM, session 0) intercepts `{k:cmd,c:sas}` and calls SendSAS(FALSE)
+  after setting SoftwareSASGeneration (`sas_windows.go`, mirrors the helper).
 - **2026-07-15 — Cross-platform Mac↔Windows: clipboard/Lock/input/file-transfer
   fixes (r53), platform-guarded so Win↔Win is byte-for-byte unchanged.** Diagnosed
   each by cross-platform root cause (3 parallel code investigations) before coding.
