@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import '../../core/diag_log.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/input_event.dart';
 
@@ -398,6 +399,29 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     }
   }
 
+  // Trackpad two-finger scroll arrives as PAN-ZOOM events, not PointerScrollEvent,
+  // so it bypassed _onPointerSignal entirely (mouse wheel worked, trackpad did
+  // nothing). Convert the pan delta into the SAME wheel message the mouse wheel
+  // uses and send it down the existing pipeline → existing host injection. Purely
+  // additive: the mouse-wheel path above is untouched.
+  //
+  // Sign: pan delta is the finger translation; scrollDelta has the opposite sign
+  // (fingers up = content down = wheel up), so negate to match. Scaled because
+  // trackpad deltas are small/continuous vs the wheel's discrete steps.
+  static const double _kTrackpadScrollScale = 2.0;
+
+  void _onPanZoomUpdate(PointerPanZoomUpdateEvent e) {
+    final d = e.panDelta;
+    if (d == Offset.zero) return;
+    final dx = -d.dx * _kTrackpadScrollScale;
+    final dy = -d.dy * _kTrackpadScrollScale;
+    // TEMP diagnostic (confirms event type + direction on first hardware test).
+    DiagLog.log('scroll',
+        'trackpad pan dx=${d.dx.toStringAsFixed(1)} dy=${d.dy.toStringAsFixed(1)}'
+        ' -> wheel ${dx.toStringAsFixed(1)},${dy.toStringAsFixed(1)}');
+    _emit(InputEvent.wheel(dx, dy));
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (widget.inputPaused) return KeyEventResult.ignored;
     final usage = event.physicalKey.usbHidUsage;
@@ -459,6 +483,12 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
                 onPointerUp: (e) => _onPointerUp(e.localPosition, size),
                 onPointerCancel: (_) => _onPointerCancel(size),
                 onPointerSignal: _onPointerSignal,
+                // Trackpad two-finger scroll (delivered as pan-zoom, not a
+                // pointer signal). Start/end are wired so the gesture sequence is
+                // captured; update does the scrolling.
+                onPointerPanZoomStart: (_) {},
+                onPointerPanZoomUpdate: _onPanZoomUpdate,
+                onPointerPanZoomEnd: (_) {},
                 child: MouseRegion(
                   // Show the local arrow over the remote video. The Windows
                   // desktop capturer does NOT include the host cursor, so
