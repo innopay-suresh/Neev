@@ -264,6 +264,16 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-17 — Merge all branches → main + CI trigger for testing builds.**
+  All 41 commits consolidated: `claude/blissful-lamarr-93a6a9` (39 commits:
+  macOS daemon, scroll, clipboard, file transfer 2GB, privacy mode, keyboard
+  capture, switch-user, lock-screen, cross-platform Mac↔Win fixes r39–r59) +
+  cherry-pick `1e72648` (password mint + ServiceHost on manual install) +
+  `web/src/lib/api.js` dev port fix. Conflicts resolved (connect_page.dart:
+  took loadMachineCredsForDisplay; neev_helper.cpp: identical logic, kept
+  verbose comments). Push to `origin/main` triggers Flutter CI (flutter.yml)
+  on all platforms (Windows/macOS/Linux/web). Installers will publish to
+  GitHub Releases as rolling prereleases (`ci-windows`, `ci-macos`, `ci-linux`).
 - **2026-07-15 — Mac→Mac: daemon follows console session (D-4) + file size cap
   (MM-2/3) (r59).**
   • **D-4 (viewer showed the PREVIOUS user after a switch):** ROOT CAUSE = macOS
