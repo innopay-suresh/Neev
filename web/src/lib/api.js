@@ -26,7 +26,8 @@ export function getApiBaseUrl() {
   }
 
   if (window.location.port === '3000' || window.location.port === '5173') {
-    return `http://${window.location.hostname}:${DEFAULT_SERVER_PORT}`
+    // Node server on port 3000 serves both static files and API
+    return `http://${window.location.hostname}:${window.location.port}`
   }
 
   return window.location.origin
