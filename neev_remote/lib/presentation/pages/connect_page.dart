@@ -182,6 +182,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
               children: [
                 _TopBar(
                   service: service,
+                  title: _navItems[_section].label,
                   onSettings: () => setState(() => _section = 6),
                 ),
                 Expanded(child: _sectionContent(service)),
@@ -796,6 +797,8 @@ class _HomeDashboard extends StatelessWidget {
               )
             else
               connect,
+            const SizedBox(height: AppSpacing.md),
+            _StatusChips(service: service),
             const SizedBox(height: AppSpacing.xl),
             // Recent sessions as a bento tile grid — this is the dominant
             // surface and is what fills the dead space the old sparse list left.
@@ -1428,14 +1431,16 @@ class _ChatLine extends StatelessWidget {
 /// settings, user chip.
 class _TopBar extends ConsumerWidget {
   final RemoteService service;
+  final String title;
   final VoidCallback onSettings;
-  const _TopBar({required this.service, required this.onSettings});
+  const _TopBar(
+      {required this.service, required this.title, required this.onSettings});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final online = service.hostStatus == HostStatus.online;
     return Container(
-      height: 60,
+      height: 68,
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.border)),
@@ -1443,35 +1448,25 @@ class _TopBar extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       child: Row(
         children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppColors.primary,
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-            ),
-            child: const Icon(Icons.hub_rounded, color: Colors.white, size: 19),
-          ),
-          const SizedBox(width: 10),
-          Text('Neev Remote', style: AppTypography.title),
-          const SizedBox(width: 8),
-          // Build stamp — lets us confirm which version is actually running.
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(
-              color: AppColors.primarySoft,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(AppConstants.buildTag,
-                style: const TextStyle(
-                    fontSize: 10.5,
-                    color: AppColors.primaryDark,
-                    fontWeight: FontWeight.w600)),
+          // Brand now lives in the sidebar, so the top bar carries the page
+          // title + the build stamp (monospace — it's an identifier we read
+          // back when confirming which build is actually running).
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: AppTypography.pageTitle),
+              const SizedBox(height: 1),
+              Text(AppConstants.buildTag,
+                  style: AppTypography.mono
+                      .copyWith(fontSize: 11, color: AppColors.textTertiary)),
+            ],
           ),
           const SizedBox(width: AppSpacing.md),
-          _StatusPill(online: online),
           const Spacer(),
           SizedBox(width: 260, height: 40, child: _TopSearchField()),
+          const SizedBox(width: AppSpacing.sm),
+          _StatusPill(online: online),
           const SizedBox(width: AppSpacing.sm),
           _TopIconButton(
             icon: Icons.notifications_none_rounded,
@@ -1856,9 +1851,8 @@ class _ThisComputerCard extends ConsumerWidget {
           ),
           const SizedBox(height: AppSpacing.lg),
           if (online) ...[
-            _Credential(label: 'ID', value: service.agentId ?? '…', big: true),
-            const SizedBox(height: AppSpacing.sm),
-            _Credential(label: 'Password', value: service.password ?? '…'),
+            // ID + password deliberately NOT repeated here — they live in the
+            // sidebar panel now. This card is share state + controls only.
             if (service.connectedViewers > 0) ...[
               const SizedBox(height: AppSpacing.md),
               Align(
@@ -1921,6 +1915,13 @@ class _ThisComputerCard extends ConsumerWidget {
                 label: Text(busy ? 'Starting…' : 'Start sharing'),
               ),
             ),
+          // Unattended controls show in BOTH states. They used to render only
+          // while sharing, which left this card as a lone button surrounded by
+          // whitespace whenever sharing was off.
+          if (!online) ...[
+            const SizedBox(height: AppSpacing.md),
+            const _UnattendedControls(),
+          ],
           if (service.hostError != null) ...[
             const SizedBox(height: AppSpacing.md),
             _ErrorText(service.hostError!),
@@ -2088,72 +2089,6 @@ class _CardHeader extends StatelessWidget {
   }
 }
 
-class _Credential extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool big;
-  const _Credential(
-      {required this.label, required this.value, this.big = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 10, AppSpacing.sm, 10),
-      decoration: BoxDecoration(
-        color: big ? AppColors.accentSoft : AppColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(
-            color: big ? AppColors.accent.withValues(alpha: 0.45)
-                       : AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(label.toUpperCase(),
-                  style: AppTypography.label
-                      .copyWith(color: AppColors.textTertiary)),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: big ? 26 : 18,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  color: big ? AppColors.accentDark : AppColors.textPrimary,
-                  letterSpacing: big ? 2 : 1,
-                ),
-              ),
-            ],
-          ),
-          const Spacer(),
-          IconButton(
-            icon: const Icon(Icons.content_copy_rounded, size: 18),
-            tooltip: 'Copy $label',
-            style: IconButton.styleFrom(
-              foregroundColor: AppColors.accentDark,
-              backgroundColor: AppColors.surface,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppRadius.sm),
-                side: const BorderSide(color: AppColors.border),
-              ),
-            ),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: value));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                    content: Text('$label copied'),
-                    duration: const Duration(seconds: 1)),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _ErrorText extends StatelessWidget {
   final String message;
@@ -3283,7 +3218,7 @@ class _SessionTiles extends ConsumerWidget {
     if (recents.isEmpty) {
       return _Card(
         padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.xl, vertical: 34),
+            horizontal: AppSpacing.xl, vertical: 22),
         child: Column(children: [
           Icon(Icons.devices_other_rounded,
               size: 26, color: AppColors.textTertiary),
@@ -3309,18 +3244,23 @@ class _SessionTiles extends ConsumerWidget {
                   ? 2
                   : 1;
       const gap = AppSpacing.lg;
-      final tileW = (c.maxWidth - gap * (cols - 1)) / cols;
+      // Bento: the most recent machine gets a WIDER featured tile (1.7fr vs 1fr),
+      // so the grid has a focal point instead of four identical boxes. Only when
+      // there's room for the full row and we're not filtering.
+      final feature = cols >= 3 && recents.length >= cols && query.isEmpty;
+      final units = feature ? (cols - 1) + 1.7 : cols.toDouble();
+      final unit = (c.maxWidth - gap * (cols - 1)) / units;
       return Wrap(
         spacing: gap,
         runSpacing: gap,
         children: [
           for (var i = 0; i < recents.length; i++)
             SizedBox(
-              width: tileW,
+              width: feature && i == 0 ? unit * 1.7 : unit,
               child: _SessionTile(
                 entry: recents[i],
                 seed: i,
-                featured: i == 0 && query.isEmpty,
+                featured: feature && i == 0,
                 onTap: () => onPick(recents[i].id),
               ),
             ),
@@ -3680,6 +3620,119 @@ class _ConnectBar extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Status chip strip. Occupies the band the mockup used for stat tiles, but
+/// every value here is REAL state the app already tracks — device count, share
+/// state, unattended state, relay connectivity. No invented metrics
+/// (see the Data Honesty Rule in DESIGN.md).
+class _StatusChips extends ConsumerWidget {
+  final RemoteService service;
+  const _StatusChips({required this.service});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final recents = ref.watch(recentConnectionsProvider);
+    final settings = ref.watch(settingsProvider);
+    final online = service.hostStatus == HostStatus.online;
+
+    final chips = <Widget>[
+      _StatusChip(
+        icon: Icons.devices_other_rounded,
+        tint: AppColors.primarySoft,
+        fg: AppColors.primaryDark,
+        label: 'Known devices',
+        value: '${recents.length}',
+      ),
+      _StatusChip(
+        icon: Icons.cast_connected_rounded,
+        tint: AppColors.secondarySoft,
+        fg: AppColors.secondary,
+        label: 'Sharing',
+        value: online
+            ? (service.connectedViewers > 0
+                ? '${service.connectedViewers} connected'
+                : 'On')
+            : 'Off',
+      ),
+      _StatusChip(
+        icon: Icons.lock_clock_rounded,
+        tint: AppColors.successSoft,
+        fg: AppColors.success,
+        label: 'Unattended',
+        value: settings.unattendedEnabled ? 'On' : 'Off',
+      ),
+      _StatusChip(
+        icon: Icons.cloud_done_rounded,
+        tint: const Color(0xFFF5EAD2),
+        fg: AppColors.warning,
+        label: 'Relay',
+        value: online ? 'Connected' : 'Offline',
+      ),
+    ];
+
+    return LayoutBuilder(builder: (context, c) {
+      final cols = c.maxWidth > 860 ? 4 : 2;
+      const gap = AppSpacing.md;
+      final w = (c.maxWidth - gap * (cols - 1)) / cols;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [for (final ch in chips) SizedBox(width: w, child: ch)],
+      );
+    });
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final IconData icon;
+  final Color tint;
+  final Color fg;
+  final String label;
+  final String value;
+  const _StatusChip({
+    required this.icon,
+    required this.tint,
+    required this.fg,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Row(children: [
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+              color: tint, borderRadius: BorderRadius.circular(AppRadii.md)),
+          child: Icon(icon, size: 15, color: fg),
+        ),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label.toUpperCase(), style: AppTypography.microLabel),
+                const SizedBox(height: 2),
+                Text(value,
+                    style: AppTypography.sectionTitle.copyWith(fontSize: 15),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ]),
+        ),
+      ]),
     );
   }
 }
