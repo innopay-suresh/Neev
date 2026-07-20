@@ -364,6 +364,32 @@ class RemoteService extends ChangeNotifier {
     onFiles: _announceClipFiles,
   );
   bool _clipMonitorStarted = false;
+
+  // ---- Relay certificate pin (Phase 1: TLS) --------------------------------
+  // The relay runs on a private address, so no public CA can issue for it; we
+  // pin its self-signed cert by SHA-256 instead. Learned on first wss connect
+  // and reused thereafter, so only the very first connection is unpinned.
+  static const String _kRelayPinKey = 'relayCertSha256';
+  String? _relayCertPin;
+
+  Future<String?> _loadRelayPin() async {
+    if (_relayCertPin != null) return _relayCertPin;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _relayCertPin = prefs.getString(_kRelayPinKey);
+    } catch (_) {}
+    return _relayCertPin;
+  }
+
+  Future<void> _saveRelayPin(String sha256) async {
+    _relayCertPin = sha256;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kRelayPinKey, sha256);
+      DiagLog.log('tls', 'stored relay cert pin $sha256');
+    } catch (_) {}
+  }
+
   // Clipboard image sync (chunked, since images are large).
   int _lastClipImgHash = 0;
   int _clipTick = 0;
@@ -483,6 +509,7 @@ class RemoteService extends ChangeNotifier {
         'promptOnConnect=$promptOnConnect unattended=${password != null}');
     notifyListeners();
 
+    await _loadRelayPin();
     final signaling = SignalingService(
       serverUrl: relayUrl,
       onMessage: _onHostMessage,
@@ -497,6 +524,8 @@ class RemoteService extends ChangeNotifier {
           version: AppConstants.appVersion,
         );
       },
+      relayCertPin: _relayCertPin,
+      onPinLearned: _saveRelayPin,
       onDisconnected: () {
         if (_hostStatus != HostStatus.offline) {
           _hostStatus = HostStatus.error;
@@ -761,6 +790,7 @@ class RemoteService extends ChangeNotifier {
         'autoReconnect=$autoReconnect tries=$_reconnectTries');
     notifyListeners();
 
+    await _loadRelayPin();
     final signaling = SignalingService(
       serverUrl: relayUrl,
       onMessage: _onViewerMessage,
@@ -768,6 +798,8 @@ class RemoteService extends ChangeNotifier {
         // The viewer (controller) does not register; it just requests a peer.
         _viewerSignaling?.sendConnect(targetId, password);
       },
+      relayCertPin: _relayCertPin,
+      onPinLearned: _saveRelayPin,
       onDisconnected: () {
         if (_viewerStatus != ViewerStatus.idle) {
           _viewerStatus = ViewerStatus.failed;

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'ws_connect.dart';
 
 /// Signaling message types
 enum SignalingMessageType {
@@ -111,11 +112,20 @@ class SignalingService {
   bool _isConnected = false;
   String? _agentId;
 
+  /// SHA-256 of the relay's certificate, for wss:// pinning. Empty = learn it
+  /// on first connect (see connectSignaling). Ignored for ws:// and on web.
+  final String? relayCertPin;
+
+  /// Called when a pin is learned on first use so it can be persisted.
+  final void Function(String sha256)? onPinLearned;
+
   SignalingService({
     required String serverUrl,
     required this.onMessage,
     required this.onConnected,
     required this.onDisconnected,
+    this.relayCertPin,
+    this.onPinLearned,
   }) : _serverUrl = serverUrl;
 
   bool get isConnected => _isConnected;
@@ -123,7 +133,11 @@ class SignalingService {
 
   Future<void> connect() async {
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(_serverUrl));
+      _channel = await connectSignaling(
+        _serverUrl,
+        pinSha256: relayCertPin,
+        onPinLearned: onPinLearned,
+      );
       _isConnected = true;
       onConnected();
 

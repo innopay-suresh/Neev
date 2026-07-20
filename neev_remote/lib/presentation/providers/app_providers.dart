@@ -129,7 +129,7 @@ class AppSettings {
     // Auto-accept incoming connections by default so a session isn't stuck
     // "Connecting…" waiting for someone to click Accept on the host. Turn on
     // "Ask before allowing connections" in Settings → Security for a prompt.
-    this.askOnConnect = false,
+    this.askOnConnect = true,
     this.soundOnConnect = true,
     this.defaultAllowControl = true,
     this.defaultAllowClipboard = true,
