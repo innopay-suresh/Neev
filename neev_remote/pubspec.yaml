@@ -56,3 +56,18 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # Bundled (NOT fetched at runtime): this app runs on LANs and offline machines,
+  # and the old theme asked for 'Segoe UI Variable Text', which doesn't exist on
+  # macOS — the Mac build had no typographic identity at all. See DESIGN.md.
+  # Variable TTFs; weight axis is driven by fontWeight.
+  fonts:
+    - family: SpaceGrotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk.ttf
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono.ttf

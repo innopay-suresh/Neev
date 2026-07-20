@@ -62,3 +62,4 @@ config.run.yaml
 objdump.txt
 build_server.err
 external_scan_103.txt
+.gstack/
