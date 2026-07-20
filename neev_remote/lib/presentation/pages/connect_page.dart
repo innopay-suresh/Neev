@@ -11,6 +11,7 @@ import '../../core/diag_log.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/discovery_service.dart';
 import '../../data/services/host_mode.dart';
+import '../../data/services/audit_log.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
 import '../widgets/file_transfer_panel.dart';
@@ -3639,10 +3640,22 @@ class _StatusChips extends ConsumerWidget {
     final online = service.hostStatus == HostStatus.online;
 
     final chips = <Widget>[
+      // Real now that Phase 2's audit log exists — counted from recorded
+      // sessions, not invented.
+      FutureBuilder<int>(
+        future: AuditLog.instance.countToday(),
+        builder: (context, snap) => _StatusChip(
+          icon: Icons.today_rounded,
+          tint: AppColors.primarySoft,
+          fg: AppColors.primaryDark,
+          label: 'Sessions today',
+          value: snap.hasData ? '${snap.data}' : '—',
+        ),
+      ),
       _StatusChip(
         icon: Icons.devices_other_rounded,
-        tint: AppColors.primarySoft,
-        fg: AppColors.primaryDark,
+        tint: AppColors.secondarySoft,
+        fg: AppColors.secondary,
         label: 'Known devices',
         value: '${recents.length}',
       ),
@@ -3663,13 +3676,6 @@ class _StatusChips extends ConsumerWidget {
         fg: AppColors.success,
         label: 'Unattended',
         value: settings.unattendedEnabled ? 'On' : 'Off',
-      ),
-      _StatusChip(
-        icon: Icons.cloud_done_rounded,
-        tint: const Color(0xFFF5EAD2),
-        fg: AppColors.warning,
-        label: 'Relay',
-        value: online ? 'Connected' : 'Offline',
       ),
     ];
 

@@ -25,6 +25,7 @@ import 'input_event.dart';
 import 'input_injector.dart';
 import 'keyboard_hook.dart';
 import 'privacy_mode.dart';
+import 'audit_log.dart';
 import 'clipboard_monitor.dart';
 import 'screen_capture_service.dart';
 import 'session_watcher.dart';
@@ -364,6 +365,33 @@ class RemoteService extends ChangeNotifier {
     onFiles: _announceClipFiles,
   );
   bool _clipMonitorStarted = false;
+
+  // ---- Session audit trail (roadmap Phase 2) -------------------------------
+  // Start times per peer; the record is written on session END so one line
+  // holds start, end, duration and outcome.
+  final Map<String, DateTime> _auditHostStart = {};
+  DateTime? _auditViewerStart;
+
+  Future<void> _auditWrite({
+    required String role,
+    required String peerId,
+    required DateTime startedAt,
+    required String consent,
+    required String endReason,
+  }) async {
+    try {
+      await AuditLog.instance.record(
+        role: role,
+        peerId: peerId,
+        deviceId: agentId ?? '',
+        startedAt: startedAt,
+        endedAt: DateTime.now(),
+        consent: consent,
+        endReason: endReason,
+      );
+    } catch (_) {}
+  }
+
 
   // ---- Relay certificate pin (Phase 1: TLS) --------------------------------
   // The relay runs on a private address, so no public CA can issue for it; we
@@ -739,11 +767,22 @@ class RemoteService extends ChangeNotifier {
               RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
         _hostPeers.remove(controllerId)?.close();
+        final st = _auditHostStart.remove(controllerId);
+        if (st != null) {
+          _auditWrite(
+            role: 'host',
+            peerId: controllerId,
+            startedAt: st,
+            consent: promptOnConnect ? 'accepted' : 'unattended',
+            endReason: 'peer_ended',
+          );
+        }
         _disablePrivacyIfNoViewers();
         notifyListeners();
       }
     };
     _hostPeers[controllerId] = peer;
+    _auditHostStart[controllerId] = DateTime.now();
 
     // Use iceTransportPolicy 'all': direct path for same-network peers (e.g.
     // <->Mac), automatic TURN-relay fallback when no direct path exists (e.g.
@@ -908,6 +947,18 @@ class RemoteService extends ChangeNotifier {
     }
     _statsTimerMaybeStop();
     final id = _targetId;
+    // Audit: close out the viewer-side session record.
+    final vst = _auditViewerStart;
+    if (vst != null) {
+      _auditViewerStart = null;
+      _auditWrite(
+        role: 'viewer',
+        peerId: id ?? '',
+        startedAt: vst,
+        consent: 'accepted',
+        endReason: keepAutoReconnect ? 'network_lost' : 'user_ended',
+      );
+    }
     if (id != null) _viewerSignaling?.sendBye(id);
     await _viewerPeer?.close();
     _viewerPeer = null;
@@ -1290,6 +1341,7 @@ class RemoteService extends ChangeNotifier {
     peer.onRemoteStream = (stream) {
       _remoteStream = stream;
       _viewerStatus = ViewerStatus.connected;
+      _auditViewerStart ??= DateTime.now();
       DiagLog.log('viewer', 'connected — remote stream up (session live)');
       // Once a session is actually up, keep it alive across unexpected host
       // drops — most importantly a user switch, where the SYSTEM service kills

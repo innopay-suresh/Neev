@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
+import 'audit_log_page.dart';
 import '../../data/services/mac_daemon.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
@@ -220,6 +221,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   value: settings.soundOnConnect,
                   onChanged: (v) =>
                       ref.read(settingsProvider.notifier).setSoundOnConnect(v),
+                ),
+                const Divider(),
+                // Roadmap Phase 2 — audit trail entry point.
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.receipt_long_rounded, size: 20),
+                  title: Text('Audit log', style: AppTypography.body),
+                  subtitle: Text(
+                      'Every session: who connected, when, for how long',
+                      style: AppTypography.caption),
+                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const AuditLogPage())),
                 ),
                 const Divider(),
                 _buildToggle(
