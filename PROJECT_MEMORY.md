@@ -285,7 +285,24 @@ hardware-confirmed intact.
     (shared web-safe path; not worth the Windows-regression risk now).
   • **.app bundles** still unsupported (directories are skipped by
     `_announceClipFiles`) — needs zip-on-send; separate additive piece.
-  • **MM-1 privacy NOT fixed** — see Known Problems: needs runtime facts first.
+  • **MM-1 privacy — FIXED in r60.** ROOT CAUSE (confirmed by user: daemon
+    installed on both Macs, nothing blanked at all): with the daemon hosting, the
+    viewer's `{k:cmd,c:privacy}` reached the Go worker, whose `handleCommand` was a
+    no-op off Windows (`command_other.go`), so it was dropped — Flutter's working
+    `PrivacyMode.swift` never runs because the app is no longer the host. Second
+    wall: the daemon captures with **CGDisplayStream (full framebuffer)**, which
+    IGNORES `sharingType=.none`, so a black overlay window would have blacked out
+    the VIEWER too. FIX = blank via the display **transfer/gamma table**
+    (`CGSetDisplayTransferByFormula` 0 on every active display): gamma is applied
+    at SCANOUT, so the physical screen goes black while the FRAMEBUFFER — what
+    CGDisplayStream captures — is untouched, so the viewer still sees the real
+    desktop. No ScreenCaptureKit rewrite needed. Local input blocked by a
+    `CGEventTap` on a dedicated pthread+CFRunLoop (the daemon has no GUI run loop);
+    remote input passes because `input_darwin.go` now stamps every injected event
+    with `kCGEventSourceUserData = 0x4E56494E4A` (same tag as the app's
+    InputInjector). New `privacy_darwin.go` + `command_darwin.go`; `privacy_other.go`
+    / `command_other.go` narrowed to `!windows && !darwin`, so Windows and Linux
+    take byte-identical paths.
 - **2026-07-15 — Viewer captures TRACKPAD two-finger scroll (r58).** A mouse WHEEL
   scrolled the host fine, but a trackpad two-finger scroll did nothing. Flutter
   delivers precision-trackpad scroll as PAN-ZOOM events

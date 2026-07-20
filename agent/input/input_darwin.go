@@ -31,10 +31,20 @@ static double getScreenHeight() {
     return CGRectGetHeight(CGDisplayBounds(CGMainDisplayID()));
 }
 
+// Stamp every event WE inject so privacy mode's input tap can tell remote input
+// (let through) from the local user's physical input (blocked). Must match
+// NEEV_INJECTED_TAG in privacy_darwin.go and InputInjector.injectedTag in the app.
+#define NEEV_INJECTED_TAG 0x4E56494E4ALL
+
+static void neev_tag_injected(CGEventRef e) {
+    CGEventSetIntegerValueField(e, kCGEventSourceUserData, NEEV_INJECTED_TAG);
+}
+
 static void injectMouseMove(double x, double y) {
     CGPoint pt = CGPointMake(x, y);
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, pt, kCGMouseButtonLeft);
     if (event) {
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
@@ -53,6 +63,7 @@ static void injectMouseButton(int button, int isDown, double x, double y) {
     CGPoint pt = CGPointMake(x, y);
     CGEventRef event = CGEventCreateMouseEvent(NULL, eventType, pt, (CGMouseButton)button);
     if (event) {
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
@@ -61,6 +72,7 @@ static void injectMouseButton(int button, int isDown, double x, double y) {
 static void injectScroll(int dx, int dy) {
     CGEventRef event = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitLine, 2, dy, dx);
     if (event) {
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
@@ -69,6 +81,7 @@ static void injectScroll(int dx, int dy) {
 static void injectKey(int keyCode, int isDown) {
     CGEventRef event = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)keyCode, isDown ? true : false);
     if (event) {
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
