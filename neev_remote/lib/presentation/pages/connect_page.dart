@@ -172,6 +172,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       body: Row(
         children: [
           _Sidebar(
+            service: service,
             selected: _section,
             online: service.hostStatus == HostStatus.online,
             onSelect: (i) => setState(() => _section = i),
@@ -479,23 +480,55 @@ const List<_NavItem> _navItems = [
 ];
 
 class _Sidebar extends StatelessWidget {
+  final RemoteService service;
   final int selected;
   final bool online;
   final ValueChanged<int> onSelect;
   const _Sidebar(
-      {required this.selected, required this.online, required this.onSelect});
+      {required this.service,
+      required this.selected,
+      required this.online,
+      required this.onSelect});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 76,
+      width: 216,
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(right: BorderSide(color: AppColors.border)),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: AppSpacing.md),
+          // Brand
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+            child: Row(children: [
+              Container(
+                width: 27,
+                height: 27,
+                decoration: BoxDecoration(
+                  color: AppColors.inkBand,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                alignment: Alignment.center,
+                child: Text('N',
+                    style: AppTypography.cardTitle
+                        .copyWith(color: AppColors.primary, fontSize: 12.5)),
+              ),
+              const SizedBox(width: 9),
+              Text('Neev Remote',
+                  style: AppTypography.cardTitle.copyWith(fontSize: 13.5)),
+            ]),
+          ),
+          // This machine's own ID + password. Lives here (not in a big card in
+          // the content area) so the content column is free for the session
+          // grid — that card is what left the large dead space.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(13, 0, 13, 18),
+            child: _SidebarIdPanel(service: service),
+          ),
           for (var i = 0; i < _navItems.length; i++)
             _SidebarItem(
               item: _navItems[i],
@@ -503,28 +536,156 @@ class _Sidebar extends StatelessWidget {
               onTap: () => onSelect(i),
             ),
           const Spacer(),
-          Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: online ? AppColors.success : AppColors.textTertiary,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(online ? 'Online' : 'Offline',
-                    style: AppTypography.label.copyWith(fontSize: 10)),
-              ],
+          Container(
+            margin: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+            padding: const EdgeInsets.only(top: 10),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: AppColors.border)),
             ),
+            child: Row(children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: AppColors.inkBand,
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                alignment: Alignment.center,
+                child: Text('TP',
+                    style: AppTypography.microLabel.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0)),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('This PC',
+                          style: AppTypography.caption
+                              .copyWith(fontSize: 11.5)),
+                      Row(children: [
+                        Container(
+                          width: 5,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: online
+                                ? AppColors.success
+                                : AppColors.textTertiary,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(online ? 'Online' : 'Offline',
+                            style: AppTypography.meta),
+                      ]),
+                    ]),
+              ),
+            ]),
           ),
+          const SizedBox(height: AppSpacing.lg),
         ],
       ),
     );
+  }
+}
+
+/// Own ID + password, grouped + monospace, with copy buttons.
+class _SidebarIdPanel extends StatelessWidget {
+  final RemoteService service;
+  const _SidebarIdPanel({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    final id = service.agentId ?? "—";
+    final pw = service.password ?? "—";
+
+    Widget row(String label, String value, {bool accent = false}) {
+      return Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label.toUpperCase(), style: AppTypography.microLabel),
+            const SizedBox(height: 3),
+            Text(value,
+                style: AppTypography.idLarge.copyWith(
+                    color: accent ? AppColors.primaryDark : null,
+                    fontSize: accent ? 13 : 14),
+                maxLines: 1),
+          ]),
+        ),
+        _CopyChip(value: value),
+      ]);
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Column(children: [
+        row('Your ID', _groupId(id)),
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 7),
+          child: _DashedDivider(),
+        ),
+        row('Password', pw, accent: true),
+      ]),
+    );
+  }
+}
+
+class _CopyChip extends StatelessWidget {
+  final String value;
+  const _CopyChip({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadii.sm),
+      onTap: value == '—'
+          ? null
+          : () {
+              Clipboard.setData(ClipboardData(text: value));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Copied'), duration: Duration(seconds: 1)));
+            },
+      child: Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.circular(AppRadii.sm),
+          border: Border.all(color: AppColors.borderStrong),
+        ),
+        child: const Icon(Icons.copy_rounded,
+            size: 11, color: AppColors.textSecondary),
+      ),
+    );
+  }
+}
+
+class _DashedDivider extends StatelessWidget {
+  const _DashedDivider();
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      const dash = 3.0, gap = 3.0;
+      final n = (c.maxWidth / (dash + gap)).floor();
+      return Row(
+        children: List.generate(
+            n,
+            (_) => Container(
+                  width: dash,
+                  height: 1,
+                  margin: const EdgeInsets.only(right: gap),
+                  color: AppColors.borderStrong,
+                )),
+      );
+    });
   }
 }
 
@@ -558,26 +719,27 @@ class _SidebarItemState extends State<_SidebarItem> {
           waitDuration: const Duration(milliseconds: 500),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            margin: const EdgeInsets.symmetric(horizontal: 13, vertical: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(AppRadius.md),
+              borderRadius: BorderRadius.circular(AppRadii.md),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+            child: Row(
               children: [
-                Icon(widget.item.icon, size: 21, color: fg),
-                const SizedBox(height: 3),
-                Text(
-                  widget.item.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.label.copyWith(
-                      fontSize: 10,
-                      color: fg,
-                      fontWeight:
-                          active ? FontWeight.w600 : FontWeight.w500),
+                Icon(widget.item.icon, size: 16, color: fg),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    widget.item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.caption.copyWith(
+                        fontSize: 13,
+                        color: fg,
+                        fontWeight:
+                            active ? FontWeight.w500 : FontWeight.w400),
+                  ),
                 ),
               ],
             ),
@@ -614,9 +776,6 @@ class _HomeDashboard extends StatelessWidget {
         onConnect: onConnect,
       );
       final thisPc = _ThisComputerCard(service: service);
-      void soon(String f) => ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$f is coming soon'),
-              duration: const Duration(seconds: 2)));
       return SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.xl),
         child: Center(
@@ -625,58 +784,55 @@ class _HomeDashboard extends StatelessWidget {
             child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Connect is a slim BAR, not a tall card. The old card reserved a
+            // full column height for three controls, which is where most of the
+            // empty space came from.
             if (wide)
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 6, child: connect),
-                    const SizedBox(width: AppSpacing.lg),
-                    Expanded(flex: 5, child: thisPc),
-                  ],
-                ),
+              _ConnectBar(
+                service: service,
+                idController: idController,
+                passwordController: passwordController,
+                onConnect: onConnect,
               )
-            else ...[
+            else
               connect,
-              const SizedBox(height: AppSpacing.lg),
-              thisPc,
-            ],
-            const SizedBox(height: AppSpacing.lg),
-            // Feature tiles
-            LayoutBuilder(builder: (context, fc) {
-              final cols = fc.maxWidth > 720 ? 4 : 2;
-              final tiles = [
-                const _FeatureTile(
-                    icon: Icons.lock_clock_rounded,
-                    title: 'Unattended',
-                    subtitle: 'Set a permanent password'),
-                const _FeatureTile(
-                    icon: Icons.shield_outlined,
-                    title: 'Security',
-                    subtitle: 'End-to-end encrypted'),
-                _FeatureTile(
-                    icon: Icons.radar_rounded,
-                    title: 'Discovery',
-                    subtitle: 'Find LAN devices',
-                    onTap: () => soon('Discovery')),
-                _FeatureTile(
-                    icon: Icons.send_rounded,
-                    title: 'Invite',
-                    subtitle: 'Share an invitation',
-                    onTap: () => soon('Invite')),
-              ];
-              return GridView.count(
-                crossAxisCount: cols,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                mainAxisSpacing: AppSpacing.md,
-                crossAxisSpacing: AppSpacing.md,
-                childAspectRatio: 2.6,
-                children: tiles,
+            const SizedBox(height: AppSpacing.xl),
+            // Recent sessions as a bento tile grid — this is the dominant
+            // surface and is what fills the dead space the old sparse list left.
+            const _SectionHead(
+                title: 'Recent sessions',
+                subtitle: "Machines you've accessed recently"),
+            const SizedBox(height: AppSpacing.md),
+            _SessionTiles(onPick: onPick),
+            const SizedBox(height: AppSpacing.xl),
+            // Bento bottom. NOTE: the mockup's activity chart + team presence
+            // are deliberately NOT here — there is no session audit log
+            // (roadmap Phase 2) and no multi-user backend (Phase 4), so those
+            // tiles would be invented numbers. See the Data Honesty Rule in
+            // DESIGN.md. These two cards state only things that are true today.
+            LayoutBuilder(builder: (context, bc) {
+              const security = _SecurityCard();
+              if (bc.maxWidth <= 720) {
+                return Column(children: [
+                  thisPc,
+                  const SizedBox(height: AppSpacing.lg),
+                  security,
+                ]);
+              }
+              // Sharing controls (own ID lives in the sidebar now, so this card
+              // is just share state + unattended) beside the security facts.
+              return IntrinsicHeight(
+                child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 11, child: thisPc),
+                      const SizedBox(width: AppSpacing.lg),
+                      Expanded(flex: 10, child: security),
+                    ]),
               );
             }),
-            const SizedBox(height: AppSpacing.lg),
-            _RecentConnectionsCard(onPick: onPick),
+            const SizedBox(height: AppSpacing.xl),
+            const _UnattendedBand(),
           ],
             ),
           ),
@@ -3062,3 +3218,468 @@ class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
   }
 }
 
+
+// ─── Bento home widgets (DESIGN.md) ────────────────────────────────────────
+// Added in the layout pass. The tile grid replaces the old sparse "Recent
+// connections" list, which left a large dead area at the bottom of the page.
+
+/// "958897411" -> "958 897 411". The device ID is the product's core noun and
+/// gets read aloud over the phone, so it is grouped and set in tabular mono.
+String _groupId(String id) {
+  final digits = id.replaceAll(RegExp(r'[^0-9A-Za-z]'), '');
+  if (digits.length != 9) return id;
+  return '${digits.substring(0, 3)} ${digits.substring(3, 6)} ${digits.substring(6)}';
+}
+
+String _relativeTime(DateTime t) {
+  final d = DateTime.now().difference(t);
+  if (d.inMinutes < 1) return 'just now';
+  if (d.inMinutes < 60) return '${d.inMinutes} min ago';
+  if (d.inHours < 24) return '${d.inHours}h ago';
+  if (d.inDays == 1) return 'yesterday';
+  if (d.inDays < 30) return '${d.inDays} days ago';
+  return '${(d.inDays / 30).floor()} mo ago';
+}
+
+class _SectionHead extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  const _SectionHead({required this.title, required this.subtitle});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: AppTypography.sectionTitle),
+            const SizedBox(height: 2),
+            Text(subtitle, style: AppTypography.meta),
+          ]),
+        ),
+      ],
+    );
+  }
+}
+
+/// Bento grid of recent machines. Featured (most recent) tile is wider.
+class _SessionTiles extends ConsumerWidget {
+  final void Function(String id) onPick;
+  const _SessionTiles({required this.onPick});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final query = ref.watch(_homeSearchProvider).trim().toLowerCase();
+    final all = ref.watch(recentConnectionsProvider);
+    final recents = query.isEmpty
+        ? all
+        : all
+            .where((c) =>
+                c.id.toLowerCase().contains(query) ||
+                c.name.toLowerCase().contains(query))
+            .toList();
+
+    if (recents.isEmpty) {
+      return _Card(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xl, vertical: 34),
+        child: Column(children: [
+          Icon(Icons.devices_other_rounded,
+              size: 26, color: AppColors.textTertiary),
+          const SizedBox(height: AppSpacing.md),
+          Text(query.isEmpty ? 'No sessions yet' : 'No matches',
+              style: AppTypography.cardTitle),
+          const SizedBox(height: 4),
+          Text(
+              query.isEmpty
+                  ? 'Machines you connect to will appear here.'
+                  : 'Try a different ID or name.',
+              style: AppTypography.meta),
+        ]),
+      );
+    }
+
+    return LayoutBuilder(builder: (context, c) {
+      final cols = c.maxWidth > 980
+          ? 4
+          : c.maxWidth > 700
+              ? 3
+              : c.maxWidth > 460
+                  ? 2
+                  : 1;
+      const gap = AppSpacing.lg;
+      final tileW = (c.maxWidth - gap * (cols - 1)) / cols;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [
+          for (var i = 0; i < recents.length; i++)
+            SizedBox(
+              width: tileW,
+              child: _SessionTile(
+                entry: recents[i],
+                seed: i,
+                featured: i == 0 && query.isEmpty,
+                onTap: () => onPick(recents[i].id),
+              ),
+            ),
+        ],
+      );
+    });
+  }
+}
+
+class _SessionTile extends StatefulWidget {
+  final RecentConnection entry;
+  final int seed;
+  final bool featured;
+  final VoidCallback onTap;
+  const _SessionTile({
+    required this.entry,
+    required this.seed,
+    required this.featured,
+    required this.onTap,
+  });
+
+  @override
+  State<_SessionTile> createState() => _SessionTileState();
+}
+
+class _SessionTileState extends State<_SessionTile> {
+  bool _hover = false;
+
+  // Decorative thumbnail tints. NOT data — we don't store a screenshot per
+  // machine yet, so the tile shows a neutral desktop motif rather than
+  // pretending to be a live preview.
+  static const List<List<Color>> _tints = [
+    [Color(0xFF4A6B8A), Color(0xFF1B2838)],
+    [Color(0xFF5C8068), Color(0xFF1F2F26)],
+    [Color(0xFF8A5C74), Color(0xFF301F29)],
+    [Color(0xFF8A7350), Color(0xFF332822)],
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final tint = _tints[widget.seed % _tints.length];
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadii.xl),
+            border: Border.all(
+                color: _hover || widget.featured
+                    ? AppColors.borderStrong
+                    : AppColors.border),
+            boxShadow: _hover || widget.featured
+                ? AppShadows.float
+                : AppShadows.card,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: 118,
+                child: Stack(children: [
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: tint,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // window motif
+                  Positioned(
+                      left: 18,
+                      top: 24,
+                      child: _MiniWindow(w: 62, h: 40)),
+                  Positioned(
+                      left: 52,
+                      top: 46,
+                      child: _MiniWindow(w: 46, h: 32)),
+                  // taskbar strip
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      height: 13,
+                      color: Colors.black.withValues(alpha: 0.28),
+                    ),
+                  ),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(13, 11, 13, 13),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_groupId(widget.entry.id),
+                        style: AppTypography.mono, maxLines: 1),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${widget.entry.name} · ${_relativeTime(widget.entry.lastConnected)}',
+                      style: AppTypography.meta,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniWindow extends StatelessWidget {
+  final double w;
+  final double h;
+  const _MiniWindow({required this.w, required this.h});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: w,
+      height: h,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 8,
+              offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(children: [
+        Container(
+          height: 7,
+          decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.06)),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Only statements that are true of every session today.
+class _SecurityCard extends StatelessWidget {
+  const _SecurityCard();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget line(String t) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(children: [
+            Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                color: AppColors.successSoft,
+                borderRadius: BorderRadius.circular(AppRadii.sm - 1),
+              ),
+              child: const Icon(Icons.check_rounded,
+                  size: 12, color: AppColors.success),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+                child: Text(t,
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.textSecondary))),
+          ]),
+        );
+    return _Card(
+      padding: const EdgeInsets.all(18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Security', style: AppTypography.cardTitle),
+        const SizedBox(height: 2),
+        Text('How every session is protected', style: AppTypography.meta),
+        const SizedBox(height: 11),
+        line('End-to-end encrypted between the two machines'),
+        line('The relay routes traffic and cannot read your session'),
+        line('Session password regenerates each time you share'),
+      ]),
+    );
+  }
+}
+
+/// Dark band. Points at a real feature (unattended access), no invented stats.
+class _UnattendedBand extends StatelessWidget {
+  const _UnattendedBand();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(26, 24, 26, 24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [AppColors.inkBand, AppColors.inkBandAlt],
+        ),
+        borderRadius: BorderRadius.circular(AppRadii.xl),
+        boxShadow: AppShadows.float,
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('UNATTENDED ACCESS',
+                style: AppTypography.microLabel.copyWith(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1)),
+            const SizedBox(height: 7),
+            Text('Set a permanent password on this machine',
+                style: AppTypography.sectionTitle
+                    .copyWith(color: const Color(0xFFF3EFE5), fontSize: 17)),
+            const SizedBox(height: 5),
+            Text(
+                'Reconnect any time without waiting for someone to share a new code. Survives restarts.',
+                style: AppTypography.caption
+                    .copyWith(color: const Color(0x9EF3EFE5))),
+          ]),
+        ),
+        const SizedBox(width: 20),
+        Icon(Icons.lock_clock_rounded,
+            size: 40, color: AppColors.primary.withValues(alpha: 0.85)),
+      ]),
+    );
+  }
+}
+
+/// Single-row connect control: icon + ID + password + Connect.
+/// Replaces the tall card whose reserved column height created the dead space.
+class _ConnectBar extends StatelessWidget {
+  final RemoteService service;
+  final TextEditingController idController;
+  final TextEditingController passwordController;
+  final VoidCallback onConnect;
+  const _ConnectBar({
+    required this.service,
+    required this.idController,
+    required this.passwordController,
+    required this.onConnect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final connecting = service.viewerStatus == ViewerStatus.connecting;
+    final failed = service.viewerStatus == ViewerStatus.failed;
+
+    InputDecoration deco(String hint, IconData icon) => InputDecoration(
+          hintText: hint,
+          prefixIcon: Icon(icon, size: 17, color: AppColors.textTertiary),
+          filled: true,
+          fillColor: AppColors.background,
+          isDense: true,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            borderSide: const BorderSide(color: AppColors.borderStrong),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            borderSide: const BorderSide(color: AppColors.borderStrong),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            borderSide: const BorderSide(color: AppColors.primary, width: 1.4),
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.xl),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.float,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: AppColors.primarySoft,
+                borderRadius: BorderRadius.circular(AppRadii.md),
+              ),
+              child: const Icon(Icons.cast_connected_rounded,
+                  size: 17, color: AppColors.primaryDark),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 3,
+              child: TextField(
+                controller: idController,
+                decoration: deco('Enter Remote Desk ID', Icons.link_rounded),
+                style: AppTypography.mono.copyWith(fontSize: 13.5),
+                onSubmitted: (_) => onConnect(),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: 2,
+              child: TextField(
+                controller: passwordController,
+                obscureText: true,
+                decoration: deco('Password', Icons.lock_outline_rounded),
+                style: AppTypography.mono.copyWith(fontSize: 13.5),
+                onSubmitted: (_) => onConnect(),
+              ),
+            ),
+            const SizedBox(width: 10),
+            SizedBox(
+              height: 44,
+              child: FilledButton(
+                onPressed: connecting ? null : onConnect,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 22),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.md)),
+                ),
+                child: connecting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text('Connect',
+                            style: AppTypography.bodyStrong
+                                .copyWith(color: Colors.white, fontSize: 13.5)),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.arrow_forward_rounded, size: 15),
+                      ]),
+              ),
+            ),
+          ]),
+          if (failed && service.viewerError != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 48, top: 8),
+              child: Text(service.viewerError!,
+                  style: AppTypography.meta.copyWith(color: AppColors.error)),
+            ),
+        ],
+      ),
+    );
+  }
+}
