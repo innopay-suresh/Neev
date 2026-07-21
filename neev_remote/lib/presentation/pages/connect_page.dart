@@ -39,6 +39,8 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   @override
   void initState() {
     super.initState();
+    // Load this machine's saved alias so it's re-asserted on register (Phase 3).
+    ref.read(remoteServiceProvider).loadDeviceAlias();
     // On desktop, start hosting automatically when the app opens so the
     // machine is immediately reachable (service-like). The browser web build
     // stays manual (each visitor shouldn't auto-share their screen).

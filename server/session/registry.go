@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,7 +21,11 @@ const (
 	sessionIndex     = "session:index"
 	agentPrefix      = "agent:"
 	revokedCertIndex = "agent:client_cert:revoked"
+	aliasPrefix      = "alias:" // alias:<lower-name> -> agent id (Phase 3)
 )
+
+// aliasPattern: 3-32 chars, letters/digits/hyphen, must start with a letter.
+var aliasPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{2,31}$`)
 
 // Status represents the current state of a session/agent registration.
 type Status string
@@ -58,6 +64,7 @@ type AgentInfo struct {
 	LastSeen              time.Time `json:"last_seen"`
 	PublicAddr            string    `json:"public_addr"`
 	SessionCount          int       `json:"session_count"`
+	Alias                 string    `json:"alias,omitempty"` // human-readable name (Phase 3)
 }
 
 // SessionInfo is stored in Redis for every remote control session.
@@ -224,6 +231,88 @@ func (r *Registry) IsClientCertRevoked(ctx context.Context, fingerprint string) 
 // Unregister removes an agent from the registry.
 func (r *Registry) Unregister(ctx context.Context, agentID string) error {
 	return r.rdb.Del(ctx, agentPrefix+agentID).Err()
+}
+
+// ---- Custom alias / namespace (roadmap Phase 3) --------------------------
+
+// ErrAliasTaken / ErrAliasInvalid surface a precise reason to the client.
+var (
+	ErrAliasInvalid = errors.New("alias must be 3-32 chars: a letter, then letters, digits or hyphens")
+	ErrAliasTaken   = errors.New("alias is already in use")
+)
+
+// NormalizeAlias lower-cases and trims; returns ErrAliasInvalid if malformed.
+func NormalizeAlias(alias string) (string, error) {
+	a := strings.ToLower(strings.TrimSpace(alias))
+	if !aliasPattern.MatchString(a) {
+		return "", ErrAliasInvalid
+	}
+	return a, nil
+}
+
+// SetAlias binds [alias] to [agentID], enforcing global uniqueness. Frees the
+// agent's previous alias. The alias key mirrors the agent TTL so a long-gone
+// agent doesn't hold a name forever; Heartbeat/Register refresh both.
+func (r *Registry) SetAlias(ctx context.Context, agentID, alias string) error {
+	a, err := NormalizeAlias(alias)
+	if err != nil {
+		return err
+	}
+	info, err := r.Get(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	// Claim atomically: SET NX. If it exists and points elsewhere, it's taken.
+	key := aliasPrefix + a
+	ok, err := r.rdb.SetNX(ctx, key, agentID, sessionTTL).Result()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		owner, _ := r.rdb.Get(ctx, key).Result()
+		if owner != agentID {
+			return ErrAliasTaken
+		}
+		// Already ours — just refresh the TTL.
+		_ = r.rdb.Expire(ctx, key, sessionTTL).Err()
+	}
+	// Release the old alias if it changed.
+	if info.Alias != "" && info.Alias != a {
+		_ = r.rdb.Del(ctx, aliasPrefix+info.Alias).Err()
+	}
+	info.Alias = a
+	return r.Register(ctx, info)
+}
+
+// ClearAlias removes the agent's alias.
+func (r *Registry) ClearAlias(ctx context.Context, agentID string) error {
+	info, err := r.Get(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	if info.Alias != "" {
+		_ = r.rdb.Del(ctx, aliasPrefix+info.Alias).Err()
+	}
+	info.Alias = ""
+	return r.Register(ctx, info)
+}
+
+// ResolveAlias returns the agent ID an alias points to, or "" if none. Refreshes
+// the alias TTL on a hit so an actively-dialed name doesn't expire under load.
+func (r *Registry) ResolveAlias(ctx context.Context, alias string) (string, error) {
+	a, err := NormalizeAlias(alias)
+	if err != nil {
+		return "", err
+	}
+	id, err := r.rdb.Get(ctx, aliasPrefix+a).Result()
+	if err == redis.Nil {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	_ = r.rdb.Expire(ctx, aliasPrefix+a, sessionTTL).Err()
+	return id, nil
 }
 
 // List returns all registered agents.

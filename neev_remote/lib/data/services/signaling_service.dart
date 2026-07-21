@@ -14,6 +14,10 @@ enum SignalingMessageType {
   error,
   discover,
   peers,
+  setAlias,
+  aliasResult,
+  resolveAlias,
+  resolveResult,
 }
 
 /// Signaling message
@@ -97,6 +101,14 @@ class SignalingMessage {
         return 'discover';
       case SignalingMessageType.peers:
         return 'peers';
+      case SignalingMessageType.setAlias:
+        return 'set_alias';
+      case SignalingMessageType.aliasResult:
+        return 'alias_result';
+      case SignalingMessageType.resolveAlias:
+        return 'resolve_alias';
+      case SignalingMessageType.resolveResult:
+        return 'resolve_result';
     }
   }
 }
@@ -237,6 +249,24 @@ class SignalingService {
     send(SignalingMessage(
       type: SignalingMessageType.bye,
       to: to,
+    ));
+  }
+
+  /// Phase 3: claim (or, with an empty string, clear) a human-readable alias.
+  /// The server replies with an `alias_result` message.
+  void setAlias(String alias) {
+    send(SignalingMessage(
+      type: SignalingMessageType.setAlias,
+      payload: {'alias': alias},
+    ));
+  }
+
+  /// Phase 3: ask the relay what agent ID an alias points to. The server replies
+  /// with a `resolve_result` message (empty agent_id = not found).
+  void resolveAlias(String alias) {
+    send(SignalingMessage(
+      type: SignalingMessageType.resolveAlias,
+      payload: {'alias': alias},
     ));
   }
 

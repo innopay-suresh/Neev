@@ -236,6 +236,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       builder: (_) => const AuditLogPage())),
                 ),
                 const Divider(),
+                // Roadmap Phase 3 — custom alias.
+                const _AliasField(),
+                const Divider(),
                 _buildToggle(
                   label: 'Lock this device on session end',
                   subtitle: 'Lock the screen when the last viewer disconnects',
@@ -533,6 +536,70 @@ class _RelayUrlFieldState extends ConsumerState<_RelayUrlField> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Phase 3: set a human-readable alias for this machine. Others can then dial
+/// the alias instead of the numeric ID.
+class _AliasField extends ConsumerStatefulWidget {
+  const _AliasField();
+  @override
+  ConsumerState<_AliasField> createState() => _AliasFieldState();
+}
+
+class _AliasFieldState extends ConsumerState<_AliasField> {
+  late final TextEditingController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = TextEditingController(text: ref.read(remoteServiceProvider).deviceAlias);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = ref.watch(remoteServiceProvider);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Custom alias', style: AppTypography.body),
+        Text('Let people reach this machine by a name instead of its ID.',
+            style: AppTypography.caption),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _c,
+              decoration: InputDecoration(
+                hintText: 'e.g. reception-pc',
+                isDense: true,
+                errorText: service.aliasError,
+                prefixIcon: const Icon(Icons.alternate_email_rounded, size: 18),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton(
+            onPressed: () => ref
+                .read(remoteServiceProvider)
+                .setDeviceAlias(_c.text.trim().toLowerCase()),
+            child: const Text('Save'),
+          ),
+        ]),
+        if (service.deviceAlias.isNotEmpty && service.aliasError == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text('Reachable as "${service.deviceAlias}"',
+                style: AppTypography.caption.copyWith(color: AppColors.success)),
+          ),
+      ]),
     );
   }
 }

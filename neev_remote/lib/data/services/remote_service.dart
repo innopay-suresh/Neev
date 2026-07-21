@@ -393,6 +393,38 @@ class RemoteService extends ChangeNotifier {
   }
 
 
+  // ---- Custom alias / namespace (roadmap Phase 3) --------------------------
+  static const String _kAliasKey = 'deviceAlias';
+  String _deviceAlias = '';
+  String? _aliasError;
+
+  /// This machine's human-readable alias (empty = none).
+  String get deviceAlias => _deviceAlias;
+
+  /// Last alias-set failure reason (null = ok / not attempted).
+  String? get aliasError => _aliasError;
+
+  Future<void> loadDeviceAlias() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _deviceAlias = prefs.getString(_kAliasKey) ?? '';
+    } catch (_) {}
+  }
+
+  /// Claim (or clear, with '') a human-readable alias for this machine. Persists
+  /// locally and, if currently hosting, tells the relay immediately; otherwise
+  /// it is asserted on the next register.
+  Future<void> setDeviceAlias(String alias) async {
+    _deviceAlias = alias.trim();
+    _aliasError = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kAliasKey, _deviceAlias);
+    } catch (_) {}
+    _hostSignaling?.setAlias(_deviceAlias);
+    notifyListeners();
+  }
+
   // ---- Relay certificate pin (Phase 1: TLS) --------------------------------
   // The relay runs on a private address, so no public CA can issue for it; we
   // pin its self-signed cert by SHA-256 instead. Learned on first wss connect
@@ -621,6 +653,19 @@ class RemoteService extends ChangeNotifier {
         _hostStatus = HostStatus.online;
         DiagLog.log('host', 'registered ok agentId=$_agentId — reachable');
         _startServerDiscovery();
+        // Re-assert our alias each time we (re)register, so a restart or a
+        // relay failover keeps the name bound to this machine (Phase 3).
+        if (_deviceAlias.isNotEmpty) {
+          _hostSignaling?.setAlias(_deviceAlias);
+        }
+        notifyListeners();
+        break;
+      case SignalingMessageType.aliasResult:
+        final ok = msg.payload?['ok'] == true;
+        _aliasError = ok ? null : (msg.payload?['error'] as String?);
+        if (ok) _deviceAlias = (msg.payload?['alias'] as String?) ?? _deviceAlias;
+        DiagLog.log('host',
+            ok ? 'alias set: $_deviceAlias' : 'alias rejected: $_aliasError');
         notifyListeners();
         break;
       case SignalingMessageType.peers:
@@ -804,11 +849,60 @@ class RemoteService extends ChangeNotifier {
   // VIEWER
   // =========================================================================
 
+  /// Phase 3: resolve an alias to a numeric ID over a short-lived signaling
+  /// connection. Returns null on not-found / error / timeout. Reuses the relay
+  /// cert pin so it's TLS-safe when the relay is on wss://.
+  Future<String?> resolveAliasToId(String relayUrl, String alias) async {
+    await _loadRelayPin();
+    final done = Completer<String?>();
+    SignalingService? sig;
+    sig = SignalingService(
+      serverUrl: relayUrl,
+      relayCertPin: _relayCertPin,
+      onPinLearned: _saveRelayPin,
+      onConnected: () => sig?.resolveAlias(alias),
+      onDisconnected: () {
+        if (!done.isCompleted) done.complete(null);
+      },
+      onMessage: (m) {
+        if (m.type == SignalingMessageType.resolveResult) {
+          final id = m.payload?['agent_id'] as String?;
+          if (!done.isCompleted) done.complete(id);
+        }
+      },
+    );
+    try {
+      await sig.connect();
+    } catch (_) {
+      if (!done.isCompleted) done.complete(null);
+    }
+    final result = await done.future.timeout(const Duration(seconds: 6),
+        onTimeout: () => null);
+    await sig.disconnect();
+    return result;
+  }
+
   Future<void> connectToHost({
     required String relayUrl,
     required String targetId,
     required String password,
   }) async {
+    // Phase 3: dial by human-readable alias. A numeric ID (once grouping is
+    // stripped) is all digits; anything with a letter is treated as an alias and
+    // resolved to its numeric ID first. Resolve BEFORE stripping so hyphens in
+    // an alias ("reception-pc") survive.
+    final raw = targetId.trim();
+    if (RegExp(r'[a-zA-Z]').hasMatch(raw)) {
+      final resolved = await resolveAliasToId(relayUrl, raw);
+      if (resolved == null || resolved.isEmpty) {
+        _viewerStatus = ViewerStatus.failed;
+        _viewerError = 'No device is using the alias "$raw".';
+        notifyListeners();
+        return;
+      }
+      DiagLog.log('viewer', 'alias "$raw" -> $resolved');
+      targetId = resolved;
+    }
     // The relay matches IDs exactly, so strip any grouping the user typed or
     // pasted ("532-034-441" / "532 034 441" → "532034441"). A legacy Mac host may
     // still be registered dashed; entering the dashes also works, but normalizing

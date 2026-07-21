@@ -41,7 +41,32 @@ const (
 	MsgPeers      MessageType = "peers"       // response to discover: same-network hosts
 	MsgError      MessageType = "error"
 	MsgBye        MessageType = "bye" // session ended
+
+	// Custom alias / namespace (roadmap Phase 3)
+	MsgSetAlias      MessageType = "set_alias"      // agent claims a human-readable name
+	MsgResolveAlias  MessageType = "resolve_alias"  // viewer asks: what ID is this alias?
+	MsgAliasResult   MessageType = "alias_result"   // server → agent: set_alias outcome
+	MsgResolveResult MessageType = "resolve_result" // server → viewer: resolved ID (or empty)
 )
+
+// AliasPayload carries an alias for set/resolve requests.
+type AliasPayload struct {
+	Alias string `json:"alias"`
+}
+
+// AliasResultPayload reports a set_alias outcome.
+type AliasResultPayload struct {
+	Alias string `json:"alias"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// ResolveResultPayload returns the ID an alias points to ("" = not found).
+type ResolveResultPayload struct {
+	Alias   string `json:"alias"`
+	AgentID string `json:"agent_id"`
+	Error   string `json:"error,omitempty"`
+}
 
 // Message is the universal signaling envelope.
 type Message struct {
@@ -282,6 +307,10 @@ func (h *Hub) HandleWS(c *websocket.Conn) {
 			h.handleDiscover(cli)
 		case MsgOffer, MsgAnswer, MsgCandidate:
 			h.handleRelay(ctx, cli, msg)
+		case MsgSetAlias:
+			h.handleSetAlias(ctx, cli, msg)
+		case MsgResolveAlias:
+			h.handleResolveAlias(ctx, cli, msg)
 		case MsgBye:
 			cli.saidBye = true
 			return
@@ -454,6 +483,56 @@ func (h *Hub) handleHeartbeat(ctx context.Context, cli *client) {
 	if cli.agentID != "" && cli.role == "agent" {
 		_ = h.registry.Heartbeat(ctx, cli.agentID)
 	}
+}
+
+// handleSetAlias lets a registered agent claim a human-readable name (Phase 3).
+func (h *Hub) handleSetAlias(ctx context.Context, cli *client, msg Message) {
+	if cli.agentID == "" {
+		_ = cli.send(errMsg("register before setting an alias"))
+		return
+	}
+	var p AliasPayload
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		_ = cli.send(errMsg("invalid set_alias payload"))
+		return
+	}
+	res := AliasResultPayload{}
+	if strings.TrimSpace(p.Alias) == "" {
+		// Empty alias clears it.
+		if err := h.registry.ClearAlias(ctx, cli.agentID); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+		}
+	} else if err := h.registry.SetAlias(ctx, cli.agentID, p.Alias); err != nil {
+		res.Alias = p.Alias
+		res.Error = err.Error()
+	} else {
+		norm, _ := session.NormalizeAlias(p.Alias)
+		res.Alias = norm
+		res.OK = true
+	}
+	body, _ := json.Marshal(res)
+	_ = cli.send(Message{Type: MsgAliasResult, Payload: body})
+}
+
+// handleResolveAlias answers "what agent ID does this alias point to?" (Phase 3).
+// Anyone may resolve — an alias is a public dialing name, like DNS.
+func (h *Hub) handleResolveAlias(ctx context.Context, cli *client, msg Message) {
+	var p AliasPayload
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		_ = cli.send(errMsg("invalid resolve_alias payload"))
+		return
+	}
+	res := ResolveResultPayload{Alias: p.Alias}
+	id, err := h.registry.ResolveAlias(ctx, p.Alias)
+	if err != nil {
+		res.Error = err.Error()
+	} else {
+		res.AgentID = id // "" when not found
+	}
+	body, _ := json.Marshal(res)
+	_ = cli.send(Message{Type: MsgResolveResult, Payload: body})
 }
 
 func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
