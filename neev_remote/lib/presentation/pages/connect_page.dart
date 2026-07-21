@@ -177,12 +177,13 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       );
     }
 
+    final onHome = _section == 0;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Row(
         children: [
-          _Sidebar(
-            service: service,
+          CommandNavRail(
+            items: [for (final n in _navItems) NavRailItem(n.icon, n.label)],
             selected: _section,
             online: service.hostStatus == HostStatus.online,
             onSelect: (i) => setState(() => _section = i),
@@ -199,6 +200,9 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
               ],
             ),
           ),
+          // Live activity panel — Home only (this is where you share your ID and
+          // watch incoming connections/transfers).
+          if (onHome) CommandActivityPanel(service: service),
         ],
       ),
     );

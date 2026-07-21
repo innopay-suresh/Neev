@@ -9,6 +9,277 @@ import '../../data/services/file_transfer_service.dart' show FileStatus;
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
 
+/// One entry in the compact nav rail.
+class NavRailItem {
+  final IconData icon;
+  final String label;
+  const NavRailItem(this.icon, this.label);
+}
+
+/// Compact expandable navigation rail (88 → 240px on hover) — the left edge of
+/// the Command Center shell. Icons always; labels + brand + device name fade in
+/// when expanded. Active item: soft-orange fill + a coral indicator on the left.
+class CommandNavRail extends StatefulWidget {
+  final List<NavRailItem> items;
+  final int selected;
+  final bool online;
+  final ValueChanged<int> onSelect;
+  const CommandNavRail({
+    super.key,
+    required this.items,
+    required this.selected,
+    required this.online,
+    required this.onSelect,
+  });
+
+  @override
+  State<CommandNavRail> createState() => _CommandNavRailState();
+}
+
+class _CommandNavRailState extends State<CommandNavRail> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _open = true),
+      onExit: (_) => setState(() => _open = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        width: _open ? 240 : 88,
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: const Border(right: BorderSide(color: AppColors.border)),
+          boxShadow: _open
+              ? [
+                  BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 40,
+                      offset: const Offset(8, 0)),
+                ]
+              : null,
+        ),
+        clipBehavior: Clip.hardEdge,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // logo
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 20, 20, 18),
+              child: Row(children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [AppColors.primary, AppColors.primaryDark],
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                          color: AppColors.primary.withValues(alpha: 0.4),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4)),
+                    ],
+                  ),
+                  alignment: Alignment.center,
+                  child: const Text('N',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16)),
+                ),
+                if (_open) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Neev Remote',
+                            maxLines: 1,
+                            overflow: TextOverflow.clip,
+                            style: AppTypography.cardTitle.copyWith(fontSize: 15)),
+                        Text('COMMAND CENTER',
+                            style: AppTypography.microLabel
+                                .copyWith(fontSize: 9, letterSpacing: 0.8)),
+                      ],
+                    ),
+                  ),
+                ],
+              ]),
+            ),
+            // nav
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  for (var i = 0; i < widget.items.length; i++)
+                    _RailItem(
+                      item: widget.items[i],
+                      active: i == widget.selected,
+                      open: _open,
+                      onTap: () => widget.onSelect(i),
+                    ),
+                ],
+              ),
+            ),
+            // bottom device
+            Container(
+              margin: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(AppRadii.md),
+              ),
+              child: Row(children: [
+                Stack(clipBehavior: Clip.none, children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: AppColors.deviceNavy,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Text('PC',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12)),
+                  ),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      width: 11,
+                      height: 11,
+                      decoration: BoxDecoration(
+                        color: widget.online
+                            ? AppColors.success
+                            : AppColors.textTertiary,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.surface, width: 2.5),
+                      ),
+                    ),
+                  ),
+                ]),
+                if (_open) ...[
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('This PC',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTypography.caption.copyWith(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary)),
+                        Text(widget.online ? 'Online · Sharing' : 'Offline',
+                            style: AppTypography.caption.copyWith(
+                                fontSize: 10.5,
+                                color: widget.online
+                                    ? AppColors.success
+                                    : AppColors.textTertiary,
+                                fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                ],
+              ]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RailItem extends StatefulWidget {
+  final NavRailItem item;
+  final bool active;
+  final bool open;
+  final VoidCallback onTap;
+  const _RailItem({
+    required this.item,
+    required this.active,
+    required this.open,
+    required this.onTap,
+  });
+  @override
+  State<_RailItem> createState() => _RailItemState();
+}
+
+class _RailItemState extends State<_RailItem> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.active;
+    final fg = active ? AppColors.primaryDark : AppColors.textSecondary;
+    final bg = active
+        ? AppColors.primarySoft
+        : (_hover ? AppColors.surfaceLight : Colors.transparent);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: widget.open ? '' : widget.item.label,
+          waitDuration: const Duration(milliseconds: 400),
+          child: Stack(children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              height: 44,
+              margin: const EdgeInsets.symmetric(vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 15),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(children: [
+                Icon(widget.item.icon, size: 20, color: fg),
+                if (widget.open) ...[
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(widget.item.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.clip,
+                        softWrap: false,
+                        style: AppTypography.caption.copyWith(
+                            fontSize: 13.5,
+                            color: fg,
+                            fontWeight:
+                                active ? FontWeight.w600 : FontWeight.w500)),
+                  ),
+                ],
+              ]),
+            ),
+            if (active)
+              Positioned(
+                left: 0,
+                top: 11,
+                bottom: 11,
+                child: Container(
+                  width: 3,
+                  decoration: const BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.horizontal(right: Radius.circular(3)),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
 /// Command Center — Home workspace (DESIGN.md 2026-07-21 redesign).
 /// Connection dock → status strip → Your Devices grid → recent activity.
 /// Wired to the same providers as the old dashboard; renders only real data
@@ -501,68 +772,69 @@ class _StatusStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadii.lg),
-        border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.card,
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: IntrinsicHeight(
-        child: Row(children: [
-          FutureBuilder<int>(
-            future: AuditLog.instance.countToday(),
-            builder: (_, snap) => _Stat(
-                icon: Icons.schedule_rounded,
-                tint: AppColors.primary,
-                value: '${snap.data ?? 0}',
-                label: 'Sessions today'),
+    return LayoutBuilder(builder: (context, c) {
+      // Reflow instead of clipping: 6 across when wide, 3 when medium, 2 when
+      // narrow (the activity panel can squeeze the workspace on smaller desktops).
+      final perRow = c.maxWidth >= 900 ? 6 : (c.maxWidth >= 540 ? 3 : 2);
+      const gap = 12.0;
+      final w = (c.maxWidth - gap * (perRow - 1)) / perRow;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [
+          SizedBox(
+            width: w,
+            child: FutureBuilder<int>(
+              future: AuditLog.instance.countToday(),
+              builder: (_, snap) => _Stat(
+                  icon: Icons.schedule_rounded,
+                  tint: AppColors.primary,
+                  value: '${snap.data ?? 0}',
+                  label: 'Sessions today'),
+            ),
           ),
-          const _StatDivider(),
-          _Stat(
-              icon: Icons.circle,
-              tint: AppColors.success,
-              value: '$onlineCount',
-              label: 'Online devices',
-              valueColor: AppColors.success),
-          const _StatDivider(),
-          _Stat(
-              icon: Icons.dns_rounded,
-              tint: AppColors.secondary,
-              value: '$knownCount',
-              label: 'Known devices'),
-          const _StatDivider(),
-          _Stat(
-              icon: Icons.swap_vert_rounded,
-              tint: AppColors.success,
-              value: '$activeXfer',
-              label: 'Active transfers'),
-          const _StatDivider(),
-          _Stat(
-              icon: Icons.podcasts_rounded,
-              tint: AppColors.primary,
-              value: sharing ? 'On' : 'Off',
-              label: connectedViewers > 0
-                  ? '$connectedViewers connected'
-                  : 'Sharing'),
-          const _StatDivider(),
-          _Stat(
-              icon: Icons.flag_rounded,
-              tint: AppColors.warning,
-              value: unattended ? 'On' : 'Off',
-              label: 'Unattended'),
-        ]),
-      ),
-    );
+          SizedBox(
+              width: w,
+              child: _Stat(
+                  icon: Icons.circle,
+                  tint: AppColors.success,
+                  value: '$onlineCount',
+                  label: 'Online devices',
+                  valueColor: AppColors.success)),
+          SizedBox(
+              width: w,
+              child: _Stat(
+                  icon: Icons.dns_rounded,
+                  tint: AppColors.secondary,
+                  value: '$knownCount',
+                  label: 'Known devices')),
+          SizedBox(
+              width: w,
+              child: _Stat(
+                  icon: Icons.swap_vert_rounded,
+                  tint: AppColors.success,
+                  value: '$activeXfer',
+                  label: 'Active transfers')),
+          SizedBox(
+              width: w,
+              child: _Stat(
+                  icon: Icons.podcasts_rounded,
+                  tint: AppColors.primary,
+                  value: sharing ? 'On' : 'Off',
+                  label: connectedViewers > 0
+                      ? '$connectedViewers connected'
+                      : 'Sharing')),
+          SizedBox(
+              width: w,
+              child: _Stat(
+                  icon: Icons.flag_rounded,
+                  tint: AppColors.warning,
+                  value: unattended ? 'On' : 'Off',
+                  label: 'Unattended')),
+        ],
+      );
+    });
   }
-}
-
-class _StatDivider extends StatelessWidget {
-  const _StatDivider();
-  @override
-  Widget build(BuildContext context) =>
-      const VerticalDivider(width: 1, thickness: 1, color: AppColors.border);
 }
 
 class _Stat extends StatelessWidget {
@@ -580,39 +852,43 @@ class _Stat extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-        child: Row(children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: tint.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(AppRadii.md),
-            ),
-            child: Icon(icon, size: 16, color: tint),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(value,
-                    style: AppTypography.mono.copyWith(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: valueColor ?? AppColors.textPrimary)),
-                Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.caption.copyWith(fontSize: 11)),
-              ],
-            ),
-          ),
-        ]),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.card,
       ),
+      child: Row(children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: tint.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(AppRadii.md),
+          ),
+          child: Icon(icon, size: 16, color: tint),
+        ),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(value,
+                  style: AppTypography.mono.copyWith(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: valueColor ?? AppColors.textPrimary)),
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.caption.copyWith(fontSize: 11)),
+            ],
+          ),
+        ),
+      ]),
     );
   }
 }
@@ -1126,4 +1402,340 @@ String _ago(DateTime t) {
   if (d.inMinutes < 60) return '${d.inMinutes}m ago';
   if (d.inHours < 24) return '${d.inHours}h ago';
   return '${d.inDays}d ago';
+}
+
+// ---------------------------------------------------------------- activity panel
+
+/// Right column of the Command Center shell: this machine's own ID + password
+/// (so it can be shared/dialled) followed by live activity — incoming consent
+/// requests, active file transfers, connected viewers. Real state only.
+class CommandActivityPanel extends StatelessWidget {
+  final RemoteService service;
+  const CommandActivityPanel({super.key, required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    final consent = service.pendingConsent;
+    final xfers = service.fileTransfers
+        .where((t) =>
+            t.status == FileStatus.active || t.status == FileStatus.sent)
+        .toList();
+    final viewers = service.connectedViewers;
+
+    return Container(
+      width: 328,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(left: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // header
+          Container(
+            height: 74,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppColors.border)),
+            ),
+            child: Row(children: [
+              Text('Live activity', style: AppTypography.sectionTitle),
+              const Spacer(),
+              Container(
+                width: 7,
+                height: 7,
+                decoration: const BoxDecoration(
+                    color: AppColors.success, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 6),
+              Text('Live',
+                  style: AppTypography.caption.copyWith(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.success)),
+            ]),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _ThisDeviceCard(service: service),
+                const SizedBox(height: 14),
+                if (consent != null) ...[
+                  _ConsentRequestCard(controllerId: consent.controllerId),
+                  const SizedBox(height: 12),
+                ],
+                if (viewers > 0) ...[
+                  _ActivityRow(
+                    icon: Icons.circle,
+                    tint: AppColors.success,
+                    title: '$viewers viewer${viewers == 1 ? '' : 's'} connected',
+                    sub: 'Sharing your screen · encrypted',
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                for (final t in xfers) ...[
+                  _TransferRow(name: t.name, progress: t.progress),
+                  const SizedBox(height: 12),
+                ],
+                if (consent == null && viewers == 0 && xfers.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 30),
+                    child: Column(children: [
+                      const Icon(Icons.bolt_rounded,
+                          size: 28, color: AppColors.textTertiary),
+                      const SizedBox(height: 8),
+                      Text('Nothing happening right now',
+                          style: AppTypography.caption
+                              .copyWith(color: AppColors.textSecondary)),
+                      const SizedBox(height: 3),
+                      Text('Incoming connections and transfers show here.',
+                          textAlign: TextAlign.center,
+                          style: AppTypography.caption.copyWith(fontSize: 11)),
+                    ]),
+                  ),
+                const SizedBox(height: 16),
+                const _SecurityBadges(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ThisDeviceCard extends StatelessWidget {
+  final RemoteService service;
+  const _ThisDeviceCard({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    final id = service.agentId ?? '—';
+    final pw = service.password ?? '—';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.deviceNavy, Color.alphaBlend(
+              Colors.black.withValues(alpha: 0.15), AppColors.deviceNavy)],
+        ),
+        borderRadius: BorderRadius.circular(AppRadii.card),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.wifi_tethering_rounded,
+              size: 15, color: Colors.white70),
+          const SizedBox(width: 7),
+          Text('THIS DEVICE — share to be controlled',
+              style: AppTypography.microLabel
+                  .copyWith(color: Colors.white70, fontSize: 8.5)),
+        ]),
+        const SizedBox(height: 14),
+        _DarkRow(label: 'Your ID', value: id == '—' ? id : _group(id)),
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Divider(height: 1, color: Colors.white24),
+        ),
+        _DarkRow(label: 'Password', value: pw, accent: true),
+      ]),
+    );
+  }
+}
+
+class _DarkRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool accent;
+  const _DarkRow(
+      {required this.label, required this.value, this.accent = false});
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label.toUpperCase(),
+              style: AppTypography.microLabel
+                  .copyWith(color: Colors.white54, fontSize: 8.5)),
+          const SizedBox(height: 3),
+          Text(value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.idLarge.copyWith(
+                  color: accent ? const Color(0xFFFFB088) : Colors.white,
+                  fontSize: 16,
+                  letterSpacing: accent ? 1 : 2.5)),
+        ]),
+      ),
+      _Copy(value: value, dark: true),
+    ]);
+  }
+}
+
+class _Copy extends StatelessWidget {
+  final String value;
+  final bool dark;
+  const _Copy({required this.value, this.dark = false});
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadii.sm),
+      onTap: value == '—'
+          ? null
+          : () {
+              Clipboard.setData(ClipboardData(text: value));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Copied'), duration: Duration(seconds: 1)));
+            },
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: dark ? Colors.white.withValues(alpha: 0.12) : AppColors.background,
+          borderRadius: BorderRadius.circular(AppRadii.sm),
+          border: dark ? null : Border.all(color: AppColors.borderStrong),
+        ),
+        child: Icon(Icons.copy_rounded,
+            size: 13, color: dark ? Colors.white : AppColors.textSecondary),
+      ),
+    );
+  }
+}
+
+class _ConsentRequestCard extends StatelessWidget {
+  final String controllerId;
+  const _ConsentRequestCard({required this.controllerId});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.primarySoft,
+        borderRadius: BorderRadius.circular(AppRadii.card),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Incoming connection',
+            style: AppTypography.bodyStrong.copyWith(fontSize: 13.5)),
+        const SizedBox(height: 2),
+        Text('Device $controllerId wants to connect',
+            style: AppTypography.caption.copyWith(fontSize: 12)),
+        const SizedBox(height: 12),
+        Text('Use the Accept / Dismiss prompt to decide.',
+            style: AppTypography.caption.copyWith(fontSize: 11)),
+      ]),
+    );
+  }
+}
+
+class _ActivityRow extends StatelessWidget {
+  final IconData icon;
+  final Color tint;
+  final String title;
+  final String sub;
+  const _ActivityRow(
+      {required this.icon,
+      required this.tint,
+      required this.title,
+      required this.sub});
+  @override
+  Widget build(BuildContext context) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: tint.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Icon(icon, size: 13, color: tint),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title,
+              style: AppTypography.caption.copyWith(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary)),
+          Text(sub, style: AppTypography.caption.copyWith(fontSize: 11)),
+        ]),
+      ),
+    ]);
+  }
+}
+
+class _TransferRow extends StatelessWidget {
+  final String name;
+  final double progress;
+  const _TransferRow({required this.name, required this.progress});
+  @override
+  Widget build(BuildContext context) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: const Icon(Icons.swap_vert_rounded,
+            size: 15, color: AppColors.primary),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.caption.copyWith(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary)),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: progress > 0 ? progress : null,
+              minHeight: 5,
+              backgroundColor: AppColors.surfaceLight,
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(AppColors.primary),
+            ),
+          ),
+        ]),
+      ),
+    ]);
+  }
+}
+
+class _SecurityBadges extends StatelessWidget {
+  const _SecurityBadges();
+  @override
+  Widget build(BuildContext context) {
+    Widget b(String t) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+          decoration: BoxDecoration(
+            color: AppColors.successSoft,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.lock_rounded, size: 11, color: AppColors.success),
+            const SizedBox(width: 5),
+            Text(t,
+                style: AppTypography.caption.copyWith(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.success)),
+          ]),
+        );
+    return Wrap(spacing: 6, runSpacing: 6, children: [
+      b('Encrypted'),
+      b('Pinned cert'),
+      b('End-to-end'),
+    ]);
+  }
 }
