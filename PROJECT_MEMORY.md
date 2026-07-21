@@ -204,6 +204,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
   `closeAll`/create-error/write-error do the same. Do NOT write to the worker
   conn with the bare `ipc.WriteMessage(conn,…)` package func — always the
   `*ipc.Conn` method, or the interleave bug returns.
+- **LD-20 — Worker IPC serializes only WRITES (stream integrity, LD-19) and
+  per-lane ordering; clipboard-file and file-transfer run on INDEPENDENT
+  non-blocking lanes, and any whole-file stream runs on its own goroutine — so no
+  operation can stall another.** `KindFileData` multiplexes file transfers
+  ({k:ft}) AND clipboard-file ops ({k:clipf*}); the worker reader routes them to
+  two separate drain goroutines (`fileCh`/`clipCh`) by a cheap kind peek
+  (`isFileTransferMsg`). `serveBytes` (clipboard SOURCE serving a whole file) and
+  the `finishFile` clipagent write run on their OWN goroutines, so a large paste
+  or a slow helper never blocks the next pull or a file-transfer ack. Concurrent
+  serves are safe (per-message `ipc.Conn` write mutex + token/index/seq demux on
+  the viewer). Input/capture stay on the reader goroutine, off both lanes (LD-19).
+  Do NOT re-merge the two lanes or call a whole-file stream inline on a drain
+  goroutine — that reintroduces the r69 head-of-line block (clipboard paste never
+  completing + file acks stuck "unconfirmed").
 
 ---
 
@@ -325,6 +339,25 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-21 — r69 side effect: clipboard-file + file-transfer shared one lane
+  and blocked each other (r70). Implements LD-20.** After r69 (`r69-ipc-serialize`)
+  a test showed clipboard Ctrl+C/Ctrl+V never completing (worker.log: 3 `announcing
+  host clipboard files` h1/h2/h3, no pull) and one export file stuck "Delivered
+  (unconfirmed)". ROOT CAUSE: r69 correctly moved `KindFileData` off the input
+  goroutine, but funnelled BOTH file transfers ({k:ft}) and clipboard-file ops
+  ({k:clipf*}) onto ONE `fileCh` drain goroutine — and `serveBytes` (viewer pasting
+  a host file) streamed the WHOLE file SYNCHRONOUSLY on it. So a clipboard serve
+  blocked file-transfer acks, and a file transfer blocked clipboard pulls — one
+  shared serial lane, both symptoms. FIX (keeps r68 anti-freeze + r69 write mutex):
+  (1) reader routes KindFileData to two independent lanes `fileCh`/`clipCh` by a
+  cheap kind peek (`isFileTransferMsg`); (2) `serveBytes` now runs on its own
+  goroutine (`go cf.serveBytes`), like serveExport, so a big paste never blocks its
+  lane; (3) the `finishFile` clipagent write (host-destination staging, ~2s helper
+  round-trip) runs async too; (4) added pull/serve logs (`viewer pulling host
+  clipboard file` / `served host clipboard file`) — the missing completion
+  instrumentation. Three independent lanes now: capture/input (reader), file
+  transfer, clipboard — no shared serial choke. Pure Go, no wire change; Win↔Win
+  capture/input/secure-desktop untouched. Builds + vets clean.
 - **2026-07-21 — Large file froze remote control: IPC write race in the Go
   transport/worker (r69). Implements LD-19.** Log evidence: host `worker.log`
   logged `receiving file …SADP__EN.zip size=71581150` then NOTHING ever again;

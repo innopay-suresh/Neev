@@ -30,6 +30,19 @@ const (
 	workerBitrate = 3000 // kbps
 )
 
+// isFileTransferMsg cheaply peeks a KindFileData payload's kind so the reader can
+// route it to the file-transfer lane ({k:"ft"}) vs the clipboard-file lane
+// ({k:"clipf*"}). Full parsing happens in the lane's handler.
+func isFileTransferMsg(payload []byte) bool {
+	var m struct {
+		K string `json:"k"`
+	}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return false
+	}
+	return m.K == "ft"
+}
+
 // RunCaptureWorker connects to the transport and (eventually) streams captured,
 // VP8-encoded frames. Runs until ctx is cancelled or the transport goes away.
 // The service spawns one of these into the active session and replaces it on a
@@ -127,17 +140,24 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		}
 	})
 
-	// File-transfer messages are handled on a DEDICATED goroutine, off the reader
-	// goroutine, so a slow/large file write can never delay input injection — file
-	// transfer must never be able to freeze remote control. Ordered (single
-	// draining goroutine), so a transfer's offer/data/end stay in sequence.
+	// KindFileData carries TWO unrelated workloads: explicit file transfers
+	// ({k:ft}) and clipboard-file ops ({k:clipf*}). Give each its OWN lane so
+	// neither can head-of-line-block the other — r69 funnelled both onto one
+	// goroutine, so a synchronous clipboard serve stalled file-transfer acks and a
+	// file transfer stalled clipboard pulls (the reported bug). Both lanes are also
+	// off the reader goroutine, so neither ever delays input injection (r68).
+	// Ordered within a lane (single drainer), so one transfer's offer/data/end and
+	// one clipboard token's chunks stay in sequence.
 	fileCh := make(chan []byte, 256)
+	clipCh := make(chan []byte, 256)
 	go func() {
 		for payload := range fileCh {
-			// {k:ft} explicit transfer first; else {k:clipf*} file-clipboard.
-			if !files.handle(payload) {
-				cfiles.handle(payload)
-			}
+			files.handle(payload)
+		}
+	}()
+	go func() {
+		for payload := range clipCh {
+			cfiles.handle(payload)
 		}
 	}()
 
@@ -147,7 +167,8 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
-		defer close(fileCh) // stop + drain the file goroutine when the reader ends
+		defer close(fileCh) // stop + drain the lane goroutines when the reader ends
+		defer close(clipCh)
 		for {
 			kind, payload, err := ic.ReadMessage()
 			if err != nil {
@@ -170,12 +191,15 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					injector.Post(payload)
 				}
 			case ipc.KindFileData:
-				// Hand off to the file goroutine (never write to disk on this
-				// goroutine — input must not wait behind file I/O). Blocks only if
-				// 256 messages are already backlogged (disk far behind network),
-				// which is bounded and vastly better than freezing input.
+				// Route to the file-transfer lane or the clipboard lane by kind so
+				// the two never block each other; either way it's off the reader
+				// goroutine, so input never waits behind file/clipboard I/O.
+				ch := clipCh
+				if isFileTransferMsg(payload) {
+					ch = fileCh
+				}
 				select {
-				case fileCh <- payload:
+				case ch <- payload:
 				case <-runCtx.Done():
 					return
 				}

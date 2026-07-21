@@ -162,7 +162,12 @@ func (cf *clipFiles) handle(payload []byte) bool {
 			cf.send(map[string]interface{}{"k": "clipfdat", "token": m.Token, "index": m.Index, "ok": false, "seq": 0, "total": 1})
 			return true
 		}
-		cf.serveBytes(m.Token, m.Index, paths[m.Index])
+		// Stream on its OWN goroutine — serveBytes walks the WHOLE file, so running
+		// it inline would block this clipboard lane (and, pre-split, file transfers)
+		// for the entire transfer. Concurrent serves are safe: each clipfdat carries
+		// token/index/seq and the write is atomic per message (ipc.Conn mutex).
+		log.Info().Str("token", m.Token).Int("index", m.Index).Msg("worker: viewer pulling host clipboard file")
+		go cf.serveBytes(m.Token, m.Index, paths[m.Index])
 		return true
 	case "clipfdat":
 		// Bytes for a file we (host destination) requested from the viewer.
@@ -208,6 +213,8 @@ func (cf *clipFiles) serveBytes(token string, index int, path string) {
 			"seq": i, "total": total, "d": base64.StdEncoding.EncodeToString(buf[:n]),
 		})
 	}
+	log.Info().Str("token", token).Int("index", index).Int64("bytes", fi.Size()).
+		Msg("worker: served host clipboard file to viewer")
 }
 
 // recvBytes assembles a viewer file (host destination) and, when all announced
@@ -284,16 +291,21 @@ func (cf *clipFiles) finishFile(asm *clipInASM, token string, index int, data []
 	cf.mu.Unlock()
 
 	if allDone {
-		if len(paths) > 0 {
-			if clipAgentWriteFiles(paths) {
-				log.Info().Str("token", token).Int("files", len(paths)).Msg("worker: staged viewer files on host clipboard")
-			} else {
-				log.Warn().Msg("worker: clipagent write files failed")
-			}
-		}
 		cf.mu.Lock()
 		delete(cf.inAsm, token)
 		cf.mu.Unlock()
+		if len(paths) > 0 {
+			// Stage on the host clipboard OFF this lane: clipAgentWriteFiles is a
+			// synchronous helper round-trip (up to ~2s) and must not stall the next
+			// clipboard pull/assembly on the clipboard goroutine.
+			go func(paths []string, token string) {
+				if clipAgentWriteFiles(paths) {
+					log.Info().Str("token", token).Int("files", len(paths)).Msg("worker: staged viewer files on host clipboard")
+				} else {
+					log.Warn().Msg("worker: clipagent write files failed")
+				}
+			}(paths, token)
+		}
 	}
 }
 
