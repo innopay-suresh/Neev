@@ -77,7 +77,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		if err := srv.Listen(addr); err != nil {
+		if err := srv.ListenDual(addr); err != nil {
 			log.Fatal().Err(err).Msg("server error")
 		}
 	}()

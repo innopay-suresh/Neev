@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/websocket/v2"
+	"github.com/rs/zerolog/log"
 
 	serverauth "github.com/neev/remote-agent/server/auth"
 	"github.com/neev/remote-agent/server/config"
@@ -315,6 +316,48 @@ func (s *Server) Listen(addr string) error {
 		return s.app.ListenTLS(addr, s.cfg.Server.TLSCert, s.cfg.Server.TLSKey)
 	}
 	return s.app.Listen(addr)
+}
+
+// ListenDual serves plaintext ws:// on plainAddr AND, when a TLS port + cert are
+// configured, wss:// on the TLS port from the SAME Fiber app in a goroutine. This
+// avoids a flag-day: existing ws:// installs keep working on plainAddr while new
+// builds move to wss, and plainAddr is retired only after every client migrates.
+// Falls back to plain-only when TLS isn't configured.
+func (s *Server) ListenDual(plainAddr string) error {
+	if s.cfg.Server.TLSPort > 0 && s.cfg.Server.TLSCert != "" && s.cfg.Server.TLSKey != "" {
+		tlsAddr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.TLSPort)
+		go func() {
+			cert, err := tls.LoadX509KeyPair(s.cfg.Server.TLSCert, s.cfg.Server.TLSKey)
+			if err != nil {
+				log.Error().Err(err).Msg("tls: cannot load server certificate; wss disabled")
+				return
+			}
+			cfg := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+			if strings.TrimSpace(s.cfg.Server.TLSClientCA) != "" {
+				if caData, e := os.ReadFile(s.cfg.Server.TLSClientCA); e == nil {
+					pool := x509.NewCertPool()
+					if pool.AppendCertsFromPEM(caData) {
+						cfg.ClientCAs = pool
+						cfg.ClientAuth = tls.VerifyClientCertIfGiven
+					}
+				}
+			}
+			ln, err := net.Listen("tcp", tlsAddr)
+			if err != nil {
+				log.Error().Err(err).Str("addr", tlsAddr).Msg("tls: cannot bind wss port")
+				return
+			}
+			log.Info().Str("addr", tlsAddr).Msg("wss (TLS) listener up")
+			if err := s.app.Listener(tls.NewListener(ln, cfg)); err != nil {
+				log.Error().Err(err).Msg("tls listener stopped")
+			}
+		}()
+	}
+	log.Info().Str("addr", plainAddr).Msg("ws (plaintext) listener up")
+	return s.app.Listen(plainAddr)
 }
 
 func (s *Server) listenTLSWithClientCA(addr string) error {
