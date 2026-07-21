@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/constants/app_constants.dart';
 import '../../core/diag_log.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/discovery_service.dart';
@@ -17,6 +16,7 @@ import '../providers/app_providers.dart';
 import '../widgets/file_transfer_panel.dart';
 import '../widgets/remote_view_widget.dart';
 import '../widgets/shortcuts_menu.dart';
+import 'home_command_center.dart';
 import 'settings_page.dart';
 
 /// Single-screen hub: "Share my screen" (host) on the left, "Connect to a
@@ -223,8 +223,8 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
         return _AddressBookPage(onPick: _pickAndHome, favoritesOnly: true);
       case 2: // Recent
         return _RecentPage(onPick: _pickAndHome);
-      case 0: // Home
-        return _HomeDashboard(
+      case 0: // Home — Command Center redesign (DESIGN.md 2026-07-21)
+        return HomeCommandCenter(
           service: service,
           idController: _idController,
           passwordController: _passwordController,
@@ -1462,18 +1462,14 @@ class _TopBar extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       child: Row(
         children: [
-          // Brand now lives in the sidebar, so the top bar carries the page
-          // title + the build stamp (monospace — it's an identifier we read
-          // back when confirming which build is actually running).
+          // Brand lives in the sidebar; the top bar carries just the page title.
+          // The build stamp moved to Settings → About (Command Center redesign —
+          // the Home header shouldn't show an engineering identifier).
           Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(title, style: AppTypography.pageTitle),
-              const SizedBox(height: 1),
-              Text(AppConstants.buildTag,
-                  style: AppTypography.mono
-                      .copyWith(fontSize: 11, color: AppColors.textTertiary)),
             ],
           ),
           const SizedBox(width: AppSpacing.md),
