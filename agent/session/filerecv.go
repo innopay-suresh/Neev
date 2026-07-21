@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,20 +22,28 @@ import (
 // the user's desktop and streams the chosen file back. The 'file' channel is
 // reliable + ordered, so chunks arrive/append in order.
 type fileReceiver struct {
-	conn     net.Conn // to send export data back to the transport
-	mu       sync.Mutex
-	open     map[string]*os.File
-	openPath map[string]string // id → final unique path (for the saved ack)
-	dir      string
-	seq      atomic.Uint64
+	conn *ipc.Conn // acks/export back to the transport (writes serialized)
+	mu   sync.Mutex
+	open map[string]*recvFile
+	dir  string
+	seq  atomic.Uint64
 }
 
-func newFileReceiver(conn net.Conn) *fileReceiver {
+// recvFile tracks one in-flight incoming transfer: the open handle, its final
+// unique path, the announced size, and bytes written so far — so 'end' can
+// verify the file is complete (not silently truncated) before acking.
+type recvFile struct {
+	f       *os.File
+	path    string
+	size    int64
+	written int64
+}
+
+func newFileReceiver(conn *ipc.Conn) *fileReceiver {
 	return &fileReceiver{
-		conn:     conn,
-		open:     map[string]*os.File{},
-		openPath: map[string]string{},
-		dir:      downloadsDir(),
+		conn: conn,
+		open: map[string]*recvFile{},
+		dir:  downloadsDir(),
 	}
 }
 
@@ -77,11 +84,13 @@ func (f *fileReceiver) handle(payload []byte) bool {
 		file, err := os.Create(path)
 		if err != nil {
 			log.Warn().Err(err).Str("name", m.Name).Msg("worker: create received file failed")
+			// Tell the viewer immediately instead of leaving it to time out.
+			f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": m.ID,
+				"err": "host could not create the file"})
 			return true
 		}
 		f.mu.Lock()
-		f.open[m.ID] = file
-		f.openPath[m.ID] = path
+		f.open[m.ID] = &recvFile{f: file, path: path, size: m.Size}
 		f.mu.Unlock()
 		log.Info().Str("path", path).Int64("size", m.Size).Msg("worker: receiving file")
 	case "data":
@@ -90,27 +99,48 @@ func (f *fileReceiver) handle(payload []byte) bool {
 			return true
 		}
 		f.mu.Lock()
-		file := f.open[m.ID]
+		rf := f.open[m.ID]
 		f.mu.Unlock()
-		if file != nil {
-			_, _ = file.Write(raw)
-		}
-	case "end", "cancel":
-		f.mu.Lock()
-		file := f.open[m.ID]
-		path := f.openPath[m.ID]
-		delete(f.open, m.ID)
-		delete(f.openPath, m.ID)
-		f.mu.Unlock()
-		if file != nil {
-			_ = file.Close()
-			log.Info().Str("id", m.ID).Str("t", m.T).Msg("worker: file transfer finished")
-			// Confirm a distinct file was written so the sender can show real
-			// success instead of an optimistic "Sent". Only on 'end' (a real
-			// completion); a 'cancel' leaves the partial file and sends nothing.
-			if m.T == "end" && path != "" {
-				f.sendFT(map[string]interface{}{"k": "ft", "t": "saved", "id": m.ID, "path": path})
+		if rf != nil {
+			n, werr := rf.f.Write(raw)
+			rf.written += int64(n)
+			if werr != nil {
+				log.Warn().Err(werr).Str("id", m.ID).Msg("worker: write received chunk failed")
+				f.fail(m.ID, "write error: "+werr.Error())
 			}
+		}
+	case "end":
+		f.mu.Lock()
+		rf := f.open[m.ID]
+		delete(f.open, m.ID)
+		f.mu.Unlock()
+		if rf == nil {
+			return true
+		}
+		_ = rf.f.Close()
+		// Truncation guard: if what we wrote doesn't match the announced size, the
+		// transfer was interrupted — report FAILED and delete the partial file
+		// rather than leave corrupt data on disk that looks like a real download.
+		if rf.size > 0 && rf.written != rf.size {
+			_ = os.Remove(rf.path)
+			log.Warn().Str("id", m.ID).Int64("want", rf.size).Int64("got", rf.written).
+				Msg("worker: incomplete file — reporting failed")
+			f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": m.ID,
+				"err": fmt.Sprintf("incomplete: received %d of %d bytes", rf.written, rf.size)})
+			return true
+		}
+		log.Info().Str("id", m.ID).Str("path", rf.path).Int64("size", rf.written).
+			Msg("worker: file transfer finished")
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "saved", "id": m.ID, "path": rf.path})
+	case "cancel":
+		f.mu.Lock()
+		rf := f.open[m.ID]
+		delete(f.open, m.ID)
+		f.mu.Unlock()
+		if rf != nil {
+			_ = rf.f.Close()
+			_ = os.Remove(rf.path) // don't leave a partial from a cancelled transfer
+			log.Info().Str("id", m.ID).Msg("worker: file transfer cancelled")
 		}
 	case "request":
 		// Viewer asked the host for a file → pop a native picker on the host
@@ -164,17 +194,41 @@ func (f *fileReceiver) sendFT(m map[string]interface{}) {
 	if err != nil {
 		return
 	}
-	_ = ipc.WriteMessage(f.conn, ipc.KindFileData, b)
+	_ = f.conn.WriteMessage(ipc.KindFileData, b)
 }
 
-// closeAll releases any half-open transfers (worker shutdown / session swap).
+// fail aborts an in-flight transfer: closes + deletes the partial file and tells
+// the viewer it FAILED, so it surfaces a real error instead of hanging until the
+// client-side timeout — and never leaves truncated data on disk.
+func (f *fileReceiver) fail(id, reason string) {
+	f.mu.Lock()
+	rf := f.open[id]
+	delete(f.open, id)
+	f.mu.Unlock()
+	if rf != nil {
+		_ = rf.f.Close()
+		_ = os.Remove(rf.path)
+	}
+	f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": id, "err": reason})
+}
+
+// closeAll aborts any half-open transfers (worker shutdown / session swap): each
+// is deleted (never leave a truncated file) and reported FAILED to the viewer.
 func (f *fileReceiver) closeAll() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	for id, file := range f.open {
-		_ = file.Close()
+	ids := make([]string, 0, len(f.open))
+	files := make([]*recvFile, 0, len(f.open))
+	for id, rf := range f.open {
+		ids = append(ids, id)
+		files = append(files, rf)
 		delete(f.open, id)
-		delete(f.openPath, id)
+	}
+	f.mu.Unlock()
+	for i, rf := range files {
+		_ = rf.f.Close()
+		_ = os.Remove(rf.path)
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": ids[i],
+			"err": "host session ended before the transfer completed"})
 	}
 }
 

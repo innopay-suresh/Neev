@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +22,7 @@ import (
 // which relays it to viewers. File clipboard is unaffected (helper clipagent);
 // image clipboard is not carried here yet.
 type clipSync struct {
-	conn net.Conn
+	conn *ipc.Conn
 	mu   sync.Mutex
 	last string // last text seen/set, to break the copy echo loop
 
@@ -47,7 +46,7 @@ func hashBytes(b []byte) uint64 {
 	return h
 }
 
-func newClipSync(conn net.Conn) *clipSync {
+func newClipSync(conn *ipc.Conn) *clipSync {
 	c := &clipSync{conn: conn}
 	// Prime with the current clipboard so we don't immediately re-broadcast it.
 	if s, err := clipboard.ReadAll(); err == nil {
@@ -158,7 +157,7 @@ func (c *clipSync) poll(ctx context.Context) {
 				}
 				c.mu.Unlock()
 				if imgChanged {
-					if err := ipc.WriteMessage(c.conn, ipc.KindClipboardImage, img); err != nil {
+					if err := c.conn.WriteMessage(ipc.KindClipboardImage, img); err != nil {
 						return
 					}
 					log.Info().Int("bytes", len(img)).Msg("worker: sent host clipboard image to viewer")
@@ -179,7 +178,7 @@ func (c *clipSync) poll(ctx context.Context) {
 		if !changed {
 			continue
 		}
-		if err := ipc.WriteMessage(c.conn, ipc.KindClipboard, []byte(cur)); err != nil {
+		if err := c.conn.WriteMessage(ipc.KindClipboard, []byte(cur)); err != nil {
 			return // transport gone; worker will exit/respawn
 		}
 	}

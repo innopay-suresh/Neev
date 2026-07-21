@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -80,6 +81,38 @@ const (
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.
 // A 4K keyframe is comfortably under this.
 const maxPayload = 32 << 20 // 32 MiB
+
+// Conn wraps the single transport↔worker net.Conn and SERIALIZES writes.
+//
+// One framed message is written as two calls (header, then payload). MANY
+// goroutines write to this one connection concurrently — transport→worker:
+// input, file-transfer chunks, keyframe requests; worker→transport: video
+// frames, clipboard, chat, file-export. Without serialization, two messages'
+// header/payload bytes interleave on the wire, the reader then reads a bogus
+// frame length and either errors (reader loop exits) or blocks forever in
+// ReadFull — permanently wedging input + file transfer. (This is exactly what a
+// large file transfer triggered: ~2000 chunk writes racing with live input.)
+// The mutex guards only writes; there is a single reader per direction, so
+// reads stay lock-free.
+type Conn struct {
+	net.Conn
+	writeMu sync.Mutex
+}
+
+// NewConn wraps c so its WriteMessage is safe for concurrent callers.
+func NewConn(c net.Conn) *Conn { return &Conn{Conn: c} }
+
+// WriteMessage frames and writes one message atomically w.r.t. other writers.
+func (c *Conn) WriteMessage(kind byte, payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteMessage(c.Conn, kind, payload)
+}
+
+// ReadMessage reads one framed message (single reader per direction; no lock).
+func (c *Conn) ReadMessage() (byte, []byte, error) {
+	return ReadMessage(c.Conn)
+}
 
 // WriteMessage frames and writes one message to w.
 func WriteMessage(w io.Writer, kind byte, payload []byte) error {

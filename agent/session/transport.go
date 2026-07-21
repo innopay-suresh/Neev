@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -45,7 +44,7 @@ type Transport struct {
 	peers map[string]*peerSession // by controller id
 
 	workerMu sync.Mutex
-	worker   net.Conn // current capture worker (nil if none attached)
+	worker   *ipc.Conn // current capture worker (nil if none attached); writes are serialized
 
 	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
 	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
@@ -120,7 +119,7 @@ func RunTransport(ctx context.Context, port int) error {
 				continue
 			}
 		}
-		go t.handleWorker(ctx, conn)
+		go t.handleWorker(ctx, ipc.NewConn(conn))
 	}
 }
 
@@ -408,7 +407,7 @@ func (t *Transport) sendInputToWorker(raw []byte) {
 		}
 		return
 	}
-	if err := ipc.WriteMessage(conn, ipc.KindInput, raw); err != nil {
+	if err := conn.WriteMessage(ipc.KindInput, raw); err != nil {
 		log.Warn().Err(err).Msg("transport: forward input to worker failed")
 	}
 }
@@ -422,7 +421,7 @@ func (t *Transport) sendToWorker(kind byte, raw []byte) {
 	if conn == nil {
 		return
 	}
-	if err := ipc.WriteMessage(conn, kind, raw); err != nil {
+	if err := conn.WriteMessage(kind, raw); err != nil {
 		log.Warn().Err(err).Uint8("kind", kind).Msg("transport: forward to worker failed")
 	}
 }
@@ -479,7 +478,7 @@ func (t *Transport) dropPeer(id string) {
 // handleWorker drains one capture worker's frame stream and distributes frames
 // to all connected viewers. A new worker (after a session switch) simply
 // replaces the old one; the peers/tracks are untouched.
-func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
+func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 	defer conn.Close()
 	t.workerMu.Lock()
 	t.worker = conn
@@ -492,7 +491,7 @@ func (t *Transport) handleWorker(ctx context.Context, conn net.Conn) {
 			return
 		default:
 		}
-		kind, payload, err := ipc.ReadMessage(conn)
+		kind, payload, err := conn.ReadMessage()
 		if err != nil {
 			log.Info().Err(err).Msg("transport: capture worker detached")
 			t.workerMu.Lock()
@@ -668,6 +667,6 @@ func (t *Transport) requestKeyframe() {
 	conn := t.worker
 	t.workerMu.Unlock()
 	if conn != nil {
-		_ = ipc.WriteMessage(conn, ipc.KindKeyframeReq, nil)
+		_ = conn.WriteMessage(ipc.KindKeyframeReq, nil)
 	}
 }

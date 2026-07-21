@@ -28,7 +28,7 @@ import (
 //   As SOURCE (host copied):     poll clipagent 'R' → clipfann → (on clipfreq) read bytes → clipfdat
 //   As DESTINATION (viewer copied): clipfann → clipfreq (eager) → assemble clipfdat → temp file → clipagent 'W'
 type clipFiles struct {
-	conn net.Conn // to the transport (clipf* ride ipc.KindFileData → viewer file channel)
+	conn *ipc.Conn // to the transport (clipf* ride ipc.KindFileData → viewer file channel); writes serialized
 
 	mu       sync.Mutex
 	lastRead string                 // last host CF_HDROP paths seen (echo/change guard)
@@ -47,7 +47,7 @@ type clipInASM struct {
 	pathsWritten []string // temp files written, to stage on the host clipboard
 }
 
-func newClipFiles(conn net.Conn) *clipFiles {
+func newClipFiles(conn *ipc.Conn) *clipFiles {
 	return &clipFiles{conn: conn, outFiles: map[string][]string{}, inAsm: map[string]*clipInASM{}}
 }
 
@@ -56,7 +56,7 @@ func (cf *clipFiles) send(m map[string]interface{}) {
 	if err != nil {
 		return
 	}
-	_ = ipc.WriteMessage(cf.conn, ipc.KindFileData, b)
+	_ = cf.conn.WriteMessage(ipc.KindFileData, b)
 }
 
 // poll watches the HOST clipboard (via the clipagent) for a file copy and

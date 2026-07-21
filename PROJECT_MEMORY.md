@@ -187,6 +187,23 @@ moves to **Working Features** after it is confirmed working on real hardware.
   forever: it settles on `saved` (done), `failed` (error), or a per-id timeout
   ("Delivered (unconfirmed)"). Do NOT reintroduce any single "current transfer"
   reference — it strands transfer 2..N when transfer 1 holds the slot.
+- **LD-19 — File transfer (esp. large files) runs OFF the input-injection/capture
+  execution path and can never block or freeze remote control; all writes to a
+  shared IPC connection are SERIALIZED; interrupted transfers are explicitly
+  reported and their partial files deleted — never silently truncated.** The
+  transport↔worker `net.Conn` is written by many goroutines (input, file chunks,
+  keyframe reqs; video frames, clipboard, chat, export); a framed message is two
+  writes (header+payload), so concurrent writers interleave and corrupt the
+  stream → the reader errors/blocks → input + capture wedge forever (a 71 MB file
+  racing with live input reproduced it). Fix: `ipc.Conn` wraps the conn with a
+  write mutex (`NewConn`; all writes go through `conn.WriteMessage`); reads stay
+  lock-free (one reader per direction). The worker also hands `KindFileData` to a
+  DEDICATED drain goroutine (buffered chan), so disk writes never delay
+  `KindInput`. `filerecv` tracks announced-size vs written and, on `end`, acks
+  `saved` only if complete — else deletes the partial and sends `{t:'failed'}`;
+  `closeAll`/create-error/write-error do the same. Do NOT write to the worker
+  conn with the bare `ipc.WriteMessage(conn,…)` package func — always the
+  `*ipc.Conn` method, or the interleave bug returns.
 
 ---
 
@@ -308,6 +325,30 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-21 — Large file froze remote control: IPC write race in the Go
+  transport/worker (r69). Implements LD-19.** Log evidence: host `worker.log`
+  logged `receiving file …SADP__EN.zip size=71581150` then NOTHING ever again;
+  viewer logged 3 files `ack TIMEOUT` + 2 min of `input mv dropped — no live
+  viewer peer` starting the instant the big file began; the file landed truncated
+  at 756 KB. ROOT CAUSE (not "blocking write starves input" — sharper): the single
+  transport↔worker `net.Conn` is written by many goroutines, and `ipc.WriteMessage`
+  emits header+payload as two unsynchronized `Write`s. A 71 MB transfer = ~2000
+  chunk writes racing with live input + keyframe reqs → interleaved partial
+  messages corrupt the frame stream → the worker's `ReadMessage` reads a bogus
+  length → reader loop errors/blocks → input AND file processing wedge forever.
+  Small files (few chunks) rarely collided, so 1–3 worked. FIX (4 parts): (1)
+  `ipc.Conn` wrapper serializes all writes with a mutex (`agent/ipc/ipc.go`);
+  every worker-conn write on both sides now goes through `conn.WriteMessage`
+  (transport.go, worker.go, clipboard.go, clipfiles_windows.go, filerecv.go).
+  (2) worker hands `KindFileData` to a dedicated drain goroutine (buffered chan)
+  so disk I/O never delays `KindInput` injection (worker.go). (3) `filerecv`
+  tracks size-vs-written and reports `{t:'failed'}` + deletes the partial on
+  truncation / create-error / write-error / session-teardown (`closeAll`) —
+  never a silent 756 KB truncation. (4) r68's client 30 s ack-timeout stays as
+  the backstop. Platform-guarded: pure Go serialization, no wire-format/logic
+  change; Win↔Win capture/input/secure-desktop paths unchanged (it FIXES a
+  Win↔Win freeze); macOS daemon shares the IPC and benefits too. Builds + vets
+  clean locally.
 - **2026-07-21 — File transfer r67 follow-up: no-hang confirmation + per-id
   diagnostics (r68). Implements LD-18.** Reported: viewer sends 5 files, host
   saves file 1, files 2–5 stuck at "Delivered — confirming…" forever, never on

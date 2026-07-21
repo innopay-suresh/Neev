@@ -58,6 +58,12 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		return err
 	}
 	defer conn.Close()
+	// Serialize every write to this connection: the reader goroutine, the capture
+	// loop, clipboard, chat, and file-export all write concurrently, and an
+	// interleaved partial message corrupts the stream (a large file transfer
+	// racing with input is what wedged input + capture in the field). One reader
+	// per direction, so reads stay lock-free.
+	ic := ipc.NewConn(conn)
 	log.Info().Int("port", port).Msg("capture worker connected to transport")
 
 	// Stop streaming the instant this session leaves the physical console (a
@@ -96,18 +102,18 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 
 	// Text clipboard both ways (viewer↔host) so copy-paste keeps working in
 	// TransportMode where the app no longer hosts. Runs as the logged-in user.
-	clip := newClipSync(conn)
+	clip := newClipSync(ic)
 	go clip.poll(runCtx)
 
 	// File transfer both ways: viewer→host lands in Downloads; host→viewer pops a
 	// picker and streams back over the same conn.
-	files := newFileReceiver(conn)
+	files := newFileReceiver(ic)
 	defer files.closeAll()
 
 	// File CLIPBOARD (Ctrl+C a file → Ctrl+V on the other machine), reusing the
 	// clipf* protocol + the neev_helper clipagent. Polls the host clipboard for
 	// file copies; handles viewer clipf* over the same file channel.
-	cfiles := newClipFiles(conn)
+	cfiles := newClipFiles(ic)
 	clipFilesStop := make(chan struct{})
 	go cfiles.poll(clipFilesStop)
 	defer close(clipFilesStop)
@@ -117,9 +123,23 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	chatEnsure(func(reply string) {
 		msg, err := json.Marshal(map[string]string{"k": "chat", "t": reply})
 		if err == nil {
-			_ = ipc.WriteMessage(conn, ipc.KindChat, msg)
+			_ = ic.WriteMessage(ipc.KindChat, msg)
 		}
 	})
+
+	// File-transfer messages are handled on a DEDICATED goroutine, off the reader
+	// goroutine, so a slow/large file write can never delay input injection — file
+	// transfer must never be able to freeze remote control. Ordered (single
+	// draining goroutine), so a transfer's offer/data/end stay in sequence.
+	fileCh := make(chan []byte, 256)
+	go func() {
+		for payload := range fileCh {
+			// {k:ft} explicit transfer first; else {k:clipf*} file-clipboard.
+			if !files.handle(payload) {
+				cfiles.handle(payload)
+			}
+		}
+	}()
 
 	// Reader: transport -> worker messages (keyframe requests, input, clipboard).
 	// Ends when the transport goes away, which also unblocks the capture loop via
@@ -127,8 +147,9 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
+		defer close(fileCh) // stop + drain the file goroutine when the reader ends
 		for {
-			kind, payload, err := ipc.ReadMessage(conn)
+			kind, payload, err := ic.ReadMessage()
 			if err != nil {
 				return
 			}
@@ -149,11 +170,14 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					injector.Post(payload)
 				}
 			case ipc.KindFileData:
-				// The file channel carries both explicit transfers ({k:ft}) and
-				// file-clipboard control ({k:clipf*}). Try the transfer receiver
-				// first; anything else is a clipboard-file message.
-				if !files.handle(payload) {
-					cfiles.handle(payload)
+				// Hand off to the file goroutine (never write to disk on this
+				// goroutine — input must not wait behind file I/O). Blocks only if
+				// 256 messages are already backlogged (disk far behind network),
+				// which is bounded and vastly better than freezing input.
+				select {
+				case fileCh <- payload:
+				case <-runCtx.Done():
+					return
 				}
 			}
 		}
@@ -173,7 +197,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		return err
 	}
 	defer enc.Close()
-	if err := ipc.WriteMessage(conn, ipc.KindVideoInfo, ipc.EncodeVideoInfo(w, h)); err != nil {
+	if err := ic.WriteMessage(ipc.KindVideoInfo, ipc.EncodeVideoInfo(w, h)); err != nil {
 		return err
 	}
 
@@ -222,7 +246,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 			if err != nil {
 				return err
 			}
-			_ = ipc.WriteMessage(conn, ipc.KindVideoInfo, ipc.EncodeVideoInfo(fw, fh))
+			_ = ic.WriteMessage(ipc.KindVideoInfo, ipc.EncodeVideoInfo(fw, fh))
 			wantKeyframe.Store(true)
 		}
 
@@ -236,7 +260,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		} else {
 			framesSinceKey++
 		}
-		if err := ipc.WriteMessage(conn, ipc.KindVideoFrame,
+		if err := ic.WriteMessage(ipc.KindVideoFrame,
 			ipc.EncodeVideoFrame(out.IsKeyframe, out.Data)); err != nil {
 			log.Info().Err(err).Msg("worker: transport disconnected")
 			return err
