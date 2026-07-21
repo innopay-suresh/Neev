@@ -178,6 +178,15 @@ moves to **Working Features** after it is confirmed working on real hardware.
   `&& !unattendedEnabled` clamp (it made the toggle inert on every always-on host
   that had an unattended password). Consent-on-by-default (`askOnConnect` default
   `true`) stands; silent unattended access requires explicitly turning it OFF.
+- **LD-18 — File-transfer confirmation/acknowledgment is tracked per-transfer by
+  unique ID — never a single shared slot/callback/completer. Every transfer in a
+  batch must be able to confirm (or fail) independently.** Incoming state is
+  `_incoming[id]`; the reserved destination is `inc.reserved` (one Future per id);
+  the `{t:'saved',id}` / `{t:'failed',id}` acks and the sender's ack timers
+  (`_ackTimers[id]`) are all keyed by id. A send never spins "confirming…"
+  forever: it settles on `saved` (done), `failed` (error), or a per-id timeout
+  ("Delivered (unconfirmed)"). Do NOT reintroduce any single "current transfer"
+  reference — it strands transfer 2..N when transfer 1 holds the slot.
 
 ---
 
@@ -299,6 +308,26 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-21 — File transfer r67 follow-up: no-hang confirmation + per-id
+  diagnostics (r68). Implements LD-18.** Reported: viewer sends 5 files, host
+  saves file 1, files 2–5 stuck at "Delivered — confirming…" forever, never on
+  disk; `worker.log` silent (so the receive path is the Dart `FileTransferManager`,
+  NOT the Go worker — confirmed). INVESTIGATION: read every layer (sender queue,
+  receiver, `_finishIncoming`, ack handler, file-channel `onMessage` wiring on
+  both offerer+answerer) and REPRODUCED concurrent `reserveUnique` (5 same-name
+  after 7 pre-existing → 5 distinct paths, no hang). The ack path is ALREADY
+  per-id — the "single shared slot" theory does not match the source. The true
+  drop (offers 2–5 leaving no placeholder ⇒ not reaching/completing on the host)
+  is only pinnable from a real run, so per the KP-2 "no blind behavior changes"
+  rule we did NOT invent a fix. Shipped: (A) per-id diag logs on both ends
+  (`ft` tag): recv offer / reserved / recv end / wrote / ack saved / recv
+  saved|failed, sender sent-end / ack timeout — the next 8-file run's app.log
+  shows exactly where 2–5 die. (B) HARDENING so it can never hang silently:
+  `_finishIncoming` now emits `{t:'failed',id,err}` on any exception; the sender
+  arms a per-id 30 s ack timeout (`_ackTimers[id]`) that settles a stuck send as
+  "Delivered (unconfirmed)" instead of an infinite spinner; new `failed` handler
+  + `FileTransfer.unconfirmed`. Everything keyed by transfer id (LD-18). Part C
+  (precise fix at the real drop point) follows once the instrumented log is in.
 - **2026-07-21 — File transfer: fixed silent overwrite (only last file survived)
   + false "Sent"; consent toggle actually wired (r67). Implements LD-16 + LD-17.**
   • **Overwrite (data loss):** the Flutter-host receive path allocated the

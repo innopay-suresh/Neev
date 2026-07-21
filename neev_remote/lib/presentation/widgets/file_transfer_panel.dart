@@ -143,8 +143,10 @@ class _TransferTile extends StatelessWidget {
       FileStatus.done => incoming
           ? (t.savedPath != null ? 'Saved to Downloads/NeevRemote' : 'Received')
           : 'Saved on host',
-      // Bytes delivered, waiting for the host to confirm the file was saved.
-      FileStatus.sent => 'Delivered — confirming…',
+      // Bytes delivered; waiting for the host to confirm the save — or, once the
+      // ack times out, settled as delivered-but-unconfirmed (never spins forever).
+      FileStatus.sent =>
+        t.unconfirmed ? 'Delivered (unconfirmed)' : 'Delivered — confirming…',
       FileStatus.active =>
         '${_fmtBytes(t.transferred)} / ${_fmtBytes(t.size)}',
     };

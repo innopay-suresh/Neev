@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:uuid/uuid.dart';
 
+import '../../core/diag_log.dart';
 import 'file_store.dart';
 
 enum FileDirection { incoming, outgoing }
@@ -35,6 +37,10 @@ class FileTransfer {
   FileStatus status;
   String? savedPath; // where an incoming file landed
   String? error;
+  // Outgoing only: bytes delivered but the host never confirmed within the ack
+  // timeout. Not a failure (it may well have saved) — just not confirmed. Shown
+  // as "Delivered (unconfirmed)" so it never spins "confirming…" forever.
+  bool unconfirmed = false;
   // True when this transfer is a clipboard mirror (copy→paste): the receiver
   // stages it to temp and puts it on the OS clipboard instead of Downloads.
   bool clipboard;
@@ -118,6 +124,15 @@ class FileTransferManager {
   final List<FileTransfer> transfers = [];
   final Map<String, _Incoming> _incoming = {};
 
+  /// Per-transfer ack timers (outgoing). Keyed by transfer id — NEVER a single
+  /// shared slot — so each send independently waits for its own {t:'saved'} and
+  /// each independently falls back to "unconfirmed" if the host never acks.
+  final Map<String, Timer> _ackTimers = {};
+
+  /// How long an outgoing transfer waits for the host's saved-ack before it
+  /// stops showing "confirming…" and settles as delivered-but-unconfirmed.
+  static const Duration _ackTimeout = Duration(seconds: 30);
+
   /// Send [bytes] as [name] to the peer. Returns the transfer, or null if the
   /// file is too large.
   Future<FileTransfer?> sendFile(String name, Uint8List bytes,
@@ -180,6 +195,19 @@ class FileTransferManager {
     // this to done. If the host never acks (e.g. an older build), it stays
     // "Delivered — confirming…", which is honest, not a false "Sent".
     t.status = FileStatus.sent;
+    DiagLog.log('ft', 'sent end id=$id name=$name size=${bytes.length}');
+    // Arm a per-id timeout so this transfer can never spin "confirming…"
+    // forever if the ack is lost/never sent — it settles as "unconfirmed".
+    _ackTimers[id]?.cancel();
+    _ackTimers[id] = Timer(_ackTimeout, () {
+      _ackTimers.remove(id);
+      if (t.status == FileStatus.sent) {
+        t.unconfirmed = true;
+        DiagLog.log('ft', 'ack TIMEOUT id=$id — no saved/failed in '
+            '${_ackTimeout.inSeconds}s');
+        onChange();
+      }
+    });
     onChange();
     return t;
   }
@@ -216,7 +244,15 @@ class FileTransferManager {
         // placeholder is on disk before any later transfer picks a name. This is
         // what makes rapid back-to-back sends land as separate files instead of
         // overwriting one shared slot.
-        if (store.supported) inc.reserved = store.reserveUnique(name);
+        DiagLog.log('ft', 'recv offer id=$id name=$name size=$size');
+        if (store.supported) {
+          inc.reserved = store.reserveUnique(name);
+          inc.reserved!.then((p) {
+            DiagLog.log('ft', 'reserved id=$id path=$p');
+          }).catchError((e) {
+            DiagLog.log('ft', 'reserve FAILED id=$id err=$e');
+          });
+        }
         _incoming[id] = inc;
         onChange();
         break;
@@ -230,17 +266,39 @@ class FileTransferManager {
         onChange();
         break;
       case 'end':
+        DiagLog.log('ft', 'recv end id=$id');
         final inc = _incoming.remove(id);
-        if (inc != null) _finishIncoming(inc);
+        if (inc != null) {
+          _finishIncoming(inc);
+        } else {
+          DiagLog.log('ft', 'recv end id=$id but NO pending incoming (dropped)');
+        }
         break;
       case 'saved':
         // RECEIVER confirmed a distinct file was fully written. Flip the matching
         // OUTGOING transfer from "sent" (delivered) to done (confirmed). This is
         // the ONLY place a send is allowed to show success.
+        DiagLog.log('ft', 'recv saved id=$id');
+        _ackTimers.remove(id)?.cancel();
         for (final tr in transfers) {
           if (tr.id == id && tr.direction == FileDirection.outgoing) {
             tr.savedPath = m['path'] as String?;
+            tr.unconfirmed = false;
             tr.status = FileStatus.done;
+            onChange();
+            break;
+          }
+        }
+        break;
+      case 'failed':
+        // RECEIVER couldn't save (write/reserve error). Surface a real failure
+        // on the sender instead of an endless "confirming…".
+        DiagLog.log('ft', 'recv failed id=$id err=${m['err']}');
+        _ackTimers.remove(id)?.cancel();
+        for (final tr in transfers) {
+          if (tr.id == id && tr.direction == FileDirection.outgoing) {
+            tr.status = FileStatus.error;
+            tr.error = (m['err'] as String?) ?? 'Host could not save the file';
             onChange();
             break;
           }
@@ -270,6 +328,8 @@ class FileTransferManager {
         // Fall back to reserving now only if the offer path somehow wasn't set.
         path = await (inc.reserved ?? store.reserveUnique(inc.ft.name));
         await store.writeReserved(path, bytes);
+        DiagLog.log('ft',
+            'wrote id=${inc.ft.id} bytes=${bytes.length} path=$path');
         // Clipboard mirror also lands in Downloads (always findable) AND on the
         // OS clipboard for Ctrl+V — CF_HDROP paste is fragile across the
         // SYSTEM / cross-user boundary, so the saved file is the reliable path.
@@ -284,10 +344,15 @@ class FileTransferManager {
       if (path != null) {
         send(jsonEncode(
             {'k': 'ft', 't': 'saved', 'id': inc.ft.id, 'path': path}));
+        DiagLog.log('ft', 'ack saved id=${inc.ft.id}');
       }
     } catch (e) {
       inc.ft.status = FileStatus.error;
       inc.ft.error = e.toString();
+      DiagLog.log('ft', 'receive FAILED id=${inc.ft.id} err=$e');
+      // Tell the sender it failed so it doesn't spin "confirming…" forever.
+      send(jsonEncode(
+          {'k': 'ft', 't': 'failed', 'id': inc.ft.id, 'err': e.toString()}));
     }
     onChange();
   }
