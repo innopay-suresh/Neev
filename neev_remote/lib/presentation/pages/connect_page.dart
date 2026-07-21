@@ -127,11 +127,15 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       _lastChatCount = msgs.length;
     });
 
-    // Attended access: prompt on incoming connections unless unattended access
-    // is enabled or the user turned prompting off (then accept silently with
-    // the default permissions), AnyDesk-style.
+    // The "Ask before allowing connections" toggle is authoritative and
+    // independent of unattended access: a fixed/unattended password governs
+    // REACHABILITY (the box stays dial-able), this toggle governs PROMPTING.
+    // When it's ON, every incoming connection shows the host an Accept/Dismiss
+    // prompt; turn it OFF for silent unattended access. (Previously this was
+    // clamped with `&& !unattendedEnabled`, which made the toggle inert on every
+    // always-on host that had an unattended password — the reported bug.)
     final _s = ref.watch(settingsProvider);
-    service.promptOnConnect = _s.askOnConnect && !_s.unattendedEnabled;
+    service.promptOnConnect = _s.askOnConnect;
     service.defaultPermControl = _s.defaultAllowControl;
     service.defaultPermClipboard = _s.defaultAllowClipboard;
     service.defaultPermFiles = _s.defaultAllowFiles;

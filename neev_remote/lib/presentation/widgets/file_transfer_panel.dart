@@ -78,7 +78,10 @@ class FileTransferList extends StatelessWidget {
   Widget build(BuildContext context) {
     final transfers = service.fileTransfers;
     if (transfers.isEmpty) return const SizedBox.shrink();
-    final anyDone = transfers.any((t) => t.status != FileStatus.active);
+    // "Clear finished" only removes host-confirmed (done) or failed rows — match
+    // clearFinished(), so it doesn't offer to clear rows it won't actually clear.
+    final anyDone = transfers.any(
+        (t) => t.status == FileStatus.done || t.status == FileStatus.error);
     return Container(
       width: 320,
       constraints: const BoxConstraints(maxHeight: 260),
@@ -139,7 +142,9 @@ class _TransferTile extends StatelessWidget {
       FileStatus.error => t.error ?? 'Failed',
       FileStatus.done => incoming
           ? (t.savedPath != null ? 'Saved to Downloads/NeevRemote' : 'Received')
-          : 'Sent',
+          : 'Saved on host',
+      // Bytes delivered, waiting for the host to confirm the file was saved.
+      FileStatus.sent => 'Delivered — confirming…',
       FileStatus.active =>
         '${_fmtBytes(t.transferred)} / ${_fmtBytes(t.size)}',
     };

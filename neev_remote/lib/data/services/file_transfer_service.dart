@@ -7,7 +7,11 @@ import 'file_store.dart';
 
 enum FileDirection { incoming, outgoing }
 
-enum FileStatus { active, done, error }
+// active = bytes moving; sent = all bytes delivered to the channel but the host
+// has NOT yet confirmed a distinct file was saved (never show this as success);
+// done = host confirmed the file is fully + uniquely written (or, for an incoming
+// transfer, we wrote it); error = failed/cancelled.
+enum FileStatus { active, sent, done, error }
 
 /// One file transfer, either being sent to or received from the remote peer.
 class FileTransfer {
@@ -43,12 +47,20 @@ class _Incoming {
   _Incoming(this.ft) : buf = BytesBuilder(copy: false);
   final FileTransfer ft;
   final BytesBuilder buf;
+  // Unique destination path, reserved (atomically created) the MOMENT the offer
+  // arrives — keyed off this transfer, never a shared/reused path. Because the
+  // placeholder exists on disk before the next offer is handled, two rapid
+  // transfers can never resolve to the same name and clobber each other.
+  Future<String>? reserved;
 }
 
 /// Chunked file transfer over a text data channel. Wire messages (all JSON):
 ///   {k:'ft', t:'offer', id, name, size}   announce a transfer
 ///   {k:'ft', t:'data',  id, seq, d}       base64 chunk (ordered)
-///   {k:'ft', t:'end',   id}               transfer complete
+///   {k:'ft', t:'end',   id}               sender finished pushing bytes
+///   {k:'ft', t:'saved', id, path}         RECEIVER→sender: file fully + uniquely
+///                                         written (the only thing that turns a
+///                                         send from "Delivered" into confirmed)
 ///   {k:'ft', t:'cancel',id}               aborted
 /// Phase 1 buffers each transfer in memory (see [maxFile]); streaming to disk
 /// is a later refinement.
@@ -163,7 +175,11 @@ class FileTransferManager {
     if (t.status == FileStatus.error) return t;
     send(jsonEncode({'k': 'ft', 't': 'end', 'id': id}));
     t.transferred = t.size;
-    t.status = FileStatus.done;
+    // NOT "done" — bytes are on the channel, but the host hasn't confirmed a
+    // distinct file was saved yet. Only a {t:'saved'} ack (handled below) flips
+    // this to done. If the host never acks (e.g. an older build), it stays
+    // "Delivered — confirming…", which is honest, not a false "Sent".
+    t.status = FileStatus.sent;
     onChange();
     return t;
   }
@@ -195,7 +211,13 @@ class FileTransferManager {
           return;
         }
         transfers.insert(0, ft);
-        _incoming[id] = _Incoming(ft);
+        final inc = _Incoming(ft);
+        // Reserve a UNIQUE destination now, at offer time (not at 'end'), so the
+        // placeholder is on disk before any later transfer picks a name. This is
+        // what makes rapid back-to-back sends land as separate files instead of
+        // overwriting one shared slot.
+        if (store.supported) inc.reserved = store.reserveUnique(name);
+        _incoming[id] = inc;
         onChange();
         break;
       case 'data':
@@ -211,11 +233,28 @@ class FileTransferManager {
         final inc = _incoming.remove(id);
         if (inc != null) _finishIncoming(inc);
         break;
+      case 'saved':
+        // RECEIVER confirmed a distinct file was fully written. Flip the matching
+        // OUTGOING transfer from "sent" (delivered) to done (confirmed). This is
+        // the ONLY place a send is allowed to show success.
+        for (final tr in transfers) {
+          if (tr.id == id && tr.direction == FileDirection.outgoing) {
+            tr.savedPath = m['path'] as String?;
+            tr.status = FileStatus.done;
+            onChange();
+            break;
+          }
+        }
+        break;
       case 'cancel':
         final inc = _incoming.remove(id);
         if (inc != null) {
           inc.ft.status = FileStatus.error;
           inc.ft.error = 'Cancelled by sender';
+          // Drop the empty placeholder we reserved at offer time.
+          if (store.supported) {
+            inc.reserved?.then((p) => store.deleteQuietly(p)).catchError((_) {});
+          }
           onChange();
         }
         break;
@@ -225,22 +264,27 @@ class FileTransferManager {
   Future<void> _finishIncoming(_Incoming inc) async {
     try {
       final bytes = inc.buf.takeBytes();
-      if (inc.ft.clipboard) {
-        // Clipboard mirror: save to Downloads (ALWAYS visible + findable) AND
-        // put it on the OS clipboard for Ctrl+V. Downloads is the reliable
-        // fallback because CF_HDROP clipboard paste is fragile across the
-        // SYSTEM / cross-user boundary, whereas a saved file always lands.
-        String? path;
-        if (store.supported) {
-          path = await store.saveToDownloads(inc.ft.name, bytes);
-        }
-        inc.ft.savedPath = path;
-        if (path != null) await onClipboardFile?.call(path);
-      } else if (store.supported) {
-        inc.ft.savedPath = await store.saveToDownloads(inc.ft.name, bytes);
+      String? path;
+      if (store.supported) {
+        // Write to the destination reserved at offer time (unique per transfer).
+        // Fall back to reserving now only if the offer path somehow wasn't set.
+        path = await (inc.reserved ?? store.reserveUnique(inc.ft.name));
+        await store.writeReserved(path, bytes);
+        // Clipboard mirror also lands in Downloads (always findable) AND on the
+        // OS clipboard for Ctrl+V — CF_HDROP paste is fragile across the
+        // SYSTEM / cross-user boundary, so the saved file is the reliable path.
+        if (inc.ft.clipboard) await onClipboardFile?.call(path);
       }
+      inc.ft.savedPath = path;
       inc.ft.transferred = inc.ft.size == 0 ? bytes.length : inc.ft.size;
       inc.ft.status = FileStatus.done;
+      // Tell the sender the file is fully + uniquely saved, so its status can go
+      // from "Delivered" to confirmed. Without this the sender can only ever
+      // guess — which is how 4 overwrites previously showed as 5 "Sent".
+      if (path != null) {
+        send(jsonEncode(
+            {'k': 'ft', 't': 'saved', 'id': inc.ft.id, 'path': path}));
+      }
     } catch (e) {
       inc.ft.status = FileStatus.error;
       inc.ft.error = e.toString();
@@ -249,7 +293,10 @@ class FileTransferManager {
   }
 
   void clearFinished() {
-    transfers.removeWhere((t) => t.status != FileStatus.active);
+    // Keep "active" AND "sent" (delivered-but-unconfirmed) rows — only remove
+    // truly finished ones (host-confirmed done, or failed).
+    transfers.removeWhere(
+        (t) => t.status == FileStatus.done || t.status == FileStatus.error);
     onChange();
   }
 }

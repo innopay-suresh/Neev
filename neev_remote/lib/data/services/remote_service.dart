@@ -599,6 +599,17 @@ class RemoteService extends ChangeNotifier {
         (machine != null && machine.id.isNotEmpty
             ? machine.id
             : await _persistentAgentId());
+    // Read the "Ask before allowing connections" setting LIVE, right as hosting
+    // starts — so the host's Accept/Dismiss prompt reflects the CURRENT toggle
+    // rather than a value a widget build may or may not have pushed onto the
+    // service. (connect_page also keeps this field updated for mid-session
+    // toggles.) This is authoritative: it no longer depends on any UI being
+    // built, and it is NOT clamped by unattended access — an unattended password
+    // governs reachability, this toggle governs prompting.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      promptOnConnect = prefs.getBool('askOnConnect') ?? true;
+    } catch (_) {}
     _hostStatus = HostStatus.starting;
     _hostError = null;
     DiagLog.log('host', 'startHosting relay=$relayUrl agentId=$agentId '

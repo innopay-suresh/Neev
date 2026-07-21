@@ -8,9 +8,8 @@ import 'package:path_provider/path_provider.dart';
 class FileStore {
   bool get supported => true;
 
-  /// Saves [bytes] as [name] (sanitised, never overwriting) and returns the
-  /// absolute path written.
-  Future<String> saveToDownloads(String name, Uint8List bytes) async {
+  /// Resolves (creating if needed) the NeevRemote destination directory.
+  Future<Directory> _destDir() async {
     Directory? base;
     try {
       base = await getDownloadsDirectory();
@@ -34,19 +33,63 @@ class FileStore {
     base ??= await getApplicationDocumentsDirectory();
     final dir = Directory('${base.path}${Platform.pathSeparator}NeevRemote');
     if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
 
+  String _sanitize(String name) {
     final safe = name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
-    final cleaned = safe.isEmpty ? 'file' : safe;
-    var path = '${dir.path}${Platform.pathSeparator}$cleaned';
-    var i = 1;
-    while (await File(path).exists()) {
-      final dot = cleaned.lastIndexOf('.');
-      final stem = dot > 0 ? cleaned.substring(0, dot) : cleaned;
-      final ext = dot > 0 ? cleaned.substring(dot) : '';
-      path = '${dir.path}${Platform.pathSeparator}$stem ($i)$ext';
-      i++;
+    return safe.isEmpty ? 'file' : safe;
+  }
+
+  /// Atomically reserves a UNIQUE destination path for [name] and returns it,
+  /// creating an empty placeholder file so no concurrent transfer can pick the
+  /// same name. `create(exclusive: true)` fails if the path already exists, so
+  /// the dedup is race-free — unlike a check-then-write, two rapid transfers of
+  /// the same-named file can never both win the same slot and clobber. Call
+  /// [writeReserved] with the returned path to fill it.
+  Future<String> reserveUnique(String name) async {
+    final dir = await _destDir();
+    final sep = Platform.pathSeparator;
+    final cleaned = _sanitize(name);
+    final dot = cleaned.lastIndexOf('.');
+    final stem = dot > 0 ? cleaned.substring(0, dot) : cleaned;
+    final ext = dot > 0 ? cleaned.substring(dot) : '';
+    for (var i = 0; i < 10000; i++) {
+      final path = i == 0
+          ? '${dir.path}$sep$cleaned'
+          : '${dir.path}$sep$stem ($i)$ext';
+      try {
+        await File(path).create(exclusive: true);
+        return path;
+      } on FileSystemException {
+        // Exists (or lost the create race) — try the next suffix.
+        continue;
+      }
     }
+    // Pathological fallback: 10k collisions. Return the base path; the write
+    // will overwrite rather than fail the transfer outright.
+    return '${dir.path}$sep$cleaned';
+  }
+
+  /// Writes [bytes] to a path previously returned by [reserveUnique].
+  Future<void> writeReserved(String path, Uint8List bytes) async {
     await File(path).writeAsBytes(bytes, flush: true);
+  }
+
+  /// Best-effort delete (used to clean up a reserved placeholder on cancel).
+  Future<void> deleteQuietly(String path) async {
+    try {
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
+  /// Saves [bytes] as [name] (sanitised, never overwriting) and returns the
+  /// absolute path written. Used for one-shot saves (e.g. clipboard staging);
+  /// the streamed transfer path uses [reserveUnique] + [writeReserved].
+  Future<String> saveToDownloads(String name, Uint8List bytes) async {
+    final path = await reserveUnique(name);
+    await writeReserved(path, bytes);
     return path;
   }
 

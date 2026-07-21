@@ -23,15 +23,21 @@ import (
 // the user's desktop and streams the chosen file back. The 'file' channel is
 // reliable + ordered, so chunks arrive/append in order.
 type fileReceiver struct {
-	conn net.Conn // to send export data back to the transport
-	mu   sync.Mutex
-	open map[string]*os.File
-	dir  string
-	seq  atomic.Uint64
+	conn     net.Conn // to send export data back to the transport
+	mu       sync.Mutex
+	open     map[string]*os.File
+	openPath map[string]string // id → final unique path (for the saved ack)
+	dir      string
+	seq      atomic.Uint64
 }
 
 func newFileReceiver(conn net.Conn) *fileReceiver {
-	return &fileReceiver{conn: conn, open: map[string]*os.File{}, dir: downloadsDir()}
+	return &fileReceiver{
+		conn:     conn,
+		open:     map[string]*os.File{},
+		openPath: map[string]string{},
+		dir:      downloadsDir(),
+	}
 }
 
 // downloadsDir returns the user's Downloads folder (the worker runs as that
@@ -75,6 +81,7 @@ func (f *fileReceiver) handle(payload []byte) bool {
 		}
 		f.mu.Lock()
 		f.open[m.ID] = file
+		f.openPath[m.ID] = path
 		f.mu.Unlock()
 		log.Info().Str("path", path).Int64("size", m.Size).Msg("worker: receiving file")
 	case "data":
@@ -91,11 +98,19 @@ func (f *fileReceiver) handle(payload []byte) bool {
 	case "end", "cancel":
 		f.mu.Lock()
 		file := f.open[m.ID]
+		path := f.openPath[m.ID]
 		delete(f.open, m.ID)
+		delete(f.openPath, m.ID)
 		f.mu.Unlock()
 		if file != nil {
 			_ = file.Close()
 			log.Info().Str("id", m.ID).Str("t", m.T).Msg("worker: file transfer finished")
+			// Confirm a distinct file was written so the sender can show real
+			// success instead of an optimistic "Sent". Only on 'end' (a real
+			// completion); a 'cancel' leaves the partial file and sends nothing.
+			if m.T == "end" && path != "" {
+				f.sendFT(map[string]interface{}{"k": "ft", "t": "saved", "id": m.ID, "path": path})
+			}
 		}
 	case "request":
 		// Viewer asked the host for a file → pop a native picker on the host
@@ -159,6 +174,7 @@ func (f *fileReceiver) closeAll() {
 	for id, file := range f.open {
 		_ = file.Close()
 		delete(f.open, id)
+		delete(f.openPath, id)
 	}
 }
 

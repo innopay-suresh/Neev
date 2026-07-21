@@ -7,6 +7,12 @@ class FileStore {
 
   Future<String> saveToDownloads(String name, Uint8List bytes) async => '';
 
+  Future<String> reserveUnique(String name) async => '';
+
+  Future<void> writeReserved(String path, Uint8List bytes) async {}
+
+  Future<void> deleteQuietly(String path) async {}
+
   /// Writes to a temp file and returns its path (null on web).
   Future<String?> saveToTemp(String name, Uint8List bytes) async => null;
 }

@@ -155,6 +155,29 @@ moves to **Working Features** after it is confirmed working on real hardware.
   stall ABORT the transfer — NEVER force-send into a full buffer (that saturates
   the shared channel and wedges both directions until reconnect, the "fails at
   file 5" bug). Go receiver releases every `*os.File` on end/cancel/teardown.
+- **LD-16 — Every incoming file transfer gets a UNIQUE destination — never a
+  shared/reused path or handle — and "Sent" status is only shown after the host
+  confirms the file was fully and uniquely saved.** The receiver reserves a
+  unique path the moment the `offer` arrives (Dart: `FileStore.reserveUnique`
+  atomically `create(exclusive:true)` a placeholder before the next offer is
+  handled; Go: `os.Create(uniquePath)` synchronously at offer on the single
+  reader goroutine), keyed off the transfer — so rapid back-to-back sends can
+  never resolve to the same name and clobber. The sender marks a transfer
+  `done` ONLY on an explicit receiver→sender `{k:'ft',t:'saved',id,path}` ack;
+  until then it is `sent` ("Delivered — confirming…"), never a false success.
+  Both the Dart receiver and the Go worker send the ack. Do NOT reintroduce a
+  save that picks its destination at `end` time via check-then-write (the TOCTOU
+  that let 4 same-named files overwrite one slot and all report "Sent").
+- **LD-17 — The "Ask before allowing connections" setting is authoritative and
+  read LIVE by `startHosting()`; it is NOT clamped by unattended access.** An
+  unattended/fixed password governs REACHABILITY; this toggle governs PROMPTING —
+  the two are independent. `startHosting` reads `askOnConnect` from prefs at the
+  moment hosting starts (not via a widget build), and the UI keeps it updated for
+  mid-session toggles. Verify via `app.log`: `promptOnConnect` must match the
+  actual toggle state, never be permanently `false`. Do NOT reintroduce the
+  `&& !unattendedEnabled` clamp (it made the toggle inert on every always-on host
+  that had an unattended password). Consent-on-by-default (`askOnConnect` default
+  `true`) stands; silent unattended access requires explicitly turning it OFF.
 
 ---
 
@@ -276,6 +299,35 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-21 — File transfer: fixed silent overwrite (only last file survived)
+  + false "Sent"; consent toggle actually wired (r67). Implements LD-16 + LD-17.**
+  • **Overwrite (data loss):** the Flutter-host receive path allocated the
+    destination at `end` time via a check-then-write dedup loop in
+    `saveToDownloads`, and `_finishIncoming` was fired un-awaited — so N same-named
+    transfers finishing close together all evaluated "does `foo.png` exist?" before
+    any had written, all picked the identical path, and the last write won (4
+    silent losses looked like 5 "Sent"). FIX: `FileStore.reserveUnique` atomically
+    `create(exclusive:true)` a unique placeholder the MOMENT the `offer` arrives
+    (`file_store_io.dart`); `_Incoming` carries that reserved path; `_finishIncoming`
+    writes to it via `writeReserved`. Race-free regardless of same-name. The Go
+    worker path (`filerecv.go`) already created the file synchronously at offer on
+    one goroutine — safe, unchanged behavior.
+  • **False "Sent":** the sender set `done` purely when its SCTP buffer drained —
+    no host confirmation existed on the wire. FIX: new `{k:'ft',t:'saved',id,path}`
+    ack sent by BOTH receivers (Dart `_finishIncoming`, Go `filerecv.go` on `end`).
+    New `FileStatus.sent` = "Delivered — confirming…"; a send flips to `done`
+    ("Saved on host") ONLY on the ack. If a host never acks it stays "Delivered"
+    (honest), never a false success. `clearFinished`/`anyDone` keep unconfirmed
+    rows. Cancel deletes the reserved placeholder.
+  • **Consent toggle inert (LD-17):** `promptOnConnect` was `askOnConnect &&
+    !unattendedEnabled` in `ConnectPage.build()` — so any always-on host with an
+    unattended password forced the prompt OFF regardless of the toggle (the
+    `promptOnConnect=false` every log showed). Also `startHosting` only LOGGED the
+    field, never read the setting. FIX: dropped the `&& !unattendedEnabled` clamp
+    (`connect_page.dart`); `startHosting` now reads `askOnConnect` from prefs LIVE
+    at start (`remote_service.dart`). Consent UI already existed + fully wired
+    (`_showConsentDialog`), so it now fires. Win↔Win video/input/secure-desktop
+    untouched; the only Go change is the additive `saved` ack.
 - **2026-07-15 — File transfer: fixed the "stops after 4 files" leak + multi-file
   select (r65).** ROOT CAUSE (not a literal pool of 4): the single bidirectional
   `file` SCTP data channel's send buffer (~16 MB libwebrtc default) saturated
