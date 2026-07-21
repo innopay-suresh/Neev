@@ -157,6 +157,16 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       return _ConnectedSession(service: service);
     }
 
+    // Connecting: full-screen animated sequence (locating → securing → …) with a
+    // glowing encrypted path, instead of a bare spinner on the Home shell.
+    if (service.viewerStatus == ViewerStatus.connecting) {
+      final target = _idController.text.trim();
+      return ConnectionSequence(
+        targetLabel: target.isEmpty ? 'Remote device' : target,
+        onCancel: () => service.disconnectViewer(),
+      );
+    }
+
     // First run with no server baked in / saved: ask for the server once.
     if (relayUrl.isEmpty) {
       return Scaffold(

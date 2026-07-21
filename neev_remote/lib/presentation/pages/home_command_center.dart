@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +10,221 @@ import '../../data/services/discovery_model.dart';
 import '../../data/services/file_transfer_service.dart' show FileStatus;
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
+
+/// Full-screen connection sequence shown while the viewer is connecting — a
+/// glowing encrypted path between this device and the remote, with named stages
+/// (locating → securing → verifying → negotiating) instead of a bare spinner.
+/// The parent swaps to the live session the moment status flips to connected, so
+/// this holds at the last pre-connect stage under a slow link (no fake looping).
+class ConnectionSequence extends StatefulWidget {
+  final String targetLabel;
+  final VoidCallback onCancel;
+  const ConnectionSequence({
+    super.key,
+    required this.targetLabel,
+    required this.onCancel,
+  });
+  @override
+  State<ConnectionSequence> createState() => _ConnectionSequenceState();
+}
+
+class _ConnectionSequenceState extends State<ConnectionSequence>
+    with SingleTickerProviderStateMixin {
+  static const _stages = [
+    'Locating device',
+    'Establishing secure channel',
+    'Verifying identity',
+    'Negotiating display quality',
+  ];
+  late final AnimationController _c;
+  int _stage = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1400))
+      ..repeat();
+    _timer = Timer.periodic(const Duration(milliseconds: 420), (_) {
+      if (!mounted) return;
+      // Advance through the stages, then hold on the last one until the real
+      // connection completes (the parent replaces this screen on 'connected').
+      if (_stage < _stages.length - 1) setState(() => _stage++);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: Container(
+          width: 520,
+          padding: const EdgeInsets.fromLTRB(36, 40, 36, 30),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadii.panel),
+            border: Border.all(color: AppColors.border),
+            boxShadow: AppShadows.dock,
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(
+              height: 96,
+              child: AnimatedBuilder(
+                animation: _c,
+                builder: (_, __) => CustomPaint(
+                  painter: _PathPainter(_c.value),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _EndNode(icon: Icons.laptop_windows_rounded, label: 'This PC'),
+                      _EndNode(
+                          icon: Icons.dns_rounded,
+                          label: widget.targetLabel,
+                          remote: true),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 30),
+            Text(_stages[_stage],
+                style: AppTypography.pageTitle.copyWith(fontSize: 18)),
+            const SizedBox(height: 4),
+            Text('Securing an end-to-end encrypted connection…',
+                style: AppTypography.caption),
+            const SizedBox(height: 22),
+            ...List.generate(_stages.length, (i) {
+              final done = i < _stage;
+              final active = i == _stage;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(children: [
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: done
+                        ? const Icon(Icons.check_circle_rounded,
+                            size: 18, color: AppColors.success)
+                        : active
+                            ? const CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation(
+                                    AppColors.primary))
+                            : Icon(Icons.circle_outlined,
+                                size: 16, color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(_stages[i],
+                      style: AppTypography.body.copyWith(
+                          fontSize: 13.5,
+                          color: (done || active)
+                              ? AppColors.textPrimary
+                              : AppColors.textTertiary,
+                          fontWeight:
+                              active ? FontWeight.w600 : FontWeight.w500)),
+                ]),
+              );
+            }),
+            const SizedBox(height: 26),
+            TextButton(
+              onPressed: widget.onCancel,
+              child: Text('Cancel',
+                  style: AppTypography.bodyStrong
+                      .copyWith(color: AppColors.textSecondary)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _EndNode extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool remote;
+  const _EndNode({required this.icon, required this.label, this.remote = false});
+  @override
+  Widget build(BuildContext context) {
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 60,
+        height: 60,
+        decoration: BoxDecoration(
+          color: remote ? AppColors.deviceNavy : AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+              color: remote ? Colors.transparent : AppColors.borderStrong),
+          boxShadow: [
+            BoxShadow(
+                color: AppColors.primary.withValues(alpha: 0.25),
+                blurRadius: 18,
+                spreadRadius: -4),
+          ],
+        ),
+        child: Icon(icon,
+            size: 26,
+            color: remote ? Colors.white : AppColors.textSecondary),
+      ),
+      const SizedBox(height: 8),
+      SizedBox(
+        width: 90,
+        child: Text(label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: AppTypography.caption
+                .copyWith(fontSize: 11.5, fontWeight: FontWeight.w600)),
+      ),
+    ]);
+  }
+}
+
+class _PathPainter extends CustomPainter {
+  final double t; // 0..1 travelling position
+  _PathPainter(this.t);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final y = 30.0; // centre of the 60px icon row
+    final x0 = 66.0, x1 = size.width - 66.0;
+    // base track
+    canvas.drawLine(
+        Offset(x0, y),
+        Offset(x1, y),
+        Paint()
+          ..color = AppColors.border
+          ..strokeWidth = 2);
+    // travelling glow
+    final px = x0 + (x1 - x0) * t;
+    final grad = Paint()
+      ..shader = LinearGradient(colors: [
+        AppColors.primary.withValues(alpha: 0),
+        AppColors.primary,
+        AppColors.primary.withValues(alpha: 0),
+      ]).createShader(Rect.fromLTWH(px - 40, y - 2, 80, 4))
+      ..strokeWidth = 3;
+    canvas.drawLine(Offset((px - 40).clamp(x0, x1), y),
+        Offset((px + 40).clamp(x0, x1), y), grad);
+    canvas.drawCircle(
+        Offset(px, y),
+        4,
+        Paint()
+          ..color = AppColors.primary
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+  }
+
+  @override
+  bool shouldRepaint(_PathPainter old) => old.t != t;
+}
 
 /// One entry in the compact nav rail.
 class NavRailItem {
