@@ -115,6 +115,7 @@ class WebRTCService {
         ..ordered = true
         ..id = 3;
       _fileChannel = await _pc!.createDataChannel('file', fileInit);
+      _armFileBackpressure(_fileChannel!);
       _bindDataChannel(_fileChannel!, isControl: false);
     } else {
       _pc!.onDataChannel = (channel) {
@@ -123,6 +124,7 @@ class WebRTCService {
           _bindDataChannel(channel, isControl: false);
         } else if (channel.label == 'file') {
           _fileChannel = channel;
+          _armFileBackpressure(channel);
           _bindDataChannel(channel, isControl: false);
         } else {
           _dataChannel = channel;
@@ -343,6 +345,15 @@ class WebRTCService {
   /// Buffered bytes queued on the file channel — used to pace file sends so we
   /// don't overrun the send buffer. 0 if unknown/unsupported.
   int get fileChannelBufferedAmount => _fileChannel?.bufferedAmount ?? 0;
+
+  /// Ask the native layer to emit bufferedAmount-change events so the sender's
+  /// drain check (see FileTransferManager) sees fresh values and can pace sends
+  /// well under the ~16 MB SCTP cap instead of flooding it.
+  void _armFileBackpressure(RTCDataChannel c) {
+    try {
+      c.bufferedAmountLowThreshold = 256 * 1024;
+    } catch (_) {}
+  }
 
   /// Sends a file-transfer message on the dedicated 'file' channel (falls back
   /// to control if that channel isn't up), keeping file bytes off 'control'.

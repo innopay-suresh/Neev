@@ -146,6 +146,15 @@ moves to **Working Features** after it is confirmed working on real hardware.
   (launchd KeepAlive respawns it to wait again). Exactly ONE on-console producer.
   This is the macOS analogue of the Windows `WTSQueryUserToken` spawn-into-active-
   session rule (LD-7) — never regress it into "last worker wins".
+- **LD-15 — File-transfer resources (SCTP send buffer / handles / channels) must
+  drain/release immediately after each transfer completes or fails — never
+  accumulate. Both directions share the single `file` channel per peer, so a leak
+  in one blocks the other.** The sender must pace against the REAL buffered amount
+  for its actual send direction (host: max across viewers; viewer: the host peer),
+  drain to a small high-water (512 KB, well under the ~16 MB SCTP cap), and on a
+  stall ABORT the transfer — NEVER force-send into a full buffer (that saturates
+  the shared channel and wedges both directions until reconnect, the "fails at
+  file 5" bug). Go receiver releases every `*os.File` on end/cancel/teardown.
 
 ---
 
@@ -157,6 +166,9 @@ moves to **Working Features** after it is confirmed working on real hardware.
 - Discovery shows real machine names (LAN UDP + relay-assisted).
 - File **copy** no longer becomes **move** (Preferred DropEffect = Copy).
 - Clipboard text/image sync; clipboard sync on/off toggle.
+- Multi-file selection and queued transfer, both directions (r65): pick many
+  files at once (export and import), sent sequentially through the fixed file
+  channel with per-file progress; one failure is isolated and the queue continues.
 - Viewer captures TRACKPAD two-finger scroll (`PointerPanZoom`) in addition to the
   mouse wheel (`PointerScroll`), forwarded through the existing scroll pipeline to
   the existing host injection (r58; mouse-wheel win-win/mac-win already confirmed).
@@ -263,6 +275,24 @@ hardware-confirmed intact.
 ---
 
 ## Change Log
+
+- **2026-07-15 — File transfer: fixed the "stops after 4 files" leak + multi-file
+  select (r65).** ROOT CAUSE (not a literal pool of 4): the single bidirectional
+  `file` SCTP data channel's send buffer (~16 MB libwebrtc default) saturated
+  because backpressure was broken — `_fileBuffered()` read only `_viewerPeer`, so
+  when HOSTING it returned 0 and Host→Viewer had zero backpressure; and the send
+  loop force-sent into a full buffer after a 32 s give-up. ~4 medium files ×
+  ~4 MB ≈ 16 MB → "file 5 fails", and since it's ONE channel per peer, a full
+  buffer stalls BOTH directions until reconnect. FIX: `_fileBuffered()` now
+  reports the max buffered across whichever peers we send to (host or viewer);
+  send loop drains to a 512 KB high-water and, if it can't drain in 30 s, ABORTS
+  that transfer (never force-floods) so the channel stays healthy for the next
+  file and the other direction; `bufferedAmountLowThreshold` armed so native emits
+  drain events. Go receive side (`filerecv.go`) already released handles — clean.
+  MULTI-FILE: `openFiles()` on both export and import; `sendFilesQueued()` sends
+  each file sequentially through the fixed channel, fault-isolated (one failure
+  logs and the queue continues); per-file progress via existing FileTransfer rows.
+
 
 - **2026-07-15 — Mac→Mac: daemon follows console session (D-4) + file size cap
   (MM-2/3) (r59).**

@@ -83,8 +83,18 @@ class FileTransferManager {
   /// the ~256 KB channel limit.
   static const int rawChunk = 36 * 1024;
 
-  /// Pause sending while more than this many bytes are queued locally.
-  static const int _highWater = 4 * 1024 * 1024;
+  /// Pause sending while more than this many bytes are queued in the channel's
+  /// SCTP send buffer. Kept SMALL (512 KB) on purpose: libwebrtc's send buffer
+  /// caps around 16 MB, and if we let it fill (as the old 4 MB high-water + a
+  /// give-up-and-send-anyway loop did) it saturates after ~4 medium files and
+  /// wedges BOTH directions of the one shared bidirectional file channel until
+  /// reconnect. Draining to 512 KB between chunks keeps it nowhere near the cap.
+  static const int _highWater = 512 * 1024;
+
+  /// If the buffer won't drain for this long the peer isn't receiving — abort
+  /// the transfer as failed. NEVER force-send into a full buffer (that's what
+  /// corrupted the channel and broke every later transfer).
+  static const Duration _drainTimeout = Duration(seconds: 30);
 
   /// In-memory size cap. Raised to 2 GB (was 200 MB, which silently rejected
   /// real installers — .dmg/.pkg/.exe — so they "failed both ways"). Matches the
@@ -131,12 +141,23 @@ class FileTransferManager {
       seq++;
       t.transferred = end;
       onChange();
-      // Yield, and back off if the local send buffer is backing up.
+      // Wait for the SCTP buffer to DRAIN before queuing more — the bufferedAmount
+      // is updated by native events, so this poll sees real values. If it won't
+      // drain within the timeout, the peer has stopped receiving: abort THIS
+      // transfer (never force-send into a full buffer). The channel stays healthy
+      // so the next transfer — and the other direction — still work.
       await Future<void>.delayed(Duration.zero);
-      var guard = 0;
-      while (buffered() > _highWater && guard < 4000) {
-        await Future<void>.delayed(const Duration(milliseconds: 8));
-        guard++;
+      var waited = 0;
+      while (buffered() > _highWater) {
+        if (t.status == FileStatus.error) return t; // cancelled
+        await Future<void>.delayed(const Duration(milliseconds: 15));
+        waited += 15;
+        if (waited > _drainTimeout.inMilliseconds) {
+          t.status = FileStatus.error;
+          t.error = 'Transfer stalled — the other side stopped receiving.';
+          onChange();
+          return t;
+        }
       }
     }
     if (t.status == FileStatus.error) return t;

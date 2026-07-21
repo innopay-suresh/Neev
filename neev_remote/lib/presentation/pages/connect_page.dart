@@ -256,7 +256,11 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   Timer? _chatToastTimer;
 
   void _notifyChat(String text) {
-    final overlay = Overlay.maybeOf(context);
+    // rootOverlay: the shell/session context isn't always under a local Overlay,
+    // so target the app-root overlay — otherwise the toast silently no-ops (the
+    // "chat notification doesn't pop up" report).
+    final overlay =
+        Overlay.maybeOf(context, rootOverlay: true) ?? Overlay.maybeOf(context);
     if (overlay == null) return;
     _dismissChatToast();
     final preview = text.length > 90 ? '${text.substring(0, 90)}…' : text;

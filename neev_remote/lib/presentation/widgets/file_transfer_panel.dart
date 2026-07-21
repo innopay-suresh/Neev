@@ -12,17 +12,19 @@ String _fmtBytes(int b) {
   return '$b B';
 }
 
-/// Opens a native file picker and sends the chosen file to the connected peer.
+/// Opens a native MULTI-file picker and queues every chosen file to the peer.
+/// One file failing doesn't stop the rest (the queue is fault-isolated).
 Future<void> pickAndSendFile(BuildContext context, RemoteService service) async {
-  final XFile? file = await openFile();
-  if (file == null) return;
-  final bytes = await file.readAsBytes();
-  final t = await service.sendFile(file.name, bytes);
-  if (t == null && context.mounted) {
+  final List<XFile> files = await openFiles();
+  if (files.isEmpty) return;
+  if (context.mounted && files.length > 1) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('File is too large (200 MB max)')),
+      SnackBar(
+          content: Text('Queued ${files.length} files'),
+          duration: const Duration(seconds: 2)),
     );
   }
+  await service.sendFilesQueued(files);
 }
 
 /// Export (send a file to the other computer) + Import (ask the other computer

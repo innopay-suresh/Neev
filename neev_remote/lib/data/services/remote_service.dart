@@ -180,6 +180,28 @@ class RemoteService extends ChangeNotifier {
     return _files.sendFile(name, bytes);
   }
 
+  /// Queue count for the overall-progress indicator (files still active).
+  int get queuedFileCount =>
+      _files.transfers.where((t) => t.status == FileStatus.active).length;
+
+  /// Multi-file (roadmap parity with AnyDesk): send every picked file, one at a
+  /// time through the single fixed file channel. Sequential — not parallel — so
+  /// chunks stay ordered and the drain-paced backpressure keeps the SCTP buffer
+  /// small. A failure on one file is isolated: it's logged and the queue
+  /// continues with the next.
+  Future<void> sendFilesQueued(List<XFile> files) async {
+    DiagLog.log('file', 'queue ${files.length} file(s)');
+    for (final f in files) {
+      try {
+        final bytes = await f.readAsBytes();
+        await sendFile(f.name, bytes);
+      } catch (e) {
+        DiagLog.log('file', 'queued "${f.name}" failed: $e');
+        // continue with the rest — no batch corruption
+      }
+    }
+  }
+
   /// Import: ask the connected peer to pick a file and send it to us.
   void requestFileFromPeer() {
     DiagLog.log('file', 'request file from peer');
@@ -202,13 +224,12 @@ class RemoteService extends ChangeNotifier {
       // macOS: a backgrounded host would show the picker behind its window,
       // invisible to the viewer — bring the app frontmost first.
       await SessionWatcher.activateApp();
-      final f = await openFile();
-      if (f == null) {
+      final picked = await openFiles(); // multi-select on the import side too
+      if (picked.isEmpty) {
         DiagLog.log('file', 'picker cancelled');
         return;
       }
-      final bytes = await f.readAsBytes();
-      await _files.sendFile(f.name, bytes);
+      await sendFilesQueued(picked);
     } catch (e) {
       // Was a silent black hole — surface picker/read failures so a failed
       // Mac↔Win import can actually be diagnosed from the log.
@@ -231,7 +252,22 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
-  int _fileBuffered() => _viewerPeer?.fileChannelBufferedAmount ?? 0;
+  // Backpressure for the file channel. MUST cover BOTH directions: when hosting
+  // there is no _viewerPeer, so the old `_viewerPeer?…` returned 0 and Host→Viewer
+  // sends had zero backpressure — they flooded the ~16 MB SCTP send buffer, which
+  // is one bidirectional channel per peer, so once full it stalls BOTH directions
+  // (the "fails at file 5" leak). Report the WORST (max) buffered across whichever
+  // peers we're actually sending to.
+  int _fileBuffered() {
+    final v = _viewerPeer;
+    if (v != null) return v.fileChannelBufferedAmount;
+    var maxB = 0;
+    for (final p in _hostPeers.values) {
+      final b = p.fileChannelBufferedAmount;
+      if (b > maxB) maxB = b;
+    }
+    return maxB;
+  }
 
   // ---- Viewer-side UAC overlay state (driven by host 'uac' messages) ----
   bool uacActive = false;
