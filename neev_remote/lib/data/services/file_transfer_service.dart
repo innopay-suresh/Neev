@@ -168,20 +168,36 @@ class FileTransferManager {
       seq++;
       t.transferred = end;
       onChange();
-      // Wait for the SCTP buffer to DRAIN before queuing more — the bufferedAmount
-      // is updated by native events, so this poll sees real values. If it won't
-      // drain within the timeout, the peer has stopped receiving: abort THIS
-      // transfer (never force-send into a full buffer). The channel stays healthy
-      // so the next transfer — and the other direction — still work.
+      // Wait for the SCTP buffer to DRAIN before queuing more (bufferedAmount is
+      // updated by native events, so this sees real values). Reset the stall timer
+      // whenever the buffer actually drains — only abort when it's GENUINELY stuck
+      // (no drain at all for the whole window). A large file over a slow/contended
+      // link keeps going (draining steadily, just slowly) instead of being falsely
+      // aborted; only a peer that truly stopped receiving trips the timeout. (The
+      // old fixed timeout aborted healthy-but-slow large transfers once the buffers
+      // filled — the "big file dies after ~8–16 MB, works again after reconnect"
+      // bug: reconnect just reset the buffers.)
       await Future<void>.delayed(Duration.zero);
-      var waited = 0;
+      var stalledMs = 0;
+      var lastBuffered = buffered();
       while (buffered() > _highWater) {
         if (t.status == FileStatus.error) return t; // cancelled
         await Future<void>.delayed(const Duration(milliseconds: 15));
-        waited += 15;
-        if (waited > _drainTimeout.inMilliseconds) {
+        final b = buffered();
+        if (b < lastBuffered) {
+          stalledMs = 0; // draining → healthy, keep waiting as long as it drains
+          lastBuffered = b;
+        } else {
+          stalledMs += 15;
+        }
+        if (stalledMs > _drainTimeout.inMilliseconds) {
+          // No drain progress at all for the window → the peer really stopped.
+          // Tell the host so it deletes the partial file instead of leaking it.
+          send(jsonEncode({'k': 'ft', 't': 'cancel', 'id': id}));
           t.status = FileStatus.error;
           t.error = 'Transfer stalled — the other side stopped receiving.';
+          DiagLog.log('ft', 'send STALLED id=$id at ${t.transferred}/${t.size} '
+              '— no drain in ${_drainTimeout.inSeconds}s, cancelled');
           onChange();
           return t;
         }

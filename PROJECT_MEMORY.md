@@ -355,6 +355,25 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-21 — Large file aborted mid-send (false stall); progress-based drain
+  timeout + cancel-on-abort (r72).** After r71 killed the file-lane DEADLOCK
+  (confirmed: a stalled large file no longer wedges the lane — every file after it
+  finishes), one gap remained: an individual large file (~>12 MB) intermittently
+  aborted mid-transfer (host wrote ~8–16 MB, never finished), and it worked again
+  only after a reconnect. ROOT CAUSE (viewer-side, file_transfer_service.dart):
+  `sendFile`'s drain wait used a FIXED 30 s timeout — `while buffered()>highWater`
+  for 30 s → abort. r71's bulk-lane backpressure legitimately PAUSES the sender
+  when the import competes with the live video stream for bandwidth; once the SCTP
+  buffers fill (after several transfers) that pause exceeds 30 s and the fixed
+  timeout misread "receiving slowly" as "peer dead" → false abort. Fresh SCTP
+  buffers (after reconnect) are empty, so the first big file slips through — hence
+  "works after reconnect". FIX: the stall timer now RESETS whenever the buffer
+  actually drains; it only fires after the window with ZERO drain progress (peer
+  truly stopped). A large file over a slow/contended link now completes (drains
+  steadily, just slowly). Also: on a real abort the viewer sends `{t:'cancel',id}`
+  so the host deletes the partial immediately (was leaked until worker teardown).
+  Refines LD-15 (drain pacing is progress-based, not fixed-duration). Viewer-only
+  Dart change; no Go/wire change. Analyzes clean.
 - **2026-07-21 — Large file (>~16 MB) deadlocked the whole file lane; writer-
   goroutine IPC redesign (r71). Implements LD-21.** Logs (r70): viewer sent a
   23.8 MB import fully (`sent end`) → host logged only the offer, never finished;
