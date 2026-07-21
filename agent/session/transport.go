@@ -46,6 +46,11 @@ type Transport struct {
 	workerMu sync.Mutex
 	worker   *ipc.Conn // current capture worker (nil if none attached); writes are serialized
 
+	// Consent gate (TransportMode "Ask before allowing connections"): pending
+	// approvals keyed by viewer id, each answered by the worker's Accept/Deny.
+	consentMu      sync.Mutex
+	consentWaiters map[string]chan bool
+
 	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
 	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
 
@@ -84,7 +89,11 @@ func RunTransport(ctx context.Context, port int) error {
 		relayURL = "ws://127.0.0.1:8080/ws"
 	}
 
-	t := &Transport{relayURL: relayURL, peers: make(map[string]*peerSession)}
+	t := &Transport{
+		relayURL:       relayURL,
+		peers:          make(map[string]*peerSession),
+		consentWaiters: make(map[string]chan bool),
+	}
 	if err := t.setupSignaling(ctx); err != nil {
 		return err
 	}
@@ -194,6 +203,20 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 
 func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	log.Info().Str("from", m.From).Msg("transport: incoming connect")
+
+	// Consent gate: when "Ask before allowing connections" is on, the logged-in
+	// user must Accept before we offer. The session-0 transport can't draw UI, so
+	// it asks the per-session worker to show the dialog and waits for the answer.
+	// Deny/timeout/no-user-session → refuse (no offer), matching the toggle's
+	// intent ("ask before allowing"; nobody there to accept = not allowed).
+	if t.consentRequired() {
+		if !t.askConsent(ctx, m.From) {
+			log.Info().Str("from", m.From).Msg("transport: connection DENIED (consent)")
+			return
+		}
+		log.Info().Str("from", m.From).Msg("transport: connection approved (consent)")
+	}
+
 	t.dropPeer(m.From) // replace any stale session
 
 	peer, err := network.NewPeer(t.iceServers, network.RoleAgent, t.sigClient, m.From)
@@ -515,6 +538,17 @@ func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 			}
 			continue
 		}
+		// Consent answer (worker's Accept/Deny dialog) → unblock askConsent.
+		if kind == ipc.KindConsentReply {
+			var r struct {
+				ID    string `json:"id"`
+				Allow bool   `json:"allow"`
+			}
+			if json.Unmarshal(payload, &r) == nil {
+				t.deliverConsent(r.ID, r.Allow)
+			}
+			continue
+		}
 		// Host chat reply (typed in the worker's chat window) → relay to viewers
 		// on the control channel as TEXT.
 		if kind == ipc.KindChat {
@@ -661,6 +695,63 @@ func loadMachineCreds() (id, password string) {
 		password = strings.TrimSpace(lines[1])
 	}
 	return id, password
+}
+
+// consentRequired reports whether the "Ask before allowing connections" gate is
+// on. The Flutter app writes <dataDir>/consent.txt ("1"/"0") when the user
+// toggles the setting; absent/"0" means auto-accept (the default, unchanged).
+func (t *Transport) consentRequired() bool {
+	data, err := os.ReadFile(filepath.Join(dataDir(), "consent.txt"))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) == "1"
+}
+
+// askConsent asks the current worker to show an Accept/Deny dialog for viewer id
+// and blocks (up to 30 s) for the answer. Returns false on deny, timeout, or no
+// worker attached (e.g. lock screen / no interactive session — nobody to accept).
+func (t *Transport) askConsent(ctx context.Context, id string) bool {
+	ch := make(chan bool, 1)
+	t.consentMu.Lock()
+	t.consentWaiters[id] = ch
+	t.consentMu.Unlock()
+	defer func() {
+		t.consentMu.Lock()
+		delete(t.consentWaiters, id)
+		t.consentMu.Unlock()
+	}()
+
+	t.workerMu.Lock()
+	conn := t.worker
+	t.workerMu.Unlock()
+	if conn == nil {
+		return false // no interactive session to ask → deny
+	}
+	if err := conn.WriteMessage(ipc.KindConsentRequest, []byte(id)); err != nil {
+		return false
+	}
+	select {
+	case allow := <-ch:
+		return allow
+	case <-time.After(30 * time.Second):
+		return false // no answer → deny
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// deliverConsent routes a worker's Accept/Deny answer to the waiting askConsent.
+func (t *Transport) deliverConsent(id string, allow bool) {
+	t.consentMu.Lock()
+	ch := t.consentWaiters[id]
+	t.consentMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- allow:
+		default:
+		}
+	}
 }
 
 // requestKeyframe asks the current capture worker for a keyframe.

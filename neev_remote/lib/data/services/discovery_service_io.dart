@@ -9,8 +9,12 @@ import 'discovery_model.dart';
 /// instance also listens and builds a live list of the others it hears.
 class DiscoveryService {
   static const int _port = 47920;
-  static const Duration _announceEvery = Duration(seconds: 3);
-  static const Duration _staleAfter = Duration(seconds: 12);
+  // Announce a little faster (first appearance is bounded by this) and keep a
+  // device far longer than one missed announce — UDP broadcast is lossy, and a
+  // tight stale window made devices flicker (drop on a few lost packets, then
+  // reappear). 20 s tolerates ~9 consecutive lost announces before pruning.
+  static const Duration _announceEvery = Duration(seconds: 2);
+  static const Duration _staleAfter = Duration(seconds: 20);
 
   RawDatagramSocket? _sock;
   Timer? _announceTimer;
@@ -55,13 +59,14 @@ class DiscoveryService {
   /// hosting id becomes available or changes.
   void setId(String id) => _id = id;
 
-  /// Force a rescan: drop the current list, refresh interface targets, and
-  /// re-announce immediately (the Discovery page refresh button).
+  /// Force a rescan: refresh interface targets and re-announce immediately. Does
+  /// NOT clear the current list — clearing made the whole list blink to empty and
+  /// then repopulate slowly at announce cadence (the "refresh takes a long time to
+  /// rediscover" bug). Devices that are truly gone still age out via _prune.
   Future<void> refresh() async {
-    _devices.clear();
-    onChange?.call();
     await _refreshBroadcastTargets();
     _announce();
+    onChange?.call();
   }
 
   Future<void> _bind() async {

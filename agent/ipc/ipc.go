@@ -76,6 +76,15 @@ const (
 	// payload = {"k":"chat","t":...} JSON; the transport relays it to viewers on
 	// the control channel.
 	KindChat byte = 0x09
+
+	// Transport -> worker: ask the logged-in user to approve an incoming viewer
+	// (the "Ask before allowing connections" gate in TransportMode, where the
+	// headless session-0 transport can't draw UI). payload = viewer id (string).
+	KindConsentRequest byte = 0x0A
+
+	// Worker -> transport: the user's Accept/Deny answer. payload =
+	// {"id":<viewer id>,"allow":bool} JSON.
+	KindConsentReply byte = 0x0B
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

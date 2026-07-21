@@ -27,6 +27,7 @@ import 'keyboard_hook.dart';
 import 'privacy_mode.dart';
 import 'audit_log.dart';
 import 'clipboard_monitor.dart';
+import 'consent_flag.dart';
 import 'screen_capture_service.dart';
 import 'session_watcher.dart';
 import 'signaling_service.dart';
@@ -291,6 +292,9 @@ class RemoteService extends ChangeNotifier {
   // our LAN-mates, so discovery works even where UDP broadcast is blocked.
   Timer? _discoverTimer;
   final Map<String, DiscoveredDevice> _serverPeers = {};
+  // Consecutive relay polls a peer was absent — evict only after a couple of
+  // misses so one transient/empty reply doesn't wipe the whole list (flicker).
+  final Map<String, int> _serverPeerMiss = {};
 
   /// Hosts the relay reports on our network (from the last `peers` reply).
   List<DiscoveredDevice> get serverPeers => _serverPeers.values.toList();
@@ -785,9 +789,10 @@ class RemoteService extends ChangeNotifier {
   }
 
   /// Force an immediate relay discovery poll (the Discovery page refresh button).
+  /// Does NOT clear the list — keep known peers visible while re-polling; the
+  /// grace eviction in _onServerPeers removes ones that are really gone. Clearing
+  /// made the list blink empty and rediscover slowly.
   void refreshDiscovery() {
-    _serverPeers.clear();
-    notifyListeners();
     _hostSignaling?.sendDiscover();
   }
 
@@ -802,6 +807,7 @@ class RemoteService extends ChangeNotifier {
       final id = (p['id'] as String?)?.trim() ?? '';
       if (id.isEmpty || id == _agentId) continue;
       seen.add(id);
+      _serverPeerMiss[id] = 0;
       final name = (p['hostname'] as String?)?.trim();
       _serverPeers[id] = DiscoveredDevice(
         id: id,
@@ -811,8 +817,19 @@ class RemoteService extends ChangeNotifier {
         lastSeen: now,
       );
     }
-    // Drop machines the relay no longer lists (went offline / left the network).
-    _serverPeers.removeWhere((id, _) => !seen.contains(id));
+    // Grace eviction: only drop a peer after 2 consecutive polls without it, so a
+    // single transient/empty relay reply can't wipe the list (the flicker cause).
+    final toRemove = <String>[];
+    for (final id in _serverPeers.keys) {
+      if (seen.contains(id)) continue;
+      final miss = (_serverPeerMiss[id] ?? 0) + 1;
+      _serverPeerMiss[id] = miss;
+      if (miss >= 2) toRemove.add(id);
+    }
+    for (final id in toRemove) {
+      _serverPeers.remove(id);
+      _serverPeerMiss.remove(id);
+    }
     notifyListeners();
   }
 
@@ -1844,6 +1861,13 @@ class RemoteService extends ChangeNotifier {
   /// Whether the SYSTEM helper (and thus machine-wide multi-user access) is
   /// available on this host.
   bool get machineHelperSupported => _uac.isSupported;
+
+  /// Mirror the "Ask before allowing connections" toggle to the SYSTEM-service
+  /// transport (which owns hosting in TransportMode and can't see the app's
+  /// SharedPreferences) by writing %ProgramData%\NeevRemote\consent.txt. On a
+  /// Flutter-hosted box this is a harmless extra write; the in-app dialog still
+  /// governs there.
+  Future<void> syncConsentFlag(bool ask) => writeConsentFlag(ask);
 
   /// Fetch the machine-wide id + password from the SYSTEM helper, or null when
   /// the helper isn't reachable. Lets the UI show the shared credentials.

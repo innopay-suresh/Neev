@@ -204,6 +204,18 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 				case <-runCtx.Done():
 					return
 				}
+			case ipc.KindConsentRequest:
+				// Ask the logged-in user to Accept/Deny this viewer. The modal
+				// blocks, so run it off the reader goroutine and reply when answered.
+				vid := string(payload)
+				go func(id string) {
+					allow := showConsentDialog(id)
+					reply, _ := json.Marshal(
+						map[string]interface{}{"id": id, "allow": allow})
+					_ = ic.WriteMessage(ipc.KindConsentReply, reply)
+					log.Info().Str("from", id).Bool("allow", allow).
+						Msg("worker: consent answered")
+				}(vid)
 			}
 		}
 	}()

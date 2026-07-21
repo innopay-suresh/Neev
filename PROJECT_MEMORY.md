@@ -171,6 +171,21 @@ moves to **Working Features** after it is confirmed working on real hardware.
   channel on `WriteBulk` backpressure never blocks the control (input) channel.
   Do NOT put bulk file/clipboard bytes on the hi lane or reintroduce a write
   mutex held across the socket write.
+- **LD-22 — In TransportMode the CONSENT gate lives in the Go transport, not the
+  Flutter app.** The SYSTEM-service transport (session 0) owns hosting and used to
+  auto-accept every viewer (`onConnect`→`CreateAgentOffer`, LD-7); the Flutter
+  app's in-app consent dialog is on the SUPPRESSED `startHosting` path, so it can
+  never fire there. Consent now: the app mirrors the "Ask before allowing
+  connections" toggle to `%ProgramData%\NeevRemote\consent.txt` (`consent_flag.dart`
+  shim, Windows only); the transport reads it per connect (`consentRequired`), and
+  when on, asks the per-session worker (`KindConsentRequest`) to show a modal
+  Accept/Deny (`consent_windows.go` `MessageBoxW` on the interactive desktop),
+  waits ≤30 s for `KindConsentReply`, and only offers on Accept. Deny / 30 s
+  timeout / NO worker attached (lock screen / unattended) → refuse (no offer) —
+  the literal meaning of "ask before allowing". The two consent IPC kinds are the
+  first request/response pair over the worker IPC. Flutter-hosted (non-Transport)
+  boxes still use the in-app dialog (LD-17). macOS daemon consent is a later port
+  (`consent_other.go` returns true; the flag is Windows-only).
 - **LD-16 — Every incoming file transfer gets a UNIQUE destination — never a
   shared/reused path or handle — and "Sent" status is only shown after the host
   confirms the file was fully and uniquely saved.** The receiver reserves a
@@ -355,6 +370,29 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-21 — Discovery flicker/slow-refresh fix + consent gate in
+  TransportMode (r73). Implements LD-22.**
+  • **Discovery (Dart, viewer-side):** flaky "shows then vanishes" + "refresh
+    takes long to rediscover". ROOT CAUSE: the refresh button hard-cleared BOTH
+    sources (`_devices.clear()` UDP + `_serverPeers.clear()` relay) → list blinked
+    empty → spinner → slow repopulate at 3 s/5 s cadence; plus a tight 12 s UDP
+    stale window flickered devices under lossy broadcast; plus the relay list
+    full-replaced on any transient/empty poll. FIX: refresh no longer clears
+    (re-announce/re-poll, let stale-prune remove gone devices); UDP announce 3→2 s,
+    stale 12→20 s (tolerates ~9 lost packets); relay eviction now needs 2
+    consecutive misses (`_serverPeerMiss`) so one empty reply can't wipe the list.
+  • **Consent in TransportMode:** the "Ask before allowing connections" Accept/Deny
+    dialog never popped on SYSTEM-service hosts. ROOT CAUSE: the Go transport
+    auto-accepts (`onConnect`→`CreateAgentOffer`, no gate) and the Flutter consent
+    dialog is on the suppressed startHosting path; the transport had no knowledge
+    of the toggle. FIX (LD-22): app writes `%ProgramData%\NeevRemote\consent.txt`
+    (`consent_flag*.dart`); transport `consentRequired()` reads it and, when on,
+    `askConsent()` sends `KindConsentRequest` to the worker, which shows a
+    `MessageBoxW` Accept/Deny on the interactive desktop (`consent_windows.go`) and
+    replies `KindConsentReply`; the offer is deferred until Accept — Deny/30 s
+    timeout/no-session → refuse. New IPC kinds 0x0A/0x0B (first request/response
+    pair). Windows-first (macOS stub). Pending hardware validation of the modal +
+    deny path. Go builds (darwin + windows cross-compile) + Dart analyzes clean.
 - **2026-07-21 — Large file aborted mid-send (false stall); progress-based drain
   timeout + cancel-on-abort (r72).** After r71 killed the file-lane DEADLOCK
   (confirmed: a stalled large file no longer wedges the lane — every file after it

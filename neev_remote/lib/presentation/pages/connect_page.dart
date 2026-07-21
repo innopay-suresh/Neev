@@ -136,6 +136,9 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     // always-on host that had an unattended password — the reported bug.)
     final _s = ref.watch(settingsProvider);
     service.promptOnConnect = _s.askOnConnect;
+    // TransportMode hosts (SYSTEM service) can't see this setting — mirror it to
+    // a file the transport reads, so the Accept/Deny gate works there too.
+    service.syncConsentFlag(_s.askOnConnect);
     service.defaultPermControl = _s.defaultAllowControl;
     service.defaultPermClipboard = _s.defaultAllowClipboard;
     service.defaultPermFiles = _s.defaultAllowFiles;
