@@ -20,16 +20,17 @@
 - **Scale:** 9/10/10.5/11/11.5/12/12.5/13/13.5/14/15/16/19/24 px. Titles 19 (page) and 15 (section); IDs 14; meta 10.5–11.5.
 
 ## Color
-- **Approach:** restrained — one coral accent, warm neutrals, three semantic hues used only for status.
-- **Canvas:** `#EEEAE0` — warm cream page background.
-- **Surface:** `#FFFFFF` — cards, sidebar, top bar.
-- **Ink (text):** `#191712`; secondary `#5A554A`; tertiary `#948C78`.
-- **Primary (coral):** `#E8622C`; deep/pressed `#B14A1D`; tint `#FBE6DA`.
-- **Navy:** `#2E4159`, tint `#E4E9EF` — secondary category accent.
-- **Teal (success/online):** `#1B6E52`, tint `#DEEFE6`.
-- **Gold (favorite/warning):** `#C7962E`.
-- **Borders:** `#E2DBCB` (hairline), `#D0C6AC` (strong / inputs).
-- **Dark mode:** not yet defined. Warm-dark surfaces (`#1A1712` canvas, `#221E18` card) when it lands; reduce coral saturation ~12%.
+- **Approach:** restrained — one coral/orange accent, warm neutrals, three semantic hues used only for status. Retuned 2026-07-21 for the "Command Center" redesign (values below); token NAMES unchanged so widgets keep compiling.
+- **Canvas:** `#F5F1E8` — warm cream page background.
+- **Surface:** `#FFFEFB` — cards, sidebar, top bar; secondary surface `#F8F5EE`.
+- **Ink (text):** `#171714`; secondary `#777266`; tertiary `#9A9385`.
+- **Primary (orange):** `#F05A28`; deep/pressed `#C94418`; tint `#FCE5D9`.
+- **Device grounds (card backgrounds, muted, never bright blue):** navy `#243B53`, forest `#294B3A`, plum `#543246`, walnut `#554332` (opt: slate `#3A4148`, teal `#2D4A49`, burgundy `#56363B`, olive `#4B4C36`). White/warm-grey device models over these.
+- **Teal/green (success/online):** `#198764`, tint `#DDEFE7`.
+- **Amber (favorite/warning):** `#D78A18`.
+- **Error:** `#D8493F`. **Info slate:** `#53616D`.
+- **Borders:** `#DED6C8` (hairline), `#D0C6AC` (strong / inputs).
+- **Dark mode:** warm charcoal — canvas `#151512`, surface `#1E1E1A`, elevated `#282720`, border `#38362E`, text `#F6F2E8`/`#AAA395`/`#777166`, orange `#FF6A32`. Device grounds deeper + slightly desaturated. Never pure black/white.
 
 ## Spacing
 - **Base unit:** 4px.
@@ -67,3 +68,6 @@ Placeholder or invented numbers are not acceptable in shipped builds.
 | 2026-07-20 | Device ID is a designed object (JetBrains Mono, grouped, tabular) | It is the product's core noun and is read aloud over the phone. |
 | 2026-07-20 | Own ID/password panel moves into the sidebar | Removes the ~300px of dead space under the old "This computer" card. |
 | 2026-07-20 | Metric tiles omitted until their data exists | Data Honesty Rule; fabricated dashboard numbers destroy trust on first check. |
+| 2026-07-21 | "Command Center" redesign direction approved (prototype) | User-supplied premium spec. Three-column shell: 88→240px expandable nav rail · connection-dock-led workspace · collapsible live-activity panel. Subtle 3D device cards, connection-sequence animation, command palette. Prototype: claude.ai/code/artifact/44999bc8. |
+| 2026-07-21 | Palette retuned coral→orange `#E8622C`→`#F05A28`, canvas `#EEEAE0`→`#F5F1E8`, warm-dark mode defined | Aligns with the approved Command Center spec; token names kept stable so no widget breaks. |
+| 2026-07-21 | Redesign honors Data Honesty Rule: latency/FPS/bandwidth/codec/CPU/MEM tiles gated on WebRTC getStats + host telemetry; multi-session/terminal/WoL/recording/MFA/per-permission gated on their (absent) backends | Same rule as before — the layout ships, fabricated-metric tiles and dead feature controls do not. |

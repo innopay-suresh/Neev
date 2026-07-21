@@ -9,42 +9,49 @@ import 'package:flutter/material.dart';
 /// flat. The warm canvas also separates us from AnyDesk/TeamViewer/Splashtop,
 /// which all ship cool grey.
 class AppColors {
-  // Brand — coral
-  static const Color primary = Color(0xFFE8622C);
-  static const Color primaryHover = Color(0xFFF06E3A);
-  static const Color primaryDark = Color(0xFFB14A1D); // pressed / readable on white
-  static const Color primarySoft = Color(0xFFFBE6DA); // coral tint
-  static const Color accent = Color(0xFFE8622C);
-  static const Color accentDark = Color(0xFFB14A1D);
-  static const Color accentSoft = Color(0xFFFBE6DA);
+  // Brand — orange (Command Center redesign; DESIGN.md 2026-07-21)
+  static const Color primary = Color(0xFFF05A28);
+  static const Color primaryHover = Color(0xFFF26E40);
+  static const Color primaryDark = Color(0xFFC94418); // pressed / readable on white
+  static const Color primarySoft = Color(0xFFFCE5D9); // orange tint
+  static const Color accent = Color(0xFFF05A28);
+  static const Color accentDark = Color(0xFFC94418);
+  static const Color accentSoft = Color(0xFFFCE5D9);
 
-  static const Color secondary = Color(0xFF2E4159); // navy
+  static const Color secondary = Color(0xFF243B53); // navy
   static const Color secondarySoft = Color(0xFFE4E9EF);
 
+  // Muted device-card grounds (never bright blue). White/warm-grey models over.
+  static const Color deviceNavy = Color(0xFF243B53);
+  static const Color deviceForest = Color(0xFF294B3A);
+  static const Color devicePlum = Color(0xFF543246);
+  static const Color deviceWalnut = Color(0xFF554332);
+
   // Surfaces
-  static const Color background = Color(0xFFEEEAE0); // warm cream canvas
-  static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceLight = Color(0xFFF6F3EC);
-  static const Color surfaceAlt = Color(0xFFFAF8F3);
+  static const Color background = Color(0xFFF5F1E8); // warm cream canvas
+  static const Color surface = Color(0xFFFFFEFB);
+  static const Color surfaceLight = Color(0xFFF8F5EE);
+  static const Color surfaceAlt = Color(0xFFF8F5EE);
 
   // Text
-  static const Color textPrimary = Color(0xFF191712);
-  static const Color textSecondary = Color(0xFF5A554A);
-  static const Color textTertiary = Color(0xFF948C78);
+  static const Color textPrimary = Color(0xFF171714);
+  static const Color textSecondary = Color(0xFF777266);
+  static const Color textTertiary = Color(0xFF9A9385);
 
   // Status
-  static const Color success = Color(0xFF1B6E52); // teal — online
-  static const Color successSoft = Color(0xFFDEEFE6);
-  static const Color warning = Color(0xFFC7962E); // gold — favourite
-  static const Color error = Color(0xFFC0392B);
+  static const Color success = Color(0xFF198764); // green — online
+  static const Color successSoft = Color(0xFFDDEFE7);
+  static const Color warning = Color(0xFFD78A18); // amber — favourite
+  static const Color error = Color(0xFFD8493F);
+  static const Color infoSlate = Color(0xFF53616D);
 
   // Lines
-  static const Color border = Color(0xFFE2DBCB);
+  static const Color border = Color(0xFFDED6C8);
   static const Color borderStrong = Color(0xFFD0C6AC);
 
   // Dark band (promo / unattended callout)
-  static const Color inkBand = Color(0xFF191712);
-  static const Color inkBandAlt = Color(0xFF2A251C);
+  static const Color inkBand = Color(0xFF171714);
+  static const Color inkBandAlt = Color(0xFF282720);
 }
 
 /// Warm, low-spread shadows tuned for the cream canvas.
@@ -60,6 +67,19 @@ class AppShadows {
     BoxShadow(color: Color(0x0D181108), blurRadius: 4, offset: Offset(0, 2)),
     BoxShadow(color: Color(0x24181108), blurRadius: 32, offset: Offset(0, 16)),
   ];
+
+  // Command Center redesign (DESIGN.md 2026-07-21).
+  /// Floating connection dock — layered warm shadow.
+  static const List<BoxShadow> dock = [
+    BoxShadow(color: Color(0x0F1C1812), blurRadius: 12, offset: Offset(0, 4)),
+    BoxShadow(color: Color(0x1A1C1812), blurRadius: 50, offset: Offset(0, 20)),
+  ];
+
+  /// Hovered device card — lifts off the cream canvas.
+  static const List<BoxShadow> cardHover = [
+    BoxShadow(color: Color(0x141C1812), blurRadius: 20, offset: Offset(0, 8)),
+    BoxShadow(color: Color(0x211C1812), blurRadius: 60, offset: Offset(0, 24)),
+  ];
 }
 
 /// Radii — see DESIGN.md.
@@ -68,6 +88,8 @@ class AppRadii {
   static const double md = 9;
   static const double lg = 12;
   static const double xl = 15;
+  static const double card = 18; // device cards (Command Center)
+  static const double panel = 24; // connection dock, large panels, modals
 }
 
 /// Bundled fonts (pubspec assets). NOT system fonts: the v2 stack asked for
