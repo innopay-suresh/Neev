@@ -61,14 +61,23 @@ class FileStore {
       try {
         await File(path).create(exclusive: true);
         return path;
-      } on FileSystemException {
-        // Exists (or lost the create race) — try the next suffix.
+      } catch (_) {
+        // Catch ANY error, not just FileSystemException: on some platforms an
+        // existing-path create surfaces a different subtype, and if that
+        // propagated it would reject the reservation future and (pre-hardening)
+        // strand every later transfer. Advance to the next candidate name.
         continue;
       }
     }
-    // Pathological fallback: 10k collisions. Return the base path; the write
-    // will overwrite rather than fail the transfer outright.
-    return '${dir.path}$sep$cleaned';
+    // Last resort (10k collisions or a persistently-odd create error): a
+    // timestamp-suffixed name that effectively cannot collide, so the file still
+    // lands as its own distinct file rather than failing the transfer.
+    final unique = '$stem-${DateTime.now().microsecondsSinceEpoch}$ext';
+    final path = '${dir.path}$sep$unique';
+    try {
+      await File(path).create(exclusive: true);
+    } catch (_) {}
+    return path;
   }
 
   /// Writes [bytes] to a path previously returned by [reserveUnique].
