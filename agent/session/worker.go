@@ -77,6 +77,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	// racing with input is what wedged input + capture in the field). One reader
 	// per direction, so reads stay lock-free.
 	ic := ipc.NewConn(conn)
+	defer ic.Close() // stop the writer goroutine + unblock any enqueue on teardown
 	log.Info().Int("port", port).Msg("capture worker connected to transport")
 
 	// Stop streaming the instant this session leaves the physical console (a
@@ -148,7 +149,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	// off the reader goroutine, so neither ever delays input injection (r68).
 	// Ordered within a lane (single drainer), so one transfer's offer/data/end and
 	// one clipboard token's chunks stay in sequence.
-	fileCh := make(chan []byte, 256)
+	fileCh := make(chan []byte, 512)
 	clipCh := make(chan []byte, 256)
 	go func() {
 		for payload := range fileCh {
@@ -284,7 +285,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		} else {
 			framesSinceKey++
 		}
-		if err := ic.WriteMessage(ipc.KindVideoFrame,
+		if err := ic.WriteDroppable(ipc.KindVideoFrame,
 			ipc.EncodeVideoFrame(out.IsKeyframe, out.Data)); err != nil {
 			log.Info().Err(err).Msg("worker: transport disconnected")
 			return err

@@ -37,6 +37,7 @@ type recvFile struct {
 	path    string
 	size    int64
 	written int64
+	lastLog int64 // bytes at last progress log (so a stalled large file is visible)
 }
 
 func newFileReceiver(conn *ipc.Conn) *fileReceiver {
@@ -107,6 +108,12 @@ func (f *fileReceiver) handle(payload []byte) bool {
 			if werr != nil {
 				log.Warn().Err(werr).Str("id", m.ID).Msg("worker: write received chunk failed")
 				f.fail(m.ID, "write error: "+werr.Error())
+			} else if rf.written-rf.lastLog >= 8*1024*1024 {
+				// Progress every ~8 MB so a large-file receive is observable and a
+				// stall shows exactly how far it got.
+				rf.lastLog = rf.written
+				log.Info().Str("id", m.ID).Int64("written", rf.written).Int64("size", rf.size).
+					Msg("worker: receiving file progress")
 			}
 		}
 	case "end":
@@ -146,6 +153,7 @@ func (f *fileReceiver) handle(payload []byte) bool {
 		// Viewer asked the host for a file → pop a native picker on the host
 		// desktop and stream the selection back. Runs off the reader goroutine so
 		// the blocking modal dialog doesn't stall inbound messages.
+		log.Info().Msg("worker: export requested by viewer — opening host file picker")
 		go f.serveExport()
 	}
 	return true
@@ -162,6 +170,7 @@ func (f *fileReceiver) serveExport() {
 	bindInputDesktop()
 	path, ok := showOpenFileDialog()
 	if !ok {
+		log.Info().Msg("worker: export picker closed/cancelled — nothing sent")
 		return // cancelled
 	}
 	data, err := os.ReadFile(path)
@@ -179,7 +188,7 @@ func (f *fileReceiver) serveExport() {
 		if end > len(data) {
 			end = len(data)
 		}
-		f.sendFT(map[string]interface{}{
+		f.sendFTBulk(map[string]interface{}{
 			"k": "ft", "t": "data", "id": id, "seq": seq,
 			"d": base64.StdEncoding.EncodeToString(data[off:end]),
 		})
@@ -189,12 +198,23 @@ func (f *fileReceiver) serveExport() {
 	log.Info().Str("name", name).Int("bytes", len(data)).Msg("worker: sent file to viewer")
 }
 
+// sendFT sends a small control message (offer/end/saved/failed) on the hi lane.
 func (f *fileReceiver) sendFT(m map[string]interface{}) {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
 	_ = f.conn.WriteMessage(ipc.KindFileData, b)
+}
+
+// sendFTBulk sends a bulk data chunk (host→viewer export) on the backpressured
+// bulk lane so a large export never blocks input/acks on the hi lane.
+func (f *fileReceiver) sendFTBulk(m map[string]interface{}) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = f.conn.WriteBulk(ipc.KindFileData, b)
 }
 
 // fail aborts an in-flight transfer: closes + deletes the partial file and tells

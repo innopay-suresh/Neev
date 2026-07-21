@@ -51,12 +51,23 @@ func newClipFiles(conn *ipc.Conn) *clipFiles {
 	return &clipFiles{conn: conn, outFiles: map[string][]string{}, inAsm: map[string]*clipInASM{}}
 }
 
+// send is for small clipf* control messages (announce/req/fail) — hi lane.
 func (cf *clipFiles) send(m map[string]interface{}) {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
 	_ = cf.conn.WriteMessage(ipc.KindFileData, b)
+}
+
+// sendBulk is for clipfdat file BYTES — bulk lane, so a large clipboard file
+// paces itself and never blocks input/acks on the hi lane.
+func (cf *clipFiles) sendBulk(m map[string]interface{}) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = cf.conn.WriteBulk(ipc.KindFileData, b)
 }
 
 // poll watches the HOST clipboard (via the clipagent) for a file copy and
@@ -208,7 +219,7 @@ func (cf *clipFiles) serveBytes(token string, index int, path string) {
 			fail()
 			return
 		}
-		cf.send(map[string]interface{}{
+		cf.sendBulk(map[string]interface{}{
 			"k": "clipfdat", "token": token, "index": index, "ok": true,
 			"seq": i, "total": total, "d": base64.StdEncoding.EncodeToString(buf[:n]),
 		})

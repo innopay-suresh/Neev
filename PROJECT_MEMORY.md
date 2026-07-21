@@ -155,6 +155,22 @@ moves to **Working Features** after it is confirmed working on real hardware.
   stall ABORT the transfer — NEVER force-send into a full buffer (that saturates
   the shared channel and wedges both directions until reconnect, the "fails at
   file 5" bug). Go receiver releases every `*os.File` on end/cancel/teardown.
+- **LD-21 — Transport↔worker IPC writes go through ONE writer goroutine draining
+  three priority lanes (hi > bulk > droppable); no producer ever holds a lock
+  across a blocking socket write. File transfer is backpressured end-to-end so a
+  file larger than the pipe streams steadily and can never deadlock the lane;
+  input/capture/clipboard stay live throughout.** `ipc.Conn` supersedes the r69
+  write-mutex: `WriteMessage` = hi (input/control/acks/clip-control/chat/keyframe/
+  video-info), `WriteBulk` = bounded reliable (file + clipboard-file BYTES →
+  backpressure to the sender), `WriteDroppable` = video (drop-oldest, keyframe
+  recovers). One goroutine writes, so frames never interleave (keeps LD-19
+  integrity); hi always beats bulk, so a large transfer can't head-of-line-block
+  input. The r69 bug was: a producer blocked in `WriteMessage` while holding the
+  mutex → input starved and the bidirectional pipe deadlocked on a >~16 MB file.
+  pion runs a per-channel read goroutine (network/peer.go), so blocking the file
+  channel on `WriteBulk` backpressure never blocks the control (input) channel.
+  Do NOT put bulk file/clipboard bytes on the hi lane or reintroduce a write
+  mutex held across the socket write.
 - **LD-16 — Every incoming file transfer gets a UNIQUE destination — never a
   shared/reused path or handle — and "Sent" status is only shown after the host
   confirms the file was fully and uniquely saved.** The receiver reserves a
@@ -339,6 +355,29 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-21 — Large file (>~16 MB) deadlocked the whole file lane; writer-
+  goroutine IPC redesign (r71). Implements LD-21.** Logs (r70): viewer sent a
+  23.8 MB import fully (`sent end`) → host logged only the offer, never finished;
+  then EVERY later file (63 KB, 194 KB) + all export requests `ack TIMEOUT`, until
+  a manual reconnect. Clipboard lane stayed alive (r70 split holds) — only the
+  FILE lane wedged. ROOT CAUSE: the r69 per-conn write MUTEX was held across a
+  blocking socket write — on a file bigger than the pipe (fileCh 256 + socket
+  buffers) the transport's file-forward `WriteMessage` blocked holding the mutex,
+  starving input and deadlocking the single bidirectional transport↔worker pipe;
+  it never self-cleared. Export uses the same lane → same wedge → no picker. FIX:
+  replaced the mutex with a single WRITER GOROUTINE per `ipc.Conn` draining three
+  priority lanes — `WriteMessage` (hi: input/control/acks/chat/keyframe/video-info),
+  `WriteBulk` (bounded reliable: file + clipboard-file bytes = real backpressure),
+  `WriteDroppable` (video: drop-oldest). No producer holds a lock across a socket
+  write; hi always beats bulk (input never behind file data); one writer keeps
+  frame integrity (LD-19). Bulk backpressure paces the sender via pion's
+  per-channel read goroutine, which (confirmed in network/peer.go) means blocking
+  the file channel never blocks the input channel. Call sites: transport
+  file-forward → WriteBulk; worker video → WriteDroppable; clipboard image +
+  clipfdat bytes + export data chunks → WriteBulk; everything else → hi. Also:
+  host receive-progress log every 8 MB + export request/picker logs (a stall is
+  no longer invisible); `fileCh` 256→512. Pure Go, no wire change; Win↔Win
+  capture/input/secure-desktop untouched. Builds + vets clean.
 - **2026-07-21 — r69 side effect: clipboard-file + file-transfer shared one lane
   and blocked each other (r70). Implements LD-20.** After r69 (`r69-ipc-serialize`)
   a test showed clipboard Ctrl+C/Ctrl+V never completing (worker.log: 3 `announcing

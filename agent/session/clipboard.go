@@ -157,7 +157,7 @@ func (c *clipSync) poll(ctx context.Context) {
 				}
 				c.mu.Unlock()
 				if imgChanged {
-					if err := c.conn.WriteMessage(ipc.KindClipboardImage, img); err != nil {
+					if err := c.conn.WriteBulk(ipc.KindClipboardImage, img); err != nil {
 						return
 					}
 					log.Info().Int("bytes", len(img)).Msg("worker: sent host clipboard image to viewer")

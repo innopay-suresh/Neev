@@ -413,7 +413,9 @@ func (t *Transport) sendInputToWorker(raw []byte) {
 }
 
 // sendToWorker forwards a raw viewer message of the given IPC kind to the current
-// capture worker (e.g. file-transfer data). Dropped silently if no worker.
+// capture worker (file-transfer / clipboard-file data). Goes on the BULK lane so
+// a large transfer paces itself (backpressure) and never blocks input on the hi
+// lane. Dropped silently if no worker.
 func (t *Transport) sendToWorker(kind byte, raw []byte) {
 	t.workerMu.Lock()
 	conn := t.worker
@@ -421,7 +423,7 @@ func (t *Transport) sendToWorker(kind byte, raw []byte) {
 	if conn == nil {
 		return
 	}
-	if err := conn.WriteMessage(kind, raw); err != nil {
+	if err := conn.WriteBulk(kind, raw); err != nil {
 		log.Warn().Err(err).Uint8("kind", kind).Msg("transport: forward to worker failed")
 	}
 }

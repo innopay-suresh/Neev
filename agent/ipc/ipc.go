@@ -82,31 +82,150 @@ const (
 // A 4K keyframe is comfortably under this.
 const maxPayload = 32 << 20 // 32 MiB
 
-// Conn wraps the single transport↔worker net.Conn and SERIALIZES writes.
-//
-// One framed message is written as two calls (header, then payload). MANY
-// goroutines write to this one connection concurrently — transport→worker:
-// input, file-transfer chunks, keyframe requests; worker→transport: video
-// frames, clipboard, chat, file-export. Without serialization, two messages'
-// header/payload bytes interleave on the wire, the reader then reads a bogus
-// frame length and either errors (reader loop exits) or blocks forever in
-// ReadFull — permanently wedging input + file transfer. (This is exactly what a
-// large file transfer triggered: ~2000 chunk writes racing with live input.)
-// The mutex guards only writes; there is a single reader per direction, so
-// reads stay lock-free.
+// ErrConnClosed is returned by the write methods after the Conn is closed.
+var ErrConnClosed = fmt.Errorf("ipc: connection closed")
+
+// Conn wraps the single transport↔worker net.Conn. All writes go through a
+// SINGLE dedicated writer goroutine draining THREE priority queues, so:
+//   - no producer ever holds a lock across a blocking socket write (the r69
+//     mutex did — a large file's blocked write starved input and deadlocked the
+//     bidirectional pipe);
+//   - one message's [header][payload] is written by exactly one goroutine, so
+//     the frame stream can never interleave/corrupt (the reason r69 serialized);
+//   - INPUT/control always beat bulk file data to the wire (hi > bulk), so a
+//     large transfer can't head-of-line-block clicks;
+//   - VIDEO is droppable (drop-oldest) so a slow peer can never stall capture;
+//   - BULK file data is a bounded queue, so a producer blocks on enqueue when
+//     the peer is behind — that is real backpressure to the file sender and it
+//     never touches the hi lane.
+// One reader per direction, so ReadMessage stays lock-free.
 type Conn struct {
 	net.Conn
-	writeMu sync.Mutex
+	hi        chan []byte // reliable, high priority: input/control/acks/clip/chat/keyframe/video-info
+	bulk      chan []byte // reliable, bulk: file-transfer + clipboard-file bytes (backpressured)
+	vid       chan []byte // droppable: video frames (drop-oldest when the peer is behind)
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
-// NewConn wraps c so its WriteMessage is safe for concurrent callers.
-func NewConn(c net.Conn) *Conn { return &Conn{Conn: c} }
+// NewConn wraps c and starts its writer goroutine.
+func NewConn(c net.Conn) *Conn {
+	cn := &Conn{
+		Conn: c,
+		hi:   make(chan []byte, 1024),
+		bulk: make(chan []byte, 256),
+		vid:  make(chan []byte, 8),
+		done: make(chan struct{}),
+	}
+	go cn.writeLoop()
+	return cn
+}
 
-// WriteMessage frames and writes one message atomically w.r.t. other writers.
+func (c *Conn) writeLoop() {
+	for {
+		// Strictly prefer the hi lane: drain it first, non-blocking, so input and
+		// acks are never stuck behind bulk file data.
+		select {
+		case b := <-c.hi:
+			if _, err := c.Conn.Write(b); err != nil {
+				return
+			}
+			continue
+		case <-c.done:
+			return
+		default:
+		}
+		select {
+		case b := <-c.hi:
+			if _, err := c.Conn.Write(b); err != nil {
+				return
+			}
+		case b := <-c.bulk:
+			if _, err := c.Conn.Write(b); err != nil {
+				return
+			}
+		case b := <-c.vid:
+			if _, err := c.Conn.Write(b); err != nil {
+				return
+			}
+		case <-c.done:
+			return
+		}
+	}
+}
+
+func frame(kind byte, payload []byte) ([]byte, error) {
+	if len(payload) > maxPayload {
+		return nil, fmt.Errorf("ipc: payload too large (%d)", len(payload))
+	}
+	b := make([]byte, 5+len(payload))
+	binary.LittleEndian.PutUint32(b[0:4], uint32(1+len(payload)))
+	b[4] = kind
+	copy(b[5:], payload)
+	return b, nil
+}
+
+// WriteMessage enqueues a reliable, HIGH-priority message (input, control,
+// acks, clipboard control, chat, keyframe req, video info). Blocks only if the
+// hi queue is full (rare — it's low volume), never across the socket write.
 func (c *Conn) WriteMessage(kind byte, payload []byte) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return WriteMessage(c.Conn, kind, payload)
+	b, err := frame(kind, payload)
+	if err != nil {
+		return err
+	}
+	select {
+	case c.hi <- b:
+		return nil
+	case <-c.done:
+		return ErrConnClosed
+	}
+}
+
+// WriteBulk enqueues reliable BULK data (file-transfer / clipboard-file bytes).
+// Blocks on enqueue when the peer is behind — that is the backpressure that
+// paces the sender; it never blocks the hi lane and never holds a lock across
+// the socket write, so a huge file can't deadlock input/capture.
+func (c *Conn) WriteBulk(kind byte, payload []byte) error {
+	b, err := frame(kind, payload)
+	if err != nil {
+		return err
+	}
+	select {
+	case c.bulk <- b:
+		return nil
+	case <-c.done:
+		return ErrConnClosed
+	}
+}
+
+// WriteDroppable enqueues a droppable message (video). Never blocks: if the peer
+// is behind, the oldest queued frame is dropped so capture is never stalled (a
+// keyframe request recovers the decoder).
+func (c *Conn) WriteDroppable(kind byte, payload []byte) error {
+	b, err := frame(kind, payload)
+	if err != nil {
+		return err
+	}
+	for {
+		select {
+		case c.vid <- b:
+			return nil
+		case <-c.done:
+			return ErrConnClosed
+		default:
+			// Queue full — drop the oldest frame, then retry.
+			select {
+			case <-c.vid:
+			default:
+			}
+		}
+	}
+}
+
+// Close stops the writer goroutine and closes the underlying connection.
+func (c *Conn) Close() error {
+	c.closeOnce.Do(func() { close(c.done) })
+	return c.Conn.Close()
 }
 
 // ReadMessage reads one framed message (single reader per direction; no lock).
