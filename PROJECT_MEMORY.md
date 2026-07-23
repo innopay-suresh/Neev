@@ -186,6 +186,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
   first request/response pair over the worker IPC. Flutter-hosted (non-Transport)
   boxes still use the in-app dialog (LD-17). macOS daemon consent is a later port
   (`consent_other.go` returns true; the flag is Windows-only).
+- **LD-23 — Input, keyframe requests, clipboard, chat, and file-transfer acks
+  ALL share the one transport↔worker IPC connection (its hi/bulk/vid lanes) — the
+  hi lane must never be allowed to fully STARVE the bulk lane.** These features
+  were repeatedly reported as "breaking together" and misdiagnosed as a shared
+  Flutter listener; the real shared mechanism is this Go IPC conn (`ipc.Conn`).
+  Rules: keyframe requests are throttled (≤1/200 ms) so a PLI flood can't fill hi;
+  the writeLoop enforces fairness (a guaranteed bulk slot after a run of hi) so
+  input/keyframe floods can't wedge file transfers; input keeps ~8:1 priority so
+  it never HOL-blocks behind bulk (LD-19/20). After ANY change to input,
+  keyframe, clipboard, chat, or file-transfer, re-test a LARGE file upload under
+  mouse movement — that is the case that exposes hi/bulk starvation.
 - **LD-16 — Every incoming file transfer gets a UNIQUE destination — never a
   shared/reused path or handle — and "Sent" status is only shown after the host
   confirms the file was fully and uniquely saved.** The receiver reserves a
@@ -370,6 +381,23 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-23 — Large upload stalled at ~8 MB: keyframe flood starved the file
+  lane (r77). LOG-PROVEN.** app.log: viewer `sent end` for all 3 files → all 3
+  `ack TIMEOUT` → session `peer_dropped` + reconnect storm. worker.log: host
+  `receiving file 15 MB` → `progress written=8404992` (8.4 MB) → **nothing more**;
+  files 2/3 never arrived; BUT input still injected + clipboard/chat/export all
+  worked. ROOT CAUSE: on the transport→worker IPC, input = hi lane, file data =
+  bulk lane, and the writer drained hi STRICTLY first. Under a big transfer the
+  viewer's video goes choppy → PLI/FIR flood → the transport turned each into a
+  `KindKeyframeReq` on the **hi** lane → hi never emptied → **bulk (file) lane
+  starved** → the upload wedged at ~8 MB, later files queued behind it, session
+  eventually dropped. NOT a Flutter wiring regression (git-proven: transfer/
+  clipboard/chat UI code untouched since r73). FIX (Go only): (1) throttle
+  keyframe requests to ≤1/200 ms (`transport.lastKeyframe`; the worker collapses
+  them to one `wantKeyframe` anyway); (2) IPC writeLoop FAIRNESS — after ~8 hi
+  messages, force a bulk slot, so any hi flood (keyframe OR rapid mouse moves)
+  can never fully starve bulk file data while input stays ~8:1 prioritised.
+  No Flutter change; clipboard/chat/input unaffected.
 - **2026-07-23 — Clipboard/chat/file regressions + card rebuild (r75).**
   • **IPC writeLoop deadlock (root cause of clipboard host→viewer + chat replies +
     file 'saved' acks all breaking together, "1st file ok, 2nd unconfirmed, 3rd
