@@ -54,14 +54,6 @@ type Transport struct {
 	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
 	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
 
-	// Throttle keyframe requests (unix nanos of the last one sent). A viewer under
-	// video contention (e.g. during a big file transfer) floods PLI/FIR, which the
-	// transport would otherwise turn into a flood of KindKeyframeReq on the hi IPC
-	// lane — starving the bulk (file-transfer) lane so large uploads wedge. The
-	// worker collapses them to a single wantKeyframe flag anyway, so ≤1 per 200ms
-	// loses nothing and keeps the hi lane free for file data to flow.
-	lastKeyframe atomic.Int64
-
 	// Readiness heartbeat (unix nanos of the last time we refreshed the ready
 	// file). Written to <dataDir>/transport.ready only while a worker is actually
 	// producing frames — i.e. Screen Recording is granted. The macOS Flutter app
@@ -762,20 +754,8 @@ func (t *Transport) deliverConsent(id string, allow bool) {
 	}
 }
 
-// requestKeyframe asks the current capture worker for a keyframe. Throttled to
-// ≤1 per 200ms: a PLI/FIR flood (common while a big file transfer starves video
-// bandwidth) must NOT flood the hi IPC lane and starve the bulk file lane. The
-// worker only needs one — it re-encodes a keyframe on the next frame regardless
-// of how many requests it got.
+// requestKeyframe asks the current capture worker for a keyframe.
 func (t *Transport) requestKeyframe() {
-	now := time.Now().UnixNano()
-	last := t.lastKeyframe.Load()
-	if now-last < int64(200*time.Millisecond) {
-		return
-	}
-	if !t.lastKeyframe.CompareAndSwap(last, now) {
-		return // another goroutine just sent one
-	}
 	t.workerMu.Lock()
 	conn := t.worker
 	t.workerMu.Unlock()
