@@ -1155,6 +1155,17 @@ static int RunClipAgent() {
   for (;;) {
     SOCKET c = accept(srv, nullptr, nullptr);
     if (c == INVALID_SOCKET) continue;
+    // This server is single-threaded and serves one client at a time. WITHOUT a
+    // read timeout a half-open / stalled client (e.g. a capture worker killed
+    // mid-op during a user-session SWAP, while the deferred prevWorker + new
+    // worker both poll 47922) leaves recv() blocking this thread FOREVER — the
+    // clipboard-file agent then serves no future worker until relaunched, a
+    // global, non-recovering break. A 5s recv timeout bounds any stalled read:
+    // ClipRecvAll fails, we drop that client and accept the next. Real ops carry
+    // only CF_HDROP paths (tiny) over loopback, so a healthy client never hits it.
+    DWORD rcvTimeoutMs = 5000;
+    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (char*)&rcvTimeoutMs,
+               sizeof(rcvTimeoutMs));
     for (;;) {
       char type = 0;
       std::string payload;

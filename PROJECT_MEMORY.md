@@ -401,6 +401,42 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-23 — Clipagent wedge-hardening + clipboard-file diagnostics (r80).
+  Part 1 of the file/clipboard session-switch investigation — HARDENING + DIAG
+  only; the targeted fix + full isolation refactor are GATED on a switch-repro
+  log (below).** A deep trace (Go worker/transport/ipc + C++ helper + Dart viewer)
+  of the reported "after a user-profile switch, Import/Export AND clipboard break
+  globally and don't recover" found the Go per-session layer is CLEAN and
+  self-healing: the worker is a SEPARATE PROCESS per session (CreateProcessAsUser),
+  so every Go package singleton (incl. chatStart/chatSend) resets fresh each swap;
+  the transport repoints `t.worker` under lock on every attach and holds no
+  per-worker clip/file state (transport.go:518-536); ipc.Conn is per-connection.
+  So the code as-written SHOULD recover on switch-back — which contradicts the
+  symptom (clipboard+file break, but video+input keep working). Rather than guess
+  a fix blind (the r77/r78 mistake), shipped only what is safe + non-speculative:
+  • **Clipagent recv-timeout** (neev_helper.cpp RunClipAgent): the clipboard-file
+    agent on 127.0.0.1:47922 is single-threaded with a blocking `recv()` and NO
+    read timeout — a half-open/stalled client (e.g. a worker killed mid-op during
+    the deferred prevWorker+new-worker swap overlap, both polling 47922) blocks
+    the one thread FOREVER, so no future worker is served: a genuine global,
+    non-recovering wedge. Added `SO_RCVTIMEO` 5s on accepted sockets (payloads are
+    tiny CF_HDROP paths, so a healthy client never hits it). This is the only
+    single-slot server in the clipboard-file path (contrast the 47921 UAC server,
+    already multi-client). Real robustness bug regardless of whether it is THE bug.
+  • **Clipagent dial-failure logging** (clipfiles_windows.go): the polled read-dial
+    (`clipAgentReadFiles`, every 700ms) and the write-dial (`clipAgentWriteFiles`)
+    swallowed connect errors — the one diagnostic blind spot. Now logged (read is
+    throttled to once-until-recovery). So the switch-repro log will show if the
+    new-session worker can't reach its clipagent.
+  • **REGRESSION_CHECKLIST.md** added (repo root): the mandatory file/clipboard +
+    session-switch matrix to run after ANY UI/IPC/session/helper change.
+  NEXT (gated): user runs the switch-repro (import/export/text-copy/file-copy each
+  tested, original→profile2→profile3→back, both worker.logs + transport.log +
+  helper log) → pins the exact op that fails → THEN the targeted fix + the Part 2
+  isolation (separate KindClipFile IPC lane, one explicit per-session lifecycle
+  contract, Dart file-channel dispatch split) lands as a reviewed refactor with a
+  new Locked Decision. Win↔Win capture/input/secure-desktop unchanged (LD-13). Go
+  builds (windows) + vet clean; C++ compiled by CI's build_windows.ps1 (cl).
 - **2026-07-23 — Stable host password + clear viewer connect errors (r79).
   Implements LD-23.** A long "won't connect one direction / stuck on Connecting"
   investigation resolved to a NON-code + code mix. RELAY logs (`deploy-server-1`)

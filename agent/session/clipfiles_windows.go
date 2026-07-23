@@ -323,10 +323,23 @@ func (cf *clipFiles) finishFile(asm *clipInASM, token string, index int, data []
 // ---- clipagent client (neev_helper 'clipagent' on 127.0.0.1:47922) ----------
 // Framing: [uint32 BE len][1 byte type][payload]. 'R'→'F'(\n-joined paths); 'W'(paths)→'K'/'E'.
 
+// clipAgentReadWarned throttles the polled read-dial failure log (this runs
+// every 700ms) so a down/wedged clipagent logs ONCE, not continuously. Reset on
+// the next success. Single poll goroutine calls this, so no lock needed.
+var clipAgentReadWarned bool
+
 func clipAgentReadFiles() ([]string, bool) {
 	c, err := net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
 	if err != nil {
+		if !clipAgentReadWarned {
+			clipAgentReadWarned = true
+			log.Warn().Err(err).Msg("worker: clipagent dial FAILED (host clipboard-file poll) — user-session clipagent (47922) down or wedged")
+		}
 		return nil, false
+	}
+	if clipAgentReadWarned {
+		clipAgentReadWarned = false
+		log.Info().Msg("worker: clipagent reachable again (host clipboard-file poll)")
 	}
 	defer c.Close()
 	if !clipAgentSend(c, 'R', nil) {
@@ -351,6 +364,7 @@ func clipAgentReadFiles() ([]string, bool) {
 func clipAgentWriteFiles(paths []string) bool {
 	c, err := net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
 	if err != nil {
+		log.Warn().Err(err).Msg("worker: clipagent dial FAILED (staging viewer files on host clipboard) — clipagent (47922) down or wedged")
 		return false
 	}
 	defer c.Close()
