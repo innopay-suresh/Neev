@@ -1143,8 +1143,9 @@ class _DeviceGrid extends StatelessWidget {
       );
     }
     return LayoutBuilder(builder: (context, c) {
-      final cols = c.maxWidth > 1180 ? 4 : (c.maxWidth > 860 ? 3 : 2);
-      const gap = 18.0;
+      // Smaller cards, more per row: aim for ~240px wide, 2–6 columns.
+      final cols = (c.maxWidth / 244).floor().clamp(2, 6);
+      const gap = 16.0;
       final w = (c.maxWidth - gap * (cols - 1)) / cols;
       return Wrap(
         spacing: gap,
@@ -1184,7 +1185,7 @@ class _DeviceCardState extends State<_DeviceCard> {
     setState(() {
       _tilt = Offset(
         (local.dx / box.size.width - 0.5).clamp(-0.5, 0.5),
-        (local.dy / 150 - 0.5).clamp(-0.5, 0.5),
+        (local.dy / 108 - 0.5).clamp(-0.5, 0.5),
       );
     });
   }
@@ -1194,60 +1195,33 @@ class _DeviceCardState extends State<_DeviceCard> {
     return _grounds[h % _grounds.length];
   }
 
-  /// Fallback stage visual when there's no screenshot yet: the muted device
-  /// ground, a soft coral glow, and a pointer-tilting device glyph.
-  Widget _groundGlyph(_HomeDevice d) {
-    return Stack(children: [
-      Positioned.fill(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                _ground,
-                Color.alphaBlend(Colors.black.withValues(alpha: 0.25), _ground),
-              ],
-            ),
-          ),
+  /// Placeholder when there's no screenshot yet: a LIGHT tinted panel (not a
+  /// heavy dark ground) with a small, subtly-tilting device icon — keeps the
+  /// grid calm so the real screenshots stand out.
+  Widget _placeholder(_HomeDevice d) {
+    final g = _ground;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color.alphaBlend(g.withValues(alpha: 0.07), AppColors.surfaceLight),
+            Color.alphaBlend(g.withValues(alpha: 0.18), AppColors.surfaceLight),
+          ],
         ),
       ),
-      Positioned(
-        bottom: 18,
-        left: 0,
-        right: 0,
-        child: Center(
-          child: AnimatedOpacity(
-            duration: const Duration(milliseconds: 200),
-            opacity: _hover ? 0.8 : 0.45,
-            child: Container(
-              width: 120,
-              height: 22,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                boxShadow: [
-                  BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.55),
-                      blurRadius: 22,
-                      spreadRadius: -6),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-      Center(
+      child: Center(
         child: Transform(
           alignment: Alignment.center,
           transform: Matrix4.identity()
-            ..setEntry(3, 2, 0.0014)
-            ..rotateY(_tilt.dx * 0.34)
-            ..rotateX(-_tilt.dy * 0.28),
-          child: Icon(_glyph(d.os),
-              size: 60, color: Colors.white.withValues(alpha: 0.92)),
+            ..setEntry(3, 2, 0.0012)
+            ..rotateY(_tilt.dx * 0.3)
+            ..rotateX(-_tilt.dy * 0.24),
+          child: Icon(_glyph(d.os), size: 36, color: g.withValues(alpha: 0.55)),
         ),
       ),
-    ]);
+    );
   }
 
   @override
@@ -1261,12 +1235,12 @@ class _DeviceCardState extends State<_DeviceCard> {
       }),
       cursor: SystemMouseCursors.click,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+        duration: const Duration(milliseconds: 180),
         curve: Curves.easeOutCubic,
-        transform: Matrix4.translationValues(0, _hover ? -6 : 0, 0),
+        transform: Matrix4.translationValues(0, _hover ? -4 : 0, 0),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppRadii.card),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
               color: _hover
                   ? AppColors.primary.withValues(alpha: 0.4)
@@ -1277,91 +1251,72 @@ class _DeviceCardState extends State<_DeviceCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // stage
+            // thumbnail (real screen if captured, else a light placeholder)
             Listener(
               child: MouseRegion(
                 onHover: _onHover,
                 child: SizedBox(
-                  height: 150,
-                  child: Stack(children: [
-                    // Background: the real captured screenshot if we have one,
-                    // else the muted device ground + tilting glyph.
-                    Positioned.fill(
-                      child: (d.thumbPath != null)
-                          ? thumbImage(d.thumbPath!, fallback: _groundGlyph(d))
-                          : _groundGlyph(d),
-                    ),
-                    // scrim so the status/favorite badges stay legible over a
-                    // bright screenshot
-                    if (d.thumbPath != null)
-                      const Positioned.fill(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Color(0x55000000), Color(0x11000000)],
-                              stops: [0, 0.5],
-                            ),
-                          ),
-                        ),
-                      ),
-                    // status badge
-                    Positioned(
-                      top: 12,
-                      left: 12,
-                      child: _StatusBadge(online: d.online),
-                    ),
-                    // favorite
-                    Positioned(
-                      top: 12,
-                      right: 12,
-                      child: Container(
-                        width: 28,
-                        height: 28,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(AppRadii.sm),
-                        ),
-                        child: Icon(
-                            d.favorite ? Icons.star_rounded : Icons.star_outline_rounded,
-                            size: 16,
-                            color: d.favorite
-                                ? const Color(0xFFF5C451)
-                                : Colors.white),
-                      ),
-                    ),
-                  ]),
+                  height: 108,
+                  width: double.infinity,
+                  child: (d.thumbPath != null)
+                      ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
+                      : _placeholder(d),
                 ),
               ),
             ),
             // body
             Padding(
-              padding: const EdgeInsets.fromLTRB(15, 14, 15, 15),
+              padding: const EdgeInsets.fromLTRB(13, 11, 12, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(d.name.isEmpty ? d.id : d.name,
+                  Row(children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: d.online
+                            ? AppColors.success
+                            : AppColors.textTertiary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(d.name.isEmpty ? d.id : d.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              AppTypography.cardTitle.copyWith(fontSize: 14.5)),
+                    ),
+                    Icon(
+                        d.favorite
+                            ? Icons.star_rounded
+                            : Icons.star_outline_rounded,
+                        size: 16,
+                        color: d.favorite
+                            ? AppColors.warning
+                            : AppColors.textTertiary),
+                  ]),
+                  const SizedBox(height: 3),
+                  Text('${_osLabel(d.os)}  ·  ID ${_group(d.id)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: AppTypography.cardTitle.copyWith(fontSize: 16)),
-                  const SizedBox(height: 2),
-                  Text(_osLabel(d.os),
-                      style: AppTypography.caption.copyWith(fontSize: 12)),
-                  const SizedBox(height: 3),
-                  Text('ID ${_group(d.id)}',
                       style: AppTypography.mono.copyWith(
-                          fontSize: 12.5, color: AppColors.textTertiary)),
-                  const SizedBox(height: 12),
+                          fontSize: 11.5, color: AppColors.textTertiary)),
+                  const SizedBox(height: 11),
                   Row(children: [
                     Expanded(
                       child: Text(
                         d.lastConnected != null
                             ? _ago(d.lastConnected!)
-                            : (d.online ? 'Online' : 'Never connected'),
-                        style: AppTypography.caption.copyWith(fontSize: 11.5),
+                            : (d.online ? 'Online now' : 'Not connected yet'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.caption.copyWith(fontSize: 11),
                       ),
                     ),
+                    const SizedBox(width: 8),
                     _CardConnect(onTap: () => widget.onPick(d.id)),
                   ]),
                 ],
@@ -1370,39 +1325,6 @@ class _DeviceCardState extends State<_DeviceCard> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _StatusBadge extends StatelessWidget {
-  final bool online;
-  const _StatusBadge({required this.online});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 26,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 7,
-          height: 7,
-          decoration: BoxDecoration(
-            color: online ? const Color(0xFF48D69A) : const Color(0xFF9A9385),
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(online ? 'Online' : 'Offline',
-            style: TextStyle(
-                color: Colors.white.withValues(alpha: online ? 1 : 0.7),
-                fontSize: 11,
-                fontWeight: FontWeight.w600)),
-      ]),
     );
   }
 }

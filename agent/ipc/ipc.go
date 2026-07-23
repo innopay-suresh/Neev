@@ -132,32 +132,30 @@ func NewConn(c net.Conn) *Conn {
 
 func (c *Conn) writeLoop() {
 	for {
+		var b []byte
 		// Strictly prefer the hi lane: drain it first, non-blocking, so input and
 		// acks are never stuck behind bulk file data.
 		select {
-		case b := <-c.hi:
-			if _, err := c.Conn.Write(b); err != nil {
-				return
-			}
-			continue
+		case b = <-c.hi:
 		case <-c.done:
 			return
 		default:
+			select {
+			case b = <-c.hi:
+			case b = <-c.bulk:
+			case b = <-c.vid:
+			case <-c.done:
+				return
+			}
 		}
-		select {
-		case b := <-c.hi:
-			if _, err := c.Conn.Write(b); err != nil {
-				return
-			}
-		case b := <-c.bulk:
-			if _, err := c.Conn.Write(b); err != nil {
-				return
-			}
-		case b := <-c.vid:
-			if _, err := c.Conn.Write(b); err != nil {
-				return
-			}
-		case <-c.done:
+		if _, err := c.Conn.Write(b); err != nil {
+			// CRITICAL: on a write error the writer is done, but producers are
+			// blocked on `case c.hi <- b` / `c.bulk <- b`. Close `done` so every
+			// pending and future Write* returns ErrConnClosed instead of hanging
+			// forever (a single transient error otherwise permanently wedges
+			// clipboard, chat, and file acks until the process restarts). The dead
+			// conn then surfaces to the reader, which drives reconnect/teardown.
+			c.closeOnce.Do(func() { close(c.done) })
 			return
 		}
 	}

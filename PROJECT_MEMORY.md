@@ -370,6 +370,33 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-23 — Clipboard/chat/file regressions + card rebuild (r75).**
+  • **IPC writeLoop deadlock (root cause of clipboard host→viewer + chat replies +
+    file 'saved' acks all breaking together, "1st file ok, 2nd unconfirmed, 3rd
+    stuck"):** `agent/ipc/ipc.go` writeLoop returned on ANY socket write error
+    WITHOUT closing `done`, so every later WriteMessage/WriteBulk buffered then
+    blocked FOREVER (and never returned an error, so the worker's transport-gone
+    respawn never fired). FIX: on write error close `done` via closeOnce → producers
+    get ErrConnClosed, the reader sees the dead conn, session reconnects instead of
+    silently wedging.
+  • **Consent thread-desktop leak (viewer→host clipboard while consent ON):**
+    `consent_windows.go` did LockOSThread + bindInputDesktop + UnlockOSThread
+    without restoring/closing the desktop → returned a desktop-polluted thread to
+    the Go pool; a later clipboard call landing on it ran under the wrong desktop.
+    FIX: new `bindInputDesktopSaved()` (deskbind_windows.go) saves the prior thread
+    desktop + closes the opened HDESK on return; consent uses it.
+  • **Chat window not displaying (host got the message, no popup):** the boot-time
+    chat window could be behind/minimised. `chatEnsureShown` now SW_RESTORE +
+    BringWindowToTop + SetForegroundWindow. (If it persists it's a wrong-desktop
+    creation at boot — check worker.log "chat window created/create failed".)
+  • **Consent prompt wording** cleaned (strip internal "ctrl-" prefix, group the id
+    as XXX XXX XXX). Full AnyDesk-style custom window is a later follow-up.
+  • **Device cards rebuilt** (Command Center): smaller (~108px thumbnail, ~240px,
+    2–6 cols), premium — online dot + name + favorite in the body, OS·ID on one
+    mono line, compact Connect; LIGHT tinted placeholder + small tilting glyph
+    instead of the heavy dark ground so real screenshots stand out. Single device
+    profile (removed nav-rail + top-bar "This PC" chips; kept the activity-panel
+    "This device" card) — r74b.
 - **2026-07-21 — Discovery flicker/slow-refresh fix + consent gate in
   TransportMode (r73). Implements LD-22.**
   • **Discovery (Dart, viewer-side):** flaky "shows then vanishes" + "refresh

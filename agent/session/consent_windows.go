@@ -4,6 +4,7 @@ package session
 
 import (
 	"runtime"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -30,11 +31,17 @@ const (
 func showConsentDialog(viewerID string) bool {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	bindInputDesktop()
+	// Restore + close the desktop before unlocking, so this pooled thread isn't
+	// returned to the Go runtime bound to the input desktop — otherwise a later
+	// clipboard access that lands on this reused thread runs under the wrong
+	// desktop (the reported "clipboard stopped working" while consent is on).
+	restore := bindInputDesktopSaved()
+	defer restore()
 	text, _ := syscall.UTF16PtrFromString(
-		"A remote user (" + viewerID + ") wants to connect to this computer.\n\n" +
-			"Allow this connection?")
-	caption, _ := syscall.UTF16PtrFromString("Neev Remote — Allow connection?")
+		"A remote device is requesting to connect and control this computer.\n\n"+
+			"Device ID:  "+prettyConsentID(viewerID)+"\n\n"+
+			"Only allow if you recognise this request.")
+	caption, _ := syscall.UTF16PtrFromString("Neev Remote  —  Allow connection?")
 	ret, _, _ := procMessageBoxW.Call(
 		0,
 		uintptr(unsafe.Pointer(text)),
@@ -42,4 +49,20 @@ func showConsentDialog(viewerID string) bool {
 		uintptr(mbYesNo|mbIconQuestion|mbSystemModal|mbTopMost|mbSetForeground),
 	)
 	return ret == idYes
+}
+
+// prettyConsentID strips the internal "ctrl-" prefix and groups a 9-digit id as
+// "XXX XXX XXX" so the prompt reads like the ID the user shares, not a raw token.
+func prettyConsentID(id string) string {
+	id = strings.TrimPrefix(id, "ctrl-")
+	digits := make([]rune, 0, len(id))
+	for _, r := range id {
+		if r >= '0' && r <= '9' {
+			digits = append(digits, r)
+		}
+	}
+	if len(digits) == 9 {
+		return string(digits[0:3]) + " " + string(digits[3:6]) + " " + string(digits[6:9])
+	}
+	return id
 }
