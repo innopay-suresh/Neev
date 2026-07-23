@@ -1469,6 +1469,29 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
+  /// Maps a raw relay error into a clear, actionable viewer message, so a failed
+  /// connect never reads as a silent, indistinguishable "Connecting…". The RAW
+  /// reason still drives the retry/stop logic in the error handler; this only
+  /// changes what the user sees. The single most common failure — a stale saved
+  /// password after a host re-mint — now says exactly what to do.
+  String _friendlyConnectError(String? raw) {
+    final e = (raw ?? '').toLowerCase();
+    if (e.contains('password')) {
+      return 'Wrong password. Check the password shown on the host device and '
+          're-enter it.';
+    }
+    if (e.contains('too many')) {
+      return 'Too many wrong passwords — wait a minute, then try again.';
+    }
+    if (e.contains('not found') ||
+        e.contains('offline') ||
+        e.contains('disconnected') ||
+        e.contains('unavailable')) {
+      return 'That device is offline or not reachable right now.';
+    }
+    return (raw == null || raw.isEmpty) ? 'Connection rejected' : raw;
+  }
+
   Future<void> _onViewerMessage(SignalingMessage msg) async {
     switch (msg.type) {
       case SignalingMessageType.connect:
@@ -1501,7 +1524,7 @@ class RemoteService extends ChangeNotifier {
         break;
       case SignalingMessageType.error:
         _viewerStatus = ViewerStatus.failed;
-        _viewerError = msg.error ?? 'Connection rejected';
+        _viewerError = _friendlyConnectError(msg.error);
         DiagLog.log('viewer', 'recv error="${msg.error}" '
             'autoReconnect=$autoReconnect tries=$_reconnectTries');
         notifyListeners();

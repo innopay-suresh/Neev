@@ -181,6 +181,16 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 	t.sigClient.On(network.MsgRegistered, func(network.Message) {
 		log.Info().Str("id", t.sigClient.AgentID).Msg("transport registered")
 		t.writeCreds()
+		// Freeze the password (and id) so it is STABLE across restarts. The
+		// installer writes only the id to machine.dat, so line 2 is empty and the
+		// fallback above mints a FRESH random password on every boot — a viewer's
+		// saved password then silently goes stale and the relay rejects it as
+		// "invalid password" (no useful error, just a hung "Connecting…"). Persist
+		// only when machine.dat had no password, so a user-set password is never
+		// overwritten.
+		if machinePw == "" {
+			persistMachineCreds(t.sigClient.AgentID, password)
+		}
 	})
 	t.sigClient.On(network.MsgConnect, func(m network.Message) { t.onConnect(ctx, m) })
 	// The transport is the OFFERER (like the Flutter host), so the viewer sends
@@ -674,6 +684,26 @@ func (t *Transport) writeCreds() {
 	content := "id=" + t.sigClient.AgentID + "\npassword=" + t.password + "\n"
 	_ = os.WriteFile(path, []byte(content), 0o600)
 	log.Info().Str("path", path).Msg("transport creds written")
+}
+
+// persistMachineCreds writes id+password to machine.dat so the password stays
+// STABLE across transport restarts/reinstalls. Without this a machine.dat that
+// carries only the id (the common case — the installer never sets a password)
+// makes the transport re-randomize the password every boot, so a viewer's saved
+// password goes stale and the relay silently rejects it. Called ONLY when the
+// loaded machine.dat had no password line, so a user-set password is never
+// clobbered. machine.dat format matches loadMachineCreds: line 1 = id, line 2 =
+// password.
+func persistMachineCreds(id, password string) {
+	if id == "" || password == "" {
+		return
+	}
+	path := filepath.Join(dataDir(), "machine.dat")
+	if err := os.WriteFile(path, []byte(id+"\n"+password+"\n"), 0o600); err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("could not persist machine creds")
+		return
+	}
+	log.Info().Str("path", path).Msg("machine creds persisted (stable password)")
 }
 
 // loadMachineCreds reads the privileged installer's machine-wide id + password
