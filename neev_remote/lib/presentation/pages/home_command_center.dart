@@ -561,12 +561,15 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 40),
       children: [
-        _ConnectionDock(
-          idController: widget.idController,
-          passwordController: widget.passwordController,
-          onConnect: widget.onConnect,
-          recents: ref.watch(recentConnectionsProvider).take(3).toList(),
-          onPick: widget.onPick,
+        _IdleFloat(
+          amplitude: 2.5,
+          child: _ConnectionDock(
+            idController: widget.idController,
+            passwordController: widget.passwordController,
+            onConnect: widget.onConnect,
+            recents: ref.watch(recentConnectionsProvider).take(3).toList(),
+            onPick: widget.onPick,
+          ),
         ),
         const SizedBox(height: 26),
         _StatusStrip(
@@ -614,6 +617,47 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
         _Tab.all => all.length,
         _Tab.recent => null,
       };
+}
+
+/// A barely-perceptible vertical breathing motion (premium idle depth). Honours
+/// the OS reduce-motion setting.
+class _IdleFloat extends StatefulWidget {
+  final Widget child;
+  final double amplitude;
+  const _IdleFloat({required this.child, this.amplitude = 2.5});
+  @override
+  State<_IdleFloat> createState() => _IdleFloatState();
+}
+
+class _IdleFloatState extends State<_IdleFloat>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(seconds: 5))
+      ..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (MediaQuery.of(context).disableAnimations) return widget.child;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, child) {
+        final t = Curves.easeInOut.transform(_c.value);
+        return Transform.translate(
+            offset: Offset(0, (t - 0.5) * 2 * widget.amplitude), child: child);
+      },
+      child: widget.child,
+    );
+  }
 }
 
 // ---------------------------------------------------------------- dock
@@ -1185,7 +1229,7 @@ class _DeviceCardState extends State<_DeviceCard> {
     setState(() {
       _tilt = Offset(
         (local.dx / box.size.width - 0.5).clamp(-0.5, 0.5),
-        (local.dy / 108 - 0.5).clamp(-0.5, 0.5),
+        (local.dy / box.size.height - 0.5).clamp(-0.5, 0.5),
       );
     });
   }
@@ -1227,8 +1271,16 @@ class _DeviceCardState extends State<_DeviceCard> {
   @override
   Widget build(BuildContext context) {
     final d = widget.device;
+    // Subtle premium depth: the whole card tips a few degrees toward the pointer
+    // (perspective), with the thumbnail glyph parallaxing a touch more. Small
+    // angles + a soft settle on exit — no continuous spin.
+    final tilt = Matrix4.identity()
+      ..setEntry(3, 2, 0.0011)
+      ..rotateY(_hover ? _tilt.dx * 0.12 : 0)
+      ..rotateX(_hover ? -_tilt.dy * 0.10 : 0);
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
+      onHover: _onHover,
       onExit: (_) => setState(() {
         _hover = false;
         _tilt = Offset.zero;
@@ -1237,7 +1289,8 @@ class _DeviceCardState extends State<_DeviceCard> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOutCubic,
-        transform: Matrix4.translationValues(0, _hover ? -4 : 0, 0),
+        transformAlignment: Alignment.center,
+        transform: tilt..translateByDouble(0.0, _hover ? -4.0 : 0.0, 0.0, 1.0),
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(14),
@@ -1252,17 +1305,12 @@ class _DeviceCardState extends State<_DeviceCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // thumbnail (real screen if captured, else a light placeholder)
-            Listener(
-              child: MouseRegion(
-                onHover: _onHover,
-                child: SizedBox(
-                  height: 108,
-                  width: double.infinity,
-                  child: (d.thumbPath != null)
-                      ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
-                      : _placeholder(d),
-                ),
-              ),
+            SizedBox(
+              height: 108,
+              width: double.infinity,
+              child: (d.thumbPath != null)
+                  ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
+                  : _placeholder(d),
             ),
             // body
             Padding(
