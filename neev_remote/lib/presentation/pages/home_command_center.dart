@@ -9,6 +9,7 @@ import '../../data/services/audit_log.dart';
 import '../../data/services/discovery_model.dart';
 import '../../data/services/file_transfer_service.dart' show FileStatus;
 import '../../data/services/remote_service.dart';
+import '../../data/services/thumb_store.dart';
 import '../providers/app_providers.dart';
 
 /// Full-screen connection sequence shown while the viewer is connecting — a
@@ -343,72 +344,7 @@ class _CommandNavRailState extends State<CommandNavRail> {
                 ],
               ),
             ),
-            // bottom device
-            Container(
-              margin: const EdgeInsets.all(12),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                border: Border.all(color: AppColors.border),
-                borderRadius: BorderRadius.circular(AppRadii.md),
-              ),
-              child: Row(children: [
-                Stack(clipBehavior: Clip.none, children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: AppColors.deviceNavy,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text('PC',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12)),
-                  ),
-                  Positioned(
-                    right: -2,
-                    bottom: -2,
-                    child: Container(
-                      width: 11,
-                      height: 11,
-                      decoration: BoxDecoration(
-                        color: widget.online
-                            ? AppColors.success
-                            : AppColors.textTertiary,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: AppColors.surface, width: 2.5),
-                      ),
-                    ),
-                  ),
-                ]),
-                if (_open) ...[
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('This PC',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppTypography.caption.copyWith(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary)),
-                        Text(widget.online ? 'Online · Sharing' : 'Offline',
-                            style: AppTypography.caption.copyWith(
-                                fontSize: 10.5,
-                                color: widget.online
-                                    ? AppColors.success
-                                    : AppColors.textTertiary,
-                                fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ),
-                ],
-              ]),
-            ),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -529,8 +465,9 @@ class _HomeDevice {
   final bool online;
   final bool favorite;
   final DateTime? lastConnected;
+  final String? thumbPath; // last captured remote frame, if any
   _HomeDevice(this.id, this.name, this.os, this.online, this.favorite,
-      this.lastConnected);
+      this.lastConnected, this.thumbPath);
 }
 
 enum _Tab { pinned, online, recent, offline, all }
@@ -569,6 +506,7 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
         on,
         favs.contains(k),
         last ?? existing?.lastConnected,
+        service.thumbPathFor(id),
       );
     }
 
@@ -1256,6 +1194,62 @@ class _DeviceCardState extends State<_DeviceCard> {
     return _grounds[h % _grounds.length];
   }
 
+  /// Fallback stage visual when there's no screenshot yet: the muted device
+  /// ground, a soft coral glow, and a pointer-tilting device glyph.
+  Widget _groundGlyph(_HomeDevice d) {
+    return Stack(children: [
+      Positioned.fill(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                _ground,
+                Color.alphaBlend(Colors.black.withValues(alpha: 0.25), _ground),
+              ],
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        bottom: 18,
+        left: 0,
+        right: 0,
+        child: Center(
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 200),
+            opacity: _hover ? 0.8 : 0.45,
+            child: Container(
+              width: 120,
+              height: 22,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: [
+                  BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.55),
+                      blurRadius: 22,
+                      spreadRadius: -6),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      Center(
+        child: Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.identity()
+            ..setEntry(3, 2, 0.0014)
+            ..rotateY(_tilt.dx * 0.34)
+            ..rotateX(-_tilt.dy * 0.28),
+          child: Icon(_glyph(d.os),
+              size: 60, color: Colors.white.withValues(alpha: 0.92)),
+        ),
+      ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = widget.device;
@@ -1290,59 +1284,28 @@ class _DeviceCardState extends State<_DeviceCard> {
                 child: SizedBox(
                   height: 150,
                   child: Stack(children: [
+                    // Background: the real captured screenshot if we have one,
+                    // else the muted device ground + tilting glyph.
                     Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              _ground,
-                              Color.alphaBlend(
-                                  Colors.black.withValues(alpha: 0.25), _ground),
-                            ],
-                          ),
-                        ),
-                      ),
+                      child: (d.thumbPath != null)
+                          ? thumbImage(d.thumbPath!, fallback: _groundGlyph(d))
+                          : _groundGlyph(d),
                     ),
-                    // glow
-                    Positioned(
-                      bottom: 18,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: AnimatedOpacity(
-                          duration: const Duration(milliseconds: 200),
-                          opacity: _hover ? 0.8 : 0.45,
-                          child: Container(
-                            width: 120,
-                            height: 22,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(999),
-                              boxShadow: [
-                                BoxShadow(
-                                    color: AppColors.primary
-                                        .withValues(alpha: 0.55),
-                                    blurRadius: 22,
-                                    spreadRadius: -6),
-                              ],
+                    // scrim so the status/favorite badges stay legible over a
+                    // bright screenshot
+                    if (d.thumbPath != null)
+                      const Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Color(0x55000000), Color(0x11000000)],
+                              stops: [0, 0.5],
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    // tilting device glyph
-                    Center(
-                      child: Transform(
-                        alignment: Alignment.center,
-                        transform: Matrix4.identity()
-                          ..setEntry(3, 2, 0.0014)
-                          ..rotateY(_tilt.dx * 0.34)
-                          ..rotateX(-_tilt.dy * 0.28),
-                        child: Icon(_glyph(d.os), size: 60, color: Colors.white
-                            .withValues(alpha: 0.92)),
-                      ),
-                    ),
                     // status badge
                     Positioned(
                       top: 12,

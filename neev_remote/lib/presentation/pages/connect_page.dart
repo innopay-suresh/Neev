@@ -1505,8 +1505,8 @@ class _TopBar extends ConsumerWidget {
               icon: Icons.settings_outlined,
               tooltip: 'Settings',
               onTap: onSettings),
-          const SizedBox(width: AppSpacing.sm),
-          _UserChip(),
+          // "This PC" profile chip removed — the single device identity lives in
+          // the activity panel's "This device" card (no duplicate profiles).
         ],
       ),
     );

@@ -28,6 +28,7 @@ import 'privacy_mode.dart';
 import 'audit_log.dart';
 import 'clipboard_monitor.dart';
 import 'consent_flag.dart';
+import 'thumb_store.dart';
 import 'screen_capture_service.dart';
 import 'session_watcher.dart';
 import 'signaling_service.dart';
@@ -75,9 +76,40 @@ class _ClipRecv {
 /// Both roles use independent signaling connections so a single app instance
 /// can host and view at the same time (like AnyDesk).
 class RemoteService extends ChangeNotifier {
-  RemoteService({this.iceServers = AppConstants.iceServers});
+  RemoteService({this.iceServers = AppConstants.iceServers}) {
+    _thumbs.init(); // per-device session thumbnails (last remote frame)
+  }
 
   final List<Map<String, dynamic>> iceServers;
+
+  // Per-device session thumbnails: a real captured remote frame saved per device
+  // id, shown on the Home device cards (Data Honesty: it's an actual frame).
+  final ThumbStore _thumbs = ThumbStore();
+  Timer? _thumbTimer;
+
+  String _normThumbId(String id) => id.replaceAll(RegExp(r'[^0-9a-zA-Z]'), '');
+
+  /// Absolute path to a device's saved thumbnail (may not exist → card glyph).
+  String? thumbPathFor(String id) {
+    final n = _normThumbId(id);
+    return n.isEmpty ? null : _thumbs.pathFor(n);
+  }
+
+  /// Capture the current remote frame and store it as this session's device
+  /// thumbnail. Best-effort; failures are silent (card just keeps the glyph).
+  Future<void> _captureThumb() async {
+    final id = _targetId;
+    if (id == null || _viewerStatus != ViewerStatus.connected) return;
+    try {
+      final tracks = _remoteStream?.getVideoTracks();
+      if (tracks == null || tracks.isEmpty) return;
+      final buf = await tracks.first.captureFrame();
+      final bytes = buf.asUint8List();
+      if (bytes.isEmpty) return;
+      await _thumbs.save(_normThumbId(id), bytes);
+      notifyListeners(); // refresh the card image
+    } catch (_) {}
+  }
 
   // ICE servers resolved from the signaling server at connect time. The server
   // advertises STUN + a reachable TURN relay; without this the app would only
@@ -1118,6 +1150,8 @@ class RemoteService extends ChangeNotifier {
       );
     }
     if (id != null) _viewerSignaling?.sendBye(id);
+    _thumbTimer?.cancel();
+    _thumbTimer = null;
     await _viewerPeer?.close();
     _viewerPeer = null;
     await _viewerSignaling?.disconnect();
@@ -1501,6 +1535,14 @@ class RemoteService extends ChangeNotifier {
       _viewerStatus = ViewerStatus.connected;
       _auditViewerStart ??= DateTime.now();
       DiagLog.log('viewer', 'connected — remote stream up (session live)');
+      // Grab a thumbnail a few seconds in (once the first real frames land) and
+      // refresh it periodically so the Home device card shows the actual screen.
+      _thumbTimer?.cancel();
+      _thumbTimer = Timer(const Duration(seconds: 3), () {
+        _captureThumb();
+        _thumbTimer = Timer.periodic(
+            const Duration(seconds: 20), (_) => _captureThumb());
+      });
       // Once a session is actually up, keep it alive across unexpected host
       // drops — most importantly a user switch, where the SYSTEM service kills
       // and relaunches the host in the new session under the SAME machine id.
