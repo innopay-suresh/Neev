@@ -249,6 +249,37 @@ moves to **Working Features** after it is confirmed working on real hardware.
   Do NOT re-merge the two lanes or call a whole-file stream inline on a drain
   goroutine — that reintroduces the r69 head-of-line block (clipboard paste never
   completing + file acks stuck "unconfirmed").
+- **LD-23 — The machine password MUST be STABLE across restarts/reinstalls;
+  never re-minted per boot. And every connect-failure reason MUST surface a
+  distinct, actionable viewer message — never a silent "Connecting…".** ROOT of
+  the 2026-07-23 "won't connect one direction" hunt: `machine.dat` carries only
+  the id (the installer never sets a password), so `transport.go` setupSignaling
+  fell through to `GenerateRandomPassword()` on EVERY boot and never wrote it
+  back → the host advertised a fresh password each start → a viewer's saved
+  password went stale → the relay rejected it (`hub.go` logs `invalid password
+  attempt`, sends `errMsg("invalid password")`). FIX: `persistMachineCreds()`
+  writes the resolved id+password back to `machine.dat` on first register, ONLY
+  when it had no password (never clobbers a user-set one). Do NOT reintroduce a
+  per-boot random password without persisting it. Viewer side: `_friendlyConnectError()`
+  maps raw relay errors (password / too-many / offline) to clear text; the raw
+  reason still drives retry/stop. **META-LESSON (this class has now cost multiple
+  cycles): ONE symptom, MANY causes.** A hung viewer looked identical for stale
+  password, consent timeout, consent-toggle-write-failure, and transient Wi-Fi —
+  and today it was misattributed first to the r77 IPC change (reverted as r78,
+  then restored — r77 was innocent) and then to a consent-popup Accept-wiring
+  regression that DID NOT EXIST (the AnyDesk two-Accept popup was never built —
+  the only consent UIs are the single-Accept `AlertDialog` in `connect_page.dart`,
+  wired to `acceptConnection()`, and the Win32 `MessageBox`; both verified wired).
+  BEFORE assuming a code regression on a "won't connect" report: (1) read the
+  RELAY logs first (`docker logs deploy-server-1` — `invalid password` / `forwarded`
+  / `registered` are decisive), (2) separate config/env (password, consent flag,
+  network) from code, (3) confirm the suspected UI element actually EXISTS and its
+  button actually calls the backend before "re-wiring" it. AND the standing rule
+  the user set: **every UI rebuild of an action button (Accept/Dismiss, Import/
+  Export, toggles) must be verified end-to-end against its backend call
+  immediately** — this UI-rebuilt-but-backend-disconnected class has recurred, so
+  test the full connection flow after ANY change to the consent popup or connect
+  buttons.
 
 ---
 
@@ -370,6 +401,28 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-23 — Stable host password + clear viewer connect errors (r79).
+  Implements LD-23.** A long "won't connect one direction / stuck on Connecting"
+  investigation resolved to a NON-code + code mix. RELAY logs (`deploy-server-1`)
+  were decisive: `invalid password attempt ×5` for one target, `connect request
+  forwarded` for the other. ROOT CAUSE: the TransportMode host re-minted a random
+  password every boot (`transport.go` fell through to `GenerateRandomPassword()`
+  and never persisted it — `machine.dat` had only the id), so a viewer's saved
+  password silently went stale and the relay rejected it. FIX: `persistMachineCreds()`
+  freezes id+password into `machine.dat` on first register (only when it had no
+  password — never clobbers a user-set one); `_friendlyConnectError()` turns raw
+  relay errors into actionable viewer text (wrong password / too many / offline)
+  so a failure is never a blank "Connecting…". Also folds back the restored r77
+  (keyframe throttle + IPC lane fairness) that the r78 revert had removed — r77
+  was proven innocent of the connect issue by the relay logs. Detours corrected
+  this session (recorded so they aren't repeated): (a) r77→r78 REVERT then
+  RESTORE — r77 never broke Win↔Win; the first failure was a consent 30 s timeout
+  (`consent.txt=1`, nobody clicked the Win32 box); (b) a hypothesised AnyDesk
+  consent-popup Accept-wiring regression was DISPROVEN — that rich popup was never
+  built; the only consent UIs (single-Accept `AlertDialog` → `acceptConnection()`,
+  Win32 `MessageBox`) are both correctly wired. No change to consent dialog,
+  Win↔Win capture/input/secure-desktop, clipboard, chat, or file transfer (LD-13).
+  Go builds (darwin + windows) + vet + Dart analyze clean.
 - **2026-07-23 — Clipboard/chat/file regressions + card rebuild (r75).**
   • **IPC writeLoop deadlock (root cause of clipboard host→viewer + chat replies +
     file 'saved' acks all breaking together, "1st file ok, 2nd unconfirmed, 3rd
