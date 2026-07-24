@@ -242,12 +242,14 @@ class CommandNavRail extends StatefulWidget {
   final int selected;
   final bool online;
   final ValueChanged<int> onSelect;
+  final RemoteService service;
   const CommandNavRail({
     super.key,
     required this.items,
     required this.selected,
     required this.online,
     required this.onSelect,
+    required this.service,
   });
 
   @override
@@ -255,98 +257,74 @@ class CommandNavRail extends StatefulWidget {
 }
 
 class _CommandNavRailState extends State<CommandNavRail> {
-  bool _open = false;
+  static const bool _open = true; // always expanded (labels + This-device shown)
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _open = true),
-      onExit: (_) => setState(() => _open = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
-        width: _open ? 240 : 88,
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: const Border(right: BorderSide(color: AppColors.border)),
-          boxShadow: _open
-              ? [
-                  BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 40,
-                      offset: const Offset(8, 0)),
-                ]
-              : null,
-        ),
-        clipBehavior: Clip.hardEdge,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // logo
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 20, 18),
-              child: Row(children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFFF8352), Color(0xFFE0491A)],
-                    ),
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: const [
-                      BoxShadow(
-                          color: Color(0x66FF6A32),
-                          blurRadius: 18,
-                          offset: Offset(0, 5)),
-                    ],
+    return Container(
+      width: 232,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(right: BorderSide(color: AppColors.border)),
+      ),
+      clipBehavior: Clip.hardEdge,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // brand
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 18, 18),
+            child: Row(children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFF8352), Color(0xFFE0491A)],
                   ),
-                  alignment: Alignment.center,
-                  child: const Text('N',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16)),
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: const [
+                    BoxShadow(
+                        color: Color(0x66FF6A32),
+                        blurRadius: 18,
+                        offset: Offset(0, 5)),
+                  ],
                 ),
-                if (_open) ...[
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Neev Remote',
-                            maxLines: 1,
-                            overflow: TextOverflow.clip,
-                            style: AppTypography.cardTitle.copyWith(fontSize: 15)),
-                        Text('COMMAND CENTER',
-                            style: AppTypography.microLabel
-                                .copyWith(fontSize: 9, letterSpacing: 0.8)),
-                      ],
-                    ),
-                  ),
-                ],
-              ]),
-            ),
-            // nav
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  for (var i = 0; i < widget.items.length; i++)
-                    _RailItem(
-                      item: widget.items[i],
-                      active: i == widget.selected,
-                      open: _open,
-                      onTap: () => widget.onSelect(i),
-                    ),
-                ],
+                alignment: Alignment.center,
+                child: const Text('N',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16)),
               ),
+              const SizedBox(width: 12),
+              Text('Neev',
+                  style: AppTypography.pageTitle.copyWith(fontSize: 18)),
+            ]),
+          ),
+          // nav
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                for (var i = 0; i < widget.items.length; i++)
+                  _RailItem(
+                    item: widget.items[i],
+                    active: i == widget.selected,
+                    open: _open,
+                    onTap: () => widget.onSelect(i),
+                  ),
+              ],
             ),
-            const SizedBox(height: 12),
-          ],
-        ),
+          ),
+          // this-device (own ID + password) pinned at the bottom
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+            child: _ThisDeviceCard(service: widget.service),
+          ),
+        ],
       ),
     );
   }
@@ -549,14 +527,8 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
 
   @override
   Widget build(BuildContext context) {
-    final service = widget.service;
     final all = _devices();
     final onlineCount = all.where((d) => d.online).length;
-    final activeXfer = service.fileTransfers
-        .where((t) => t.status == FileStatus.active || t.status == FileStatus.sent)
-        .length;
-    final sharing = service.hostStatus == HostStatus.online;
-    final unattended = ref.watch(settingsProvider).unattendedEnabled;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 40),
@@ -572,17 +544,9 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
           ),
         ),
         const SizedBox(height: 26),
-        _StatusStrip(
-          onlineCount: onlineCount,
-          knownCount: all.length,
-          activeXfer: activeXfer,
-          sharing: sharing,
-          unattended: unattended,
-          connectedViewers: service.connectedViewers,
-        ),
-        const SizedBox(height: 26),
         _SectionHead(
           title: 'Your devices',
+          trailing: '${all.length} saved · $onlineCount online',
           tabs: [
             for (final t in _Tab.values)
               _TabSpec(_tabLabel(t), t == _tab, () => setState(() => _tab = t),
@@ -1119,7 +1083,8 @@ class _TabSpec {
 class _SectionHead extends StatelessWidget {
   final String title;
   final List<_TabSpec> tabs;
-  const _SectionHead({required this.title, required this.tabs});
+  final String? trailing;
+  const _SectionHead({required this.title, required this.tabs, this.trailing});
   @override
   Widget build(BuildContext context) {
     return Row(children: [
@@ -1129,6 +1094,12 @@ class _SectionHead extends StatelessWidget {
             padding: const EdgeInsets.only(right: 4),
             child: _TabPill(t),
           )),
+      if (trailing != null) ...[
+        const Spacer(),
+        Text(trailing!,
+            style: AppTypography.caption
+                .copyWith(fontSize: 12, color: AppColors.textTertiary)),
+      ],
     ]);
   }
 }
@@ -1647,8 +1618,6 @@ class CommandActivityPanel extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                _ThisDeviceCard(service: service),
-                const SizedBox(height: 14),
                 if (consent != null) ...[
                   _ConsentRequestCard(controllerId: consent.controllerId),
                   const SizedBox(height: 12),

@@ -197,6 +197,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
             selected: _section,
             online: service.hostStatus == HostStatus.online,
             onSelect: (i) => setState(() => _section = i),
+            service: service,
           ),
           Expanded(
             child: Column(
