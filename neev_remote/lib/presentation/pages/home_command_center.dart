@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/audit_log.dart';
 import '../../data/services/discovery_model.dart';
@@ -243,14 +242,12 @@ class CommandNavRail extends StatefulWidget {
   final int selected;
   final bool online;
   final ValueChanged<int> onSelect;
-  final RemoteService service;
   const CommandNavRail({
     super.key,
     required this.items,
     required this.selected,
     required this.online,
     required this.onSelect,
-    required this.service,
   });
 
   @override
@@ -258,80 +255,98 @@ class CommandNavRail extends StatefulWidget {
 }
 
 class _CommandNavRailState extends State<CommandNavRail> {
-  static const bool _open = true; // always expanded (labels + This-device shown)
+  bool _open = false;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 232,
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(right: BorderSide(color: AppColors.border)),
-      ),
-      clipBehavior: Clip.hardEdge,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // brand
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 18, 18),
-            child: Row(children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFFFF8352), Color(0xFFE0491A)],
+    return MouseRegion(
+      onEnter: (_) => setState(() => _open = true),
+      onExit: (_) => setState(() => _open = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        width: _open ? 240 : 88,
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: const Border(right: BorderSide(color: AppColors.border)),
+          boxShadow: _open
+              ? [
+                  BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 40,
+                      offset: const Offset(8, 0)),
+                ]
+              : null,
+        ),
+        clipBehavior: Clip.hardEdge,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // logo
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 20, 20, 18),
+              child: Row(children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [AppColors.primary, AppColors.primaryDark],
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                          color: AppColors.primary.withValues(alpha: 0.4),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4)),
+                    ],
                   ),
-                  borderRadius: BorderRadius.circular(10),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Color(0x66FF6A32),
-                        blurRadius: 18,
-                        offset: Offset(0, 5)),
-                  ],
+                  alignment: Alignment.center,
+                  child: const Text('N',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16)),
                 ),
-                alignment: Alignment.center,
-                child: const Text('N',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16)),
-              ),
-              const SizedBox(width: 12),
-              Text('Neev',
-                  style: AppTypography.pageTitle.copyWith(fontSize: 18)),
-            ]),
-          ),
-          // profile
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
-            child: _ProfileChip(
-                onSettings: () => widget.onSelect(widget.items.length - 1)),
-          ),
-          // nav
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                for (var i = 0; i < widget.items.length; i++)
-                  _RailItem(
-                    item: widget.items[i],
-                    active: i == widget.selected,
-                    open: _open,
-                    onTap: () => widget.onSelect(i),
+                if (_open) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Neev Remote',
+                            maxLines: 1,
+                            overflow: TextOverflow.clip,
+                            style: AppTypography.cardTitle.copyWith(fontSize: 15)),
+                        Text('COMMAND CENTER',
+                            style: AppTypography.microLabel
+                                .copyWith(fontSize: 9, letterSpacing: 0.8)),
+                      ],
+                    ),
                   ),
-              ],
+                ],
+              ]),
             ),
-          ),
-          // live activity pinned at the bottom
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: _LiveActivityMini(service: widget.service),
-          ),
-        ],
+            // nav
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  for (var i = 0; i < widget.items.length; i++)
+                    _RailItem(
+                      item: widget.items[i],
+                      active: i == widget.selected,
+                      open: _open,
+                      onTap: () => widget.onSelect(i),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
     );
   }
@@ -534,17 +549,40 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
 
   @override
   Widget build(BuildContext context) {
+    final service = widget.service;
     final all = _devices();
     final onlineCount = all.where((d) => d.online).length;
+    final activeXfer = service.fileTransfers
+        .where((t) => t.status == FileStatus.active || t.status == FileStatus.sent)
+        .length;
+    final sharing = service.hostStatus == HostStatus.online;
+    final unattended = ref.watch(settingsProvider).unattendedEnabled;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 40),
       children: [
-        const _WelcomeBanner(),
+        _IdleFloat(
+          amplitude: 2.5,
+          child: _ConnectionDock(
+            idController: widget.idController,
+            passwordController: widget.passwordController,
+            onConnect: widget.onConnect,
+            recents: ref.watch(recentConnectionsProvider).take(3).toList(),
+            onPick: widget.onPick,
+          ),
+        ),
+        const SizedBox(height: 26),
+        _StatusStrip(
+          onlineCount: onlineCount,
+          knownCount: all.length,
+          activeXfer: activeXfer,
+          sharing: sharing,
+          unattended: unattended,
+          connectedViewers: service.connectedViewers,
+        ),
         const SizedBox(height: 26),
         _SectionHead(
           title: 'Your devices',
-          trailing: '${all.length} saved · $onlineCount online',
           tabs: [
             for (final t in _Tab.values)
               _TabSpec(_tabLabel(t), t == _tab, () => setState(() => _tab = t),
@@ -641,73 +679,54 @@ class _ConnectionDock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 15, 18, 15),
+      padding: const EdgeInsets.fromLTRB(30, 28, 30, 26),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadii.lg),
+        borderRadius: BorderRadius.circular(AppRadii.panel),
         border: Border.all(color: AppColors.border),
         boxShadow: AppShadows.dock,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: AppColors.primarySoft,
-                borderRadius: BorderRadius.circular(AppRadii.md),
-              ),
-              child: const Icon(Icons.cast_connected_rounded,
-                  size: 18, color: AppColors.primary),
-            ),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Connect to a device',
-                      style: AppTypography.sectionTitle.copyWith(fontSize: 14.5)),
-                  Text('Enter an ID and password to start a session',
-                      style: AppTypography.meta.copyWith(fontSize: 11)),
-                ],
-              ),
-            ),
-          ]),
-          const SizedBox(height: 12),
+          Text('Connect securely to another device',
+              style: AppTypography.pageTitle.copyWith(fontSize: 22)),
+          const SizedBox(height: 5),
+          Text('Access, support, transfer files or collaborate in real time.',
+              style: AppTypography.body.copyWith(color: AppColors.textSecondary)),
+          const SizedBox(height: 20),
           _DockField(
             controller: idController,
-            hint: 'Remote ID or device name',
+            hint: 'Remote ID, device name or contact',
             icon: Icons.devices_rounded,
             mono: true,
             onSubmitted: (_) => onConnect(),
           ),
-          const SizedBox(height: 9),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
-                flex: 5,
+                flex: 3,
                 child: _DockField(
                   controller: passwordController,
-                  hint: 'Password',
+                  hint: 'Password / Access key',
                   icon: Icons.lock_outline_rounded,
                   obscure: true,
                   onSubmitted: (_) => onConnect(),
                 ),
               ),
-              const SizedBox(width: 9),
-              const Expanded(flex: 3, child: _ModeSelector()),
-              const SizedBox(width: 9),
+              const SizedBox(width: 12),
+              const Expanded(flex: 2, child: _ModeSelector()),
+              const SizedBox(width: 12),
               _ConnectButton(onTap: onConnect),
             ],
           ),
           if (recents.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             Row(children: [
               Text('Recent',
                   style: AppTypography.label
-                      .copyWith(fontSize: 11, color: AppColors.textTertiary)),
+                      .copyWith(fontSize: 11.5, color: AppColors.textTertiary)),
               const SizedBox(width: 8),
               ...recents.map((r) => Padding(
                     padding: const EdgeInsets.only(right: 8),
@@ -740,24 +759,24 @@ class _DockField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 13),
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: AppColors.surfaceLight,
-        borderRadius: BorderRadius.circular(AppRadii.md),
+        borderRadius: BorderRadius.circular(AppRadii.lg),
         border: Border.all(color: AppColors.borderStrong),
       ),
       child: Row(children: [
-        Icon(icon, size: 17, color: AppColors.textTertiary),
-        const SizedBox(width: 10),
+        Icon(icon, size: 18, color: AppColors.textTertiary),
+        const SizedBox(width: 11),
         Expanded(
           child: TextField(
             controller: controller,
             obscureText: obscure,
             onSubmitted: onSubmitted,
             style: mono
-                ? AppTypography.idLarge.copyWith(fontSize: 14.5, letterSpacing: 0.8)
-                : AppTypography.body.copyWith(fontSize: 14),
+                ? AppTypography.idLarge.copyWith(fontSize: 16, letterSpacing: 1.5)
+                : AppTypography.body.copyWith(fontSize: 15),
             decoration: InputDecoration(
               hintText: hint,
               hintStyle:
@@ -794,9 +813,9 @@ class _ModeSelectorState extends State<_ModeSelector> {
     return PopupMenuButton<String>(
       initialValue: _mode,
       onSelected: (v) => setState(() => _mode = v),
-      offset: const Offset(0, 46),
+      offset: const Offset(0, 54),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.md),
+        borderRadius: BorderRadius.circular(AppRadii.lg),
         side: const BorderSide(color: AppColors.border),
       ),
       color: AppColors.surface,
@@ -804,28 +823,33 @@ class _ModeSelectorState extends State<_ModeSelector> {
         for (final m in _modes)
           PopupMenuItem(
               value: m,
-              height: 38,
-              child: Text(m, style: AppTypography.body.copyWith(fontSize: 13))),
+              height: 40,
+              child: Text(m, style: AppTypography.body.copyWith(fontSize: 13.5))),
       ],
       child: Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        height: 52,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
           color: AppColors.surfaceLight,
-          borderRadius: BorderRadius.circular(AppRadii.md),
+          borderRadius: BorderRadius.circular(AppRadii.lg),
           border: Border.all(color: AppColors.borderStrong),
         ),
         child: Row(children: [
-          const Icon(Icons.tune_rounded, size: 15, color: AppColors.textTertiary),
-          const SizedBox(width: 8),
           Expanded(
-            child: Text(_mode,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTypography.bodyStrong.copyWith(fontSize: 12.5)),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('MODE', style: AppTypography.microLabel),
+                Text(_mode,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodyStrong.copyWith(fontSize: 13.5)),
+              ],
+            ),
           ),
           const Icon(Icons.keyboard_arrow_down_rounded,
-              size: 17, color: AppColors.textTertiary),
+              size: 18, color: AppColors.textTertiary),
         ]),
       ),
     );
@@ -856,8 +880,8 @@ class _ConnectButtonState extends State<_ConnectButton> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOutCubic,
-          height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+          height: 52,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           transform: Matrix4.translationValues(
               0, _down ? 0 : (_hover ? -2 : 0), 0)
             ..scaleByDouble(
@@ -865,12 +889,12 @@ class _ConnectButtonState extends State<_ConnectButton> {
           transformAlignment: Alignment.center,
           decoration: BoxDecoration(
             color: _hover ? AppColors.primaryDark : AppColors.primary,
-            borderRadius: BorderRadius.circular(AppRadii.md),
+            borderRadius: BorderRadius.circular(AppRadii.lg),
             boxShadow: [
               BoxShadow(
-                color: AppColors.primary.withValues(alpha: _hover ? 0.5 : 0.34),
+                color: AppColors.primary.withValues(alpha: _hover ? 0.45 : 0.3),
                 blurRadius: _hover ? 22 : 14,
-                offset: Offset(0, _hover ? 9 : 5),
+                offset: Offset(0, _hover ? 10 : 6),
               ),
             ],
           ),
@@ -879,13 +903,13 @@ class _ConnectButtonState extends State<_ConnectButton> {
                 style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
-                    fontSize: 14)),
-            const SizedBox(width: 8),
+                    fontSize: 15)),
+            const SizedBox(width: 9),
             AnimatedSlide(
               duration: const Duration(milliseconds: 160),
               offset: Offset(_hover ? 0.25 : 0, 0),
               child: const Icon(Icons.arrow_forward_rounded,
-                  color: Colors.white, size: 18),
+                  color: Colors.white, size: 19),
             ),
           ]),
         ),
@@ -1081,8 +1105,7 @@ class _TabSpec {
 class _SectionHead extends StatelessWidget {
   final String title;
   final List<_TabSpec> tabs;
-  final String? trailing;
-  const _SectionHead({required this.title, required this.tabs, this.trailing});
+  const _SectionHead({required this.title, required this.tabs});
   @override
   Widget build(BuildContext context) {
     return Row(children: [
@@ -1092,12 +1115,6 @@ class _SectionHead extends StatelessWidget {
             padding: const EdgeInsets.only(right: 4),
             child: _TabPill(t),
           )),
-      if (trailing != null) ...[
-        const Spacer(),
-        Text(trailing!,
-            style: AppTypography.caption
-                .copyWith(fontSize: 12, color: AppColors.textTertiary)),
-      ],
     ]);
   }
 }
@@ -1287,37 +1304,13 @@ class _DeviceCardState extends State<_DeviceCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // thumbnail (real screen if captured, else a light placeholder),
-            // treated as a "lit window": a faint top sheen + bottom shade give
-            // depth, and a hairline separates it from the card body.
+            // thumbnail (real screen if captured, else a light placeholder)
             SizedBox(
               height: 108,
               width: double.infinity,
-              child: Stack(fit: StackFit.expand, children: [
-                (d.thumbPath != null)
-                    ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
-                    : _placeholder(d),
-                const IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Color(0x14FFFFFF),
-                          Color(0x00000000),
-                          Color(0x38000000),
-                        ],
-                        stops: [0.0, 0.55, 1.0],
-                      ),
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: Container(height: 1, color: AppColors.border),
-                ),
-              ]),
+              child: (d.thumbPath != null)
+                  ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
+                  : _placeholder(d),
             ),
             // body
             Padding(
@@ -1568,52 +1561,8 @@ String _ago(DateTime t) {
 /// requests, active file transfers, connected viewers. Real state only.
 class CommandActivityPanel extends StatelessWidget {
   final RemoteService service;
-  final TextEditingController idController;
-  final TextEditingController passwordController;
-  final VoidCallback onConnect;
-  final List<RecentConnection> recents;
-  final void Function(String id) onPick;
-  const CommandActivityPanel({
-    super.key,
-    required this.service,
-    required this.idController,
-    required this.passwordController,
-    required this.onConnect,
-    required this.recents,
-    required this.onPick,
-  });
+  const CommandActivityPanel({super.key, required this.service});
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 344,
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(left: BorderSide(color: AppColors.border)),
-      ),
-      child: ListView(
-        padding: const EdgeInsets.all(18),
-        children: [
-          _ConnectPanel(
-            idController: idController,
-            passwordController: passwordController,
-            onConnect: onConnect,
-            recents: recents,
-            onPick: onPick,
-          ),
-          const SizedBox(height: 16),
-          _ThisDeviceCard(service: service),
-        ],
-      ),
-    );
-  }
-}
-
-// Legacy live-activity fragment kept below only so old references compile; the
-// live feed now lives in the nav rail (_LiveActivityMini).
-class _LegacyActivityBody extends StatelessWidget {
-  final RemoteService service;
-  const _LegacyActivityBody({required this.service});
   @override
   Widget build(BuildContext context) {
     final consent = service.pendingConsent;
@@ -1622,14 +1571,46 @@ class _LegacyActivityBody extends StatelessWidget {
             t.status == FileStatus.active || t.status == FileStatus.sent)
         .toList();
     final viewers = service.connectedViewers;
+
     return Container(
+      width: 328,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(left: BorderSide(color: AppColors.border)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // header
+          Container(
+            height: 74,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppColors.border)),
+            ),
+            child: Row(children: [
+              Text('Live activity', style: AppTypography.sectionTitle),
+              const Spacer(),
+              Container(
+                width: 7,
+                height: 7,
+                decoration: const BoxDecoration(
+                    color: AppColors.success, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 6),
+              Text('Live',
+                  style: AppTypography.caption.copyWith(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.success)),
+            ]),
+          ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                _ThisDeviceCard(service: service),
+                const SizedBox(height: 14),
                 if (consent != null) ...[
                   _ConsentRequestCard(controllerId: consent.controllerId),
                   const SizedBox(height: 12),
@@ -1674,390 +1655,6 @@ class _LegacyActivityBody extends StatelessWidget {
   }
 }
 
-// ------------------------------------------------------------- welcome banner
-class _WelcomeBanner extends StatefulWidget {
-  const _WelcomeBanner();
-  @override
-  State<_WelcomeBanner> createState() => _WelcomeBannerState();
-}
-
-class _WelcomeBannerState extends State<_WelcomeBanner>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c;
-  @override
-  void initState() {
-    super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(seconds: 7))
-      ..repeat();
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  String _greeting() {
-    final h = DateTime.now().hour;
-    if (h < 12) return 'Good morning';
-    if (h < 17) return 'Good afternoon';
-    return 'Good evening';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final reduce = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppRadii.panel),
-      child: Container(
-        height: 128,
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: [Color(0xFF251B13), Color(0xFF1B1712)],
-          ),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Stack(children: [
-          // slow-drifting ember glow behind the copy (the "welcome" motion)
-          if (!reduce)
-            AnimatedBuilder(
-              animation: _c,
-              builder: (_, __) {
-                final t = _c.value;
-                final wave = t < 0.5 ? t * 2 : 2 - t * 2; // 0..1..0
-                return Positioned(
-                  right: 10 + 70 * wave,
-                  top: -60 + 26 * wave,
-                  child: Container(
-                    width: 230,
-                    height: 230,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(colors: [
-                        Color(0x3DFF6A32),
-                        Color(0x00FF6A32),
-                      ]),
-                    ),
-                  ),
-                );
-              },
-            ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 26),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
-                  const Icon(Icons.bolt_rounded,
-                      size: 14, color: AppColors.primary),
-                  const SizedBox(width: 6),
-                  Text('${_greeting().toUpperCase()} · WELCOME BACK',
-                      style: AppTypography.microLabel.copyWith(
-                          fontSize: 9,
-                          letterSpacing: 1.2,
-                          color: AppColors.primaryHover)),
-                ]),
-                const SizedBox(height: 9),
-                Text('Control any device, anywhere.',
-                    style: AppTypography.pageTitle
-                        .copyWith(fontSize: 23, letterSpacing: -0.4)),
-                const SizedBox(height: 5),
-                Text('Enter an ID on the right to start a session, '
-                    'or pick a saved device below.',
-                    style: AppTypography.caption.copyWith(
-                        fontSize: 12.5, color: AppColors.textSecondary)),
-              ],
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-// ------------------------------------------------------------- connect (right)
-class _ConnectPanel extends StatelessWidget {
-  final TextEditingController idController;
-  final TextEditingController passwordController;
-  final VoidCallback onConnect;
-  final List<RecentConnection> recents;
-  final void Function(String id) onPick;
-  const _ConnectPanel({
-    required this.idController,
-    required this.passwordController,
-    required this.onConnect,
-    required this.recents,
-    required this.onPick,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Row(children: [
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: AppColors.primarySoft,
-            borderRadius: BorderRadius.circular(AppRadii.md),
-          ),
-          child: const Icon(Icons.cast_connected_rounded,
-              size: 18, color: AppColors.primary),
-        ),
-        const SizedBox(width: 11),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Connect to a device',
-                  style: AppTypography.sectionTitle.copyWith(fontSize: 14.5)),
-              Text('Enter an ID and password',
-                  style: AppTypography.meta.copyWith(fontSize: 11)),
-            ],
-          ),
-        ),
-      ]),
-      const SizedBox(height: 14),
-      _DockField(
-        controller: idController,
-        hint: 'Remote ID or device name',
-        icon: Icons.devices_rounded,
-        mono: true,
-        onSubmitted: (_) => onConnect(),
-      ),
-      const SizedBox(height: 9),
-      _DockField(
-        controller: passwordController,
-        hint: 'Password',
-        icon: Icons.lock_outline_rounded,
-        obscure: true,
-        onSubmitted: (_) => onConnect(),
-      ),
-      const SizedBox(height: 9),
-      const _ModeSelector(),
-      const SizedBox(height: 11),
-      _WideConnectButton(onTap: onConnect),
-      if (recents.isNotEmpty) ...[
-        const SizedBox(height: 14),
-        Text('RECENT',
-            style: AppTypography.microLabel
-                .copyWith(fontSize: 8.5, color: AppColors.textTertiary)),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final r in recents.take(4))
-              _RecentChip(name: r.name, onTap: () => onPick(r.id)),
-          ],
-        ),
-      ],
-    ]);
-  }
-}
-
-class _WideConnectButton extends StatefulWidget {
-  final VoidCallback onTap;
-  const _WideConnectButton({required this.onTap});
-  @override
-  State<_WideConnectButton> createState() => _WideConnectButtonState();
-}
-
-class _WideConnectButtonState extends State<_WideConnectButton> {
-  bool _hover = false;
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          height: 46,
-          decoration: BoxDecoration(
-            color: _hover ? AppColors.primaryDark : AppColors.primary,
-            borderRadius: BorderRadius.circular(AppRadii.md),
-            boxShadow: [
-              BoxShadow(
-                  color: AppColors.primary.withValues(alpha: _hover ? 0.5 : 0.34),
-                  blurRadius: _hover ? 22 : 14,
-                  offset: Offset(0, _hover ? 9 : 5)),
-            ],
-          ),
-          alignment: Alignment.center,
-          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-            Text('Connect',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14.5)),
-            SizedBox(width: 8),
-            Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-// ------------------------------------------------- live activity (sidebar bottom)
-class _LiveActivityMini extends StatelessWidget {
-  final RemoteService service;
-  const _LiveActivityMini({required this.service});
-  @override
-  Widget build(BuildContext context) {
-    final consent = service.pendingConsent;
-    final xfers = service.fileTransfers
-        .where((t) =>
-            t.status == FileStatus.active || t.status == FileStatus.sent)
-        .toList();
-    final viewers = service.connectedViewers;
-    final active = consent != null || viewers > 0 || xfers.isNotEmpty;
-
-    return Container(
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceLight,
-        borderRadius: BorderRadius.circular(AppRadii.lg),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(
-                color: active ? AppColors.success : AppColors.textTertiary,
-                shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 8),
-          Text('LIVE ACTIVITY',
-              style: AppTypography.microLabel
-                  .copyWith(fontSize: 8.5, letterSpacing: 1)),
-        ]),
-        const SizedBox(height: 10),
-        if (consent != null)
-          Text('Connection request waiting',
-              style: AppTypography.caption
-                  .copyWith(fontSize: 11.5, color: AppColors.primary))
-        else if (viewers > 0)
-          Text('$viewers viewer${viewers == 1 ? '' : 's'} connected',
-              style: AppTypography.caption
-                  .copyWith(fontSize: 11.5, color: AppColors.success))
-        else if (xfers.isNotEmpty)
-          Text('${xfers.length} transfer${xfers.length == 1 ? '' : 's'} in progress',
-              style: AppTypography.caption
-                  .copyWith(fontSize: 11.5, color: AppColors.success))
-        else
-          Text('Idle — nothing active',
-              style: AppTypography.caption.copyWith(fontSize: 11.5)),
-        const SizedBox(height: 10),
-        Row(children: [
-          const Icon(Icons.lock_rounded, size: 12, color: AppColors.success),
-          const SizedBox(width: 6),
-          Text('End-to-end encrypted',
-              style: AppTypography.caption
-                  .copyWith(fontSize: 10.5, color: AppColors.textTertiary)),
-        ]),
-      ]),
-    );
-  }
-}
-
-// ------------------------------------------------------------- profile (sidebar)
-class _ProfileChip extends StatelessWidget {
-  final VoidCallback onSettings;
-  const _ProfileChip({required this.onSettings});
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<String>(
-      offset: const Offset(0, 46),
-      color: AppColors.surfaceLight,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.md),
-        side: const BorderSide(color: AppColors.border),
-      ),
-      onSelected: (v) {
-        if (v == 'settings') onSettings();
-        if (v == 'about') {
-          // handled in itemBuilder context via showAboutDialog below
-        }
-      },
-      itemBuilder: (ctx) => [
-        PopupMenuItem(
-            value: 'settings',
-            height: 40,
-            child: Row(children: [
-              const Icon(Icons.settings_outlined,
-                  size: 16, color: AppColors.textSecondary),
-              const SizedBox(width: 10),
-              Text('Settings',
-                  style: AppTypography.body.copyWith(fontSize: 13)),
-            ])),
-        PopupMenuItem(
-            value: 'about',
-            height: 40,
-            onTap: () => showAboutDialog(
-                  context: ctx,
-                  applicationName: 'Neev Remote',
-                  applicationVersion: AppConstants.buildTag,
-                ),
-            child: Row(children: [
-              const Icon(Icons.info_outline_rounded,
-                  size: 16, color: AppColors.textSecondary),
-              const SizedBox(width: 10),
-              Text('About Neev',
-                  style: AppTypography.body.copyWith(fontSize: 13)),
-            ])),
-      ],
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceLight,
-          borderRadius: BorderRadius.circular(AppRadii.md),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Row(children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF3A4A63), Color(0xFF2A3547)],
-              ),
-              borderRadius: BorderRadius.circular(9),
-            ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.person_rounded,
-                size: 16, color: Color(0xFFCBD6E6)),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('My workspace',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.bodyStrong.copyWith(fontSize: 12.5)),
-                Text('Local profile',
-                    style: AppTypography.meta.copyWith(fontSize: 9.5)),
-              ],
-            ),
-          ),
-          const Icon(Icons.unfold_more_rounded,
-              size: 15, color: AppColors.textTertiary),
-        ]),
-      ),
-    );
-  }
-}
-
 class _ThisDeviceCard extends StatelessWidget {
   final RemoteService service;
   const _ThisDeviceCard({required this.service});
@@ -2070,33 +1667,28 @@ class _ThisDeviceCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF2A2118), Color(0xFF201C16)],
+          colors: [AppColors.deviceNavy, Color.alphaBlend(
+              Colors.black.withValues(alpha: 0.15), AppColors.deviceNavy)],
         ),
         borderRadius: BorderRadius.circular(AppRadii.card),
-        border: Border.all(color: const Color(0x33FF6A32)),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x1FFF6A32), blurRadius: 22, offset: Offset(0, 6)),
-          BoxShadow(color: Color(0x40000000), blurRadius: 14, offset: Offset(0, 6)),
-        ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Icon(Icons.wifi_tethering_rounded,
-              size: 15, color: AppColors.primary),
+              size: 15, color: Colors.white70),
           const SizedBox(width: 7),
           Text('THIS DEVICE — share to be controlled',
-              style: AppTypography.microLabel.copyWith(
-                  color: AppColors.textSecondary, fontSize: 8.5)),
+              style: AppTypography.microLabel
+                  .copyWith(color: Colors.white70, fontSize: 8.5)),
         ]),
         const SizedBox(height: 14),
         _DarkRow(label: 'Your ID', value: id == '—' ? id : _group(id)),
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 10),
-          child: Divider(height: 1, color: Color(0x33FFFFFF)),
+          child: Divider(height: 1, color: Colors.white24),
         ),
         _DarkRow(label: 'Password', value: pw, accent: true),
       ]),
@@ -2117,13 +1709,13 @@ class _DarkRow extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label.toUpperCase(),
               style: AppTypography.microLabel
-                  .copyWith(color: AppColors.textTertiary, fontSize: 8.5)),
+                  .copyWith(color: Colors.white54, fontSize: 8.5)),
           const SizedBox(height: 3),
           Text(value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: AppTypography.idLarge.copyWith(
-                  color: accent ? AppColors.primaryHover : AppColors.textPrimary,
+                  color: accent ? const Color(0xFFFFB088) : Colors.white,
                   fontSize: 16,
                   letterSpacing: accent ? 1 : 2.5)),
         ]),

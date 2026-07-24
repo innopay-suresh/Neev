@@ -1,90 +1,84 @@
 import 'package:flutter/material.dart';
 
-/// Obsidian design system (v4) — warm-charcoal canvas, elevated dark cards, one
-/// ember accent that glows only where it matters; thumbnails read as lit windows.
-/// See DESIGN.md (2026-07-24, direction "Obsidian" approved by user). Token NAMES
-/// are unchanged from v3 on purpose so every existing widget keeps compiling; only
-/// the values moved (same retune method v2→v3 used). This is a dark-first theme:
-/// the app forces it regardless of OS brightness (see obsidianTheme()).
+/// Warm bento design system (v3) — cream canvas, white cards, one coral accent.
+/// See DESIGN.md. Token NAMES are unchanged from v2 on purpose so every existing
+/// widget keeps compiling; only the values moved.
+///
+/// The v2 canvas (#F8F8F9) sat ~3% off white, so cards never read as cards, and
+/// the border (#ECECEC) was effectively invisible — that's what made the app look
+/// flat. The warm canvas also separates us from AnyDesk/TeamViewer/Splashtop,
+/// which all ship cool grey.
 class AppColors {
-  // Brand — ember. Lighter on the dark ground so it reads without shouting.
-  static const Color primary = Color(0xFFFF6A32);
-  static const Color primaryHover = Color(0xFFFF8352);
-  static const Color primaryDark = Color(0xFFFF7A45); // text-on-tint + pressed (legible on dark)
-  static const Color primarySoft = Color(0x26FF6A32); // ember tint over the charcoal
-  static const Color accent = Color(0xFFFF6A32);
-  static const Color accentDark = Color(0xFFFF8352); // readable ember on dark
-  static const Color accentSoft = Color(0x26FF6A32);
+  // Brand — orange (Command Center redesign; DESIGN.md 2026-07-21)
+  static const Color primary = Color(0xFFF05A28);
+  static const Color primaryHover = Color(0xFFF26E40);
+  static const Color primaryDark = Color(0xFFC94418); // pressed / readable on white
+  static const Color primarySoft = Color(0xFFFCE5D9); // orange tint
+  static const Color accent = Color(0xFFF05A28);
+  static const Color accentDark = Color(0xFFC94418);
+  static const Color accentSoft = Color(0xFFFCE5D9);
 
-  static const Color secondary = Color(0xFF2A2620); // elevated warm panel (ID card)
-  static const Color secondarySoft = Color(0xFF232019);
+  static const Color secondary = Color(0xFF243B53); // navy
+  static const Color secondarySoft = Color(0xFFE4E9EF);
 
-  // Device-card grounds — deep jewel tones, read as lit cards on the charcoal.
-  static const Color deviceNavy = Color(0xFF22344A);
-  static const Color deviceForest = Color(0xFF23412F);
-  static const Color devicePlum = Color(0xFF48293C);
-  static const Color deviceWalnut = Color(0xFF473726);
+  // Muted device-card grounds (never bright blue). White/warm-grey models over.
+  static const Color deviceNavy = Color(0xFF243B53);
+  static const Color deviceForest = Color(0xFF294B3A);
+  static const Color devicePlum = Color(0xFF543246);
+  static const Color deviceWalnut = Color(0xFF554332);
 
-  // Surfaces — warm charcoal (never pure black). Canvas sits DARKER than the
-  // cards so surfaces lift and read as distinct objects (the r83 canvas was too
-  // close to the card tone, so nothing separated).
-  static const Color background = Color(0xFF100F0C); // canvas (deepest)
-  static const Color surface = Color(0xFF1E1B16); // cards, sidebar, bars
-  static const Color surfaceLight = Color(0xFF262219); // elevated (fields, tiles)
-  static const Color surfaceAlt = Color(0xFF221E18); // input fills
+  // Surfaces
+  static const Color background = Color(0xFFF5F1E8); // warm cream canvas
+  static const Color surface = Color(0xFFFFFEFB);
+  static const Color surfaceLight = Color(0xFFF8F5EE);
+  static const Color surfaceAlt = Color(0xFFF8F5EE);
 
-  // Text — warm off-white (never pure white).
-  static const Color textPrimary = Color(0xFFF4EFE4);
-  static const Color textSecondary = Color(0xFFAAA093);
-  static const Color textTertiary = Color(0xFF6F695B);
+  // Text
+  static const Color textPrimary = Color(0xFF171714);
+  static const Color textSecondary = Color(0xFF777266);
+  static const Color textTertiary = Color(0xFF9A9385);
 
-  // Status — brighter hues so they carry on the dark ground.
-  static const Color success = Color(0xFF3ECF8E); // green — online
-  static const Color successSoft = Color(0x263ECF8E);
-  static const Color warning = Color(0xFFFFB655); // amber — favourite
-  static const Color error = Color(0xFFFF5C50);
-  static const Color infoSlate = Color(0xFF7C8AA0);
+  // Status
+  static const Color success = Color(0xFF198764); // green — online
+  static const Color successSoft = Color(0xFFDDEFE7);
+  static const Color warning = Color(0xFFD78A18); // amber — favourite
+  static const Color error = Color(0xFFD8493F);
+  static const Color infoSlate = Color(0xFF53616D);
 
-  // Lines — a touch stronger so card edges define against the deep canvas.
-  static const Color border = Color(0xFF39332A);
-  static const Color borderStrong = Color(0xFF473F31);
+  // Lines
+  static const Color border = Color(0xFFDED6C8);
+  static const Color borderStrong = Color(0xFFD0C6AC);
 
-  // Elevated band (promo / unattended callout) — warm, stands off the canvas.
-  static const Color inkBand = Color(0xFF232019);
-  static const Color inkBandAlt = Color(0xFF2A2620);
+  // Dark band (promo / unattended callout)
+  static const Color inkBand = Color(0xFF171714);
+  static const Color inkBandAlt = Color(0xFF282720);
 }
 
-/// Deep shadows for the Obsidian charcoal — on a dark ground depth comes from
-/// darker-than-canvas shadow plus a hairline top edge, not soft warm spread.
+/// Warm, low-spread shadows tuned for the cream canvas.
 class AppShadows {
   static const List<BoxShadow> card = [
-    BoxShadow(color: Color(0x40000000), blurRadius: 2, offset: Offset(0, 1)),
-    BoxShadow(color: Color(0x59000000), blurRadius: 16, offset: Offset(0, 8)),
+    BoxShadow(color: Color(0x0A181108), blurRadius: 2, offset: Offset(0, 1)),
+    BoxShadow(color: Color(0x0F181108), blurRadius: 10, offset: Offset(0, 4)),
   ];
   static const List<BoxShadow> soft = [
-    BoxShadow(color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 3)),
+    BoxShadow(color: Color(0x0A181108), blurRadius: 6, offset: Offset(0, 2)),
   ];
   static const List<BoxShadow> float = [
-    BoxShadow(color: Color(0x4D000000), blurRadius: 6, offset: Offset(0, 2)),
-    BoxShadow(color: Color(0x66000000), blurRadius: 34, offset: Offset(0, 18)),
+    BoxShadow(color: Color(0x0D181108), blurRadius: 4, offset: Offset(0, 2)),
+    BoxShadow(color: Color(0x24181108), blurRadius: 32, offset: Offset(0, 16)),
   ];
 
-  /// Floating connection dock — deep lift off the charcoal.
+  // Command Center redesign (DESIGN.md 2026-07-21).
+  /// Floating connection dock — layered warm shadow.
   static const List<BoxShadow> dock = [
-    BoxShadow(color: Color(0x59000000), blurRadius: 14, offset: Offset(0, 5)),
-    BoxShadow(color: Color(0x73000000), blurRadius: 54, offset: Offset(0, 22)),
+    BoxShadow(color: Color(0x0F1C1812), blurRadius: 12, offset: Offset(0, 4)),
+    BoxShadow(color: Color(0x1A1C1812), blurRadius: 50, offset: Offset(0, 20)),
   ];
 
-  /// Hovered device card — lifts + deepens.
+  /// Hovered device card — lifts off the cream canvas.
   static const List<BoxShadow> cardHover = [
-    BoxShadow(color: Color(0x66000000), blurRadius: 24, offset: Offset(0, 10)),
-    BoxShadow(color: Color(0x80000000), blurRadius: 64, offset: Offset(0, 28)),
-  ];
-
-  /// Ember glow — the one signature Obsidian flourish. Use ONLY on the brand
-  /// mark and the primary Connect action, never as ambient decoration.
-  static const List<BoxShadow> emberGlow = [
-    BoxShadow(color: Color(0x59FF6A32), blurRadius: 24, offset: Offset(0, 6)),
+    BoxShadow(color: Color(0x141C1812), blurRadius: 20, offset: Offset(0, 8)),
+    BoxShadow(color: Color(0x211C1812), blurRadius: 60, offset: Offset(0, 24)),
   ];
 }
 
@@ -218,9 +212,9 @@ class AppRadius {
   static const double pill = 999;
 }
 
-/// Obsidian theme — dark-first (forced regardless of OS brightness).
-ThemeData obsidianTheme() {
-  final base = ThemeData(useMaterial3: true, brightness: Brightness.dark);
+/// Light theme.
+ThemeData lightTheme() {
+  final base = ThemeData(useMaterial3: true, brightness: Brightness.light);
   final textTheme = base.textTheme
       .apply(
         fontFamily: _fontFamily,
@@ -242,7 +236,7 @@ ThemeData obsidianTheme() {
     scaffoldBackgroundColor: AppColors.background,
     textTheme: textTheme,
     primaryTextTheme: textTheme,
-    colorScheme: const ColorScheme.dark(
+    colorScheme: const ColorScheme.light(
       primary: AppColors.primary,
       secondary: AppColors.accent,
       surface: AppColors.surface,
@@ -250,7 +244,7 @@ ThemeData obsidianTheme() {
       onPrimary: Colors.white,
       onSecondary: Colors.white,
       onSurface: AppColors.textPrimary,
-      onError: Colors.black,
+      onError: Colors.white,
     ),
     appBarTheme: AppBarTheme(
       backgroundColor: AppColors.surface,
@@ -372,11 +366,10 @@ ThemeData obsidianTheme() {
     iconTheme: const IconThemeData(color: AppColors.textSecondary, size: 22),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      backgroundColor: AppColors.surfaceLight,
-      contentTextStyle: AppTypography.body.copyWith(color: AppColors.textPrimary),
+      backgroundColor: AppColors.textPrimary,
+      contentTextStyle: AppTypography.body.copyWith(color: Colors.white),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.md),
-        side: const BorderSide(color: AppColors.border),
       ),
     ),
     popupMenuTheme: PopupMenuThemeData(
@@ -399,11 +392,10 @@ ThemeData obsidianTheme() {
     ),
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
-        color: AppColors.inkBandAlt,
+        color: AppColors.textPrimary,
         borderRadius: BorderRadius.circular(AppRadius.sm),
-        border: Border.all(color: AppColors.border),
       ),
-      textStyle: AppTypography.caption.copyWith(color: AppColors.textPrimary),
+      textStyle: AppTypography.caption.copyWith(color: Colors.white),
     ),
   );
 }

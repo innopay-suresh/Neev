@@ -20,9 +20,7 @@ class NeevRemoteApp extends StatelessWidget {
     return MaterialApp(
       title: 'Neev Remote',
       debugShowCheckedModeBanner: false,
-      theme: obsidianTheme(),
-      darkTheme: obsidianTheme(),
-      themeMode: ThemeMode.dark,
+      theme: lightTheme(),
       home: const ConnectPage(),
     );
   }
