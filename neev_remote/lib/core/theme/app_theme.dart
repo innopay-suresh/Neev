@@ -25,11 +25,13 @@ class AppColors {
   static const Color devicePlum = Color(0xFF48293C);
   static const Color deviceWalnut = Color(0xFF473726);
 
-  // Surfaces — warm charcoal (never pure black).
-  static const Color background = Color(0xFF131210); // canvas
-  static const Color surface = Color(0xFF1C1A16); // cards, sidebar, bars
-  static const Color surfaceLight = Color(0xFF232019); // elevated
-  static const Color surfaceAlt = Color(0xFF201D18); // input fills
+  // Surfaces — warm charcoal (never pure black). Canvas sits DARKER than the
+  // cards so surfaces lift and read as distinct objects (the r83 canvas was too
+  // close to the card tone, so nothing separated).
+  static const Color background = Color(0xFF100F0C); // canvas (deepest)
+  static const Color surface = Color(0xFF1E1B16); // cards, sidebar, bars
+  static const Color surfaceLight = Color(0xFF262219); // elevated (fields, tiles)
+  static const Color surfaceAlt = Color(0xFF221E18); // input fills
 
   // Text — warm off-white (never pure white).
   static const Color textPrimary = Color(0xFFF4EFE4);
@@ -43,9 +45,9 @@ class AppColors {
   static const Color error = Color(0xFFFF5C50);
   static const Color infoSlate = Color(0xFF7C8AA0);
 
-  // Lines
-  static const Color border = Color(0xFF302C24);
-  static const Color borderStrong = Color(0xFF3C3627);
+  // Lines — a touch stronger so card edges define against the deep canvas.
+  static const Color border = Color(0xFF39332A);
+  static const Color borderStrong = Color(0xFF473F31);
 
   // Elevated band (promo / unattended callout) — warm, stands off the canvas.
   static const Color inkBand = Color(0xFF232019);
