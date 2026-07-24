@@ -293,14 +293,14 @@ class _CommandNavRailState extends State<CommandNavRail> {
                     gradient: const LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: [AppColors.primary, AppColors.primaryDark],
+                      colors: [Color(0xFFFF8352), Color(0xFFE0491A)],
                     ),
                     borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
+                    boxShadow: const [
                       BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.4),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4)),
+                          color: Color(0x66FF6A32),
+                          blurRadius: 18,
+                          offset: Offset(0, 5)),
                     ],
                   ),
                   alignment: Alignment.center,
@@ -1318,13 +1318,37 @@ class _DeviceCardState extends State<_DeviceCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // thumbnail (real screen if captured, else a light placeholder)
+            // thumbnail (real screen if captured, else a light placeholder),
+            // treated as a "lit window": a faint top sheen + bottom shade give
+            // depth, and a hairline separates it from the card body.
             SizedBox(
               height: 108,
               width: double.infinity,
-              child: (d.thumbPath != null)
-                  ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
-                  : _placeholder(d),
+              child: Stack(fit: StackFit.expand, children: [
+                (d.thumbPath != null)
+                    ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
+                    : _placeholder(d),
+                const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x14FFFFFF),
+                          Color(0x00000000),
+                          Color(0x38000000),
+                        ],
+                        stops: [0.0, 0.55, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Container(height: 1, color: AppColors.border),
+                ),
+              ]),
             ),
             // body
             Padding(
@@ -1681,28 +1705,33 @@ class _ThisDeviceCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [AppColors.deviceNavy, Color.alphaBlend(
-              Colors.black.withValues(alpha: 0.15), AppColors.deviceNavy)],
+          colors: [Color(0xFF2A2118), Color(0xFF201C16)],
         ),
         borderRadius: BorderRadius.circular(AppRadii.card),
+        border: Border.all(color: const Color(0x33FF6A32)),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x1FFF6A32), blurRadius: 22, offset: Offset(0, 6)),
+          BoxShadow(color: Color(0x40000000), blurRadius: 14, offset: Offset(0, 6)),
+        ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Icon(Icons.wifi_tethering_rounded,
-              size: 15, color: Colors.white70),
+              size: 15, color: AppColors.primary),
           const SizedBox(width: 7),
           Text('THIS DEVICE — share to be controlled',
-              style: AppTypography.microLabel
-                  .copyWith(color: Colors.white70, fontSize: 8.5)),
+              style: AppTypography.microLabel.copyWith(
+                  color: AppColors.textSecondary, fontSize: 8.5)),
         ]),
         const SizedBox(height: 14),
         _DarkRow(label: 'Your ID', value: id == '—' ? id : _group(id)),
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 10),
-          child: Divider(height: 1, color: Colors.white24),
+          child: Divider(height: 1, color: Color(0x33FFFFFF)),
         ),
         _DarkRow(label: 'Password', value: pw, accent: true),
       ]),
@@ -1723,13 +1752,13 @@ class _DarkRow extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label.toUpperCase(),
               style: AppTypography.microLabel
-                  .copyWith(color: Colors.white54, fontSize: 8.5)),
+                  .copyWith(color: AppColors.textTertiary, fontSize: 8.5)),
           const SizedBox(height: 3),
           Text(value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: AppTypography.idLarge.copyWith(
-                  color: accent ? const Color(0xFFFFB088) : Colors.white,
+                  color: accent ? AppColors.primaryHover : AppColors.textPrimary,
                   fontSize: 16,
                   letterSpacing: accent ? 1 : 2.5)),
         ]),
