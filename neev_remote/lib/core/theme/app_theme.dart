@@ -8,77 +8,76 @@ import 'package:flutter/material.dart';
 /// the border (#ECECEC) was effectively invisible — that's what made the app look
 /// flat. The warm canvas also separates us from AnyDesk/TeamViewer/Splashtop,
 /// which all ship cool grey.
+/// Nova dark design system (v5) — full-screen dark, orange accent (user spec
+/// 2026-07-24: bg #0F1115, cards #171A21, borders #2A2F3A, primary #FF6B00).
+/// Token NAMES unchanged so every widget re-colors and NO wiring is touched —
+/// pure re-skin (same retune method as v2→v3 / v4).
 class AppColors {
-  // Brand — orange (Command Center redesign; DESIGN.md 2026-07-21)
-  static const Color primary = Color(0xFFF05A28);
-  static const Color primaryHover = Color(0xFFF26E40);
-  static const Color primaryDark = Color(0xFFC94418); // pressed / readable on white
-  static const Color primarySoft = Color(0xFFFCE5D9); // orange tint
-  static const Color accent = Color(0xFFF05A28);
-  static const Color accentDark = Color(0xFFC94418);
-  static const Color accentSoft = Color(0xFFFCE5D9);
+  // Brand — orange
+  static const Color primary = Color(0xFFFF6B00);
+  static const Color primaryHover = Color(0xFFFF8F3D);
+  static const Color primaryDark = Color(0xFFFF8F3D); // text-on-tint + pressed (legible on dark)
+  static const Color primarySoft = Color(0x24FF6B00); // orange tint over the dark ground
+  static const Color accent = Color(0xFFFF6B00);
+  static const Color accentDark = Color(0xFFFF8F3D);
+  static const Color accentSoft = Color(0x24FF6B00);
 
-  static const Color secondary = Color(0xFF243B53); // navy
-  static const Color secondarySoft = Color(0xFFE4E9EF);
+  static const Color secondary = Color(0xFF1F2530); // elevated panel (This-device)
+  static const Color secondarySoft = Color(0xFF171A21);
 
-  // Muted device-card grounds (never bright blue). White/warm-grey models over.
-  static const Color deviceNavy = Color(0xFF243B53);
-  static const Color deviceForest = Color(0xFF294B3A);
-  static const Color devicePlum = Color(0xFF543246);
-  static const Color deviceWalnut = Color(0xFF554332);
+  // Device-card grounds — deep jewel tones on the dark canvas.
+  static const Color deviceNavy = Color(0xFF1E2A3D);
+  static const Color deviceForest = Color(0xFF1D3328);
+  static const Color devicePlum = Color(0xFF33202E);
+  static const Color deviceWalnut = Color(0xFF2E2519);
 
-  // Surfaces
-  static const Color background = Color(0xFFF5F1E8); // warm cream canvas
-  static const Color surface = Color(0xFFFFFEFB);
-  static const Color surfaceLight = Color(0xFFF8F5EE);
-  static const Color surfaceAlt = Color(0xFFF8F5EE);
+  // Surfaces — spec values.
+  static const Color background = Color(0xFF0F1115); // canvas
+  static const Color surface = Color(0xFF171A21); // cards, sidebar, bars
+  static const Color surfaceLight = Color(0xFF1D212B); // elevated (fields, tiles)
+  static const Color surfaceAlt = Color(0xFF1A1E27); // input fills
 
-  // Text
-  static const Color textPrimary = Color(0xFF171714);
-  static const Color textSecondary = Color(0xFF777266);
-  static const Color textTertiary = Color(0xFF9A9385);
+  // Text — white / gray.
+  static const Color textPrimary = Color(0xFFF3F5F8);
+  static const Color textSecondary = Color(0xFF98A2B3);
+  static const Color textTertiary = Color(0xFF636B7A);
 
-  // Status
-  static const Color success = Color(0xFF198764); // green — online
-  static const Color successSoft = Color(0xFFDDEFE7);
-  static const Color warning = Color(0xFFD78A18); // amber — favourite
-  static const Color error = Color(0xFFD8493F);
-  static const Color infoSlate = Color(0xFF53616D);
+  // Status — green online / red offline / amber.
+  static const Color success = Color(0xFF22C55E);
+  static const Color successSoft = Color(0x2622C55E);
+  static const Color warning = Color(0xFFF5A623);
+  static const Color error = Color(0xFFEF4444);
+  static const Color infoSlate = Color(0xFF7C8AA0);
 
   // Lines
-  static const Color border = Color(0xFFDED6C8);
-  static const Color borderStrong = Color(0xFFD0C6AC);
+  static const Color border = Color(0xFF2A2F3A);
+  static const Color borderStrong = Color(0xFF39404E);
 
-  // Dark band (promo / unattended callout)
-  static const Color inkBand = Color(0xFF171714);
-  static const Color inkBandAlt = Color(0xFF282720);
+  // Elevated band.
+  static const Color inkBand = Color(0xFF1D212B);
+  static const Color inkBandAlt = Color(0xFF242A36);
 }
 
-/// Warm, low-spread shadows tuned for the cream canvas.
+/// Deep shadows for the dark canvas.
 class AppShadows {
   static const List<BoxShadow> card = [
-    BoxShadow(color: Color(0x0A181108), blurRadius: 2, offset: Offset(0, 1)),
-    BoxShadow(color: Color(0x0F181108), blurRadius: 10, offset: Offset(0, 4)),
+    BoxShadow(color: Color(0x40000000), blurRadius: 2, offset: Offset(0, 1)),
+    BoxShadow(color: Color(0x59000000), blurRadius: 16, offset: Offset(0, 8)),
   ];
   static const List<BoxShadow> soft = [
-    BoxShadow(color: Color(0x0A181108), blurRadius: 6, offset: Offset(0, 2)),
+    BoxShadow(color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 3)),
   ];
   static const List<BoxShadow> float = [
-    BoxShadow(color: Color(0x0D181108), blurRadius: 4, offset: Offset(0, 2)),
-    BoxShadow(color: Color(0x24181108), blurRadius: 32, offset: Offset(0, 16)),
+    BoxShadow(color: Color(0x4D000000), blurRadius: 6, offset: Offset(0, 2)),
+    BoxShadow(color: Color(0x66000000), blurRadius: 34, offset: Offset(0, 18)),
   ];
-
-  // Command Center redesign (DESIGN.md 2026-07-21).
-  /// Floating connection dock — layered warm shadow.
   static const List<BoxShadow> dock = [
-    BoxShadow(color: Color(0x0F1C1812), blurRadius: 12, offset: Offset(0, 4)),
-    BoxShadow(color: Color(0x1A1C1812), blurRadius: 50, offset: Offset(0, 20)),
+    BoxShadow(color: Color(0x59000000), blurRadius: 14, offset: Offset(0, 5)),
+    BoxShadow(color: Color(0x73000000), blurRadius: 54, offset: Offset(0, 22)),
   ];
-
-  /// Hovered device card — lifts off the cream canvas.
   static const List<BoxShadow> cardHover = [
-    BoxShadow(color: Color(0x141C1812), blurRadius: 20, offset: Offset(0, 8)),
-    BoxShadow(color: Color(0x211C1812), blurRadius: 60, offset: Offset(0, 24)),
+    BoxShadow(color: Color(0x66000000), blurRadius: 24, offset: Offset(0, 10)),
+    BoxShadow(color: Color(0x80000000), blurRadius: 64, offset: Offset(0, 28)),
   ];
 }
 
@@ -212,9 +211,9 @@ class AppRadius {
   static const double pill = 999;
 }
 
-/// Light theme.
+/// Nova dark theme — dark-first (forced regardless of OS brightness).
 ThemeData lightTheme() {
-  final base = ThemeData(useMaterial3: true, brightness: Brightness.light);
+  final base = ThemeData(useMaterial3: true, brightness: Brightness.dark);
   final textTheme = base.textTheme
       .apply(
         fontFamily: _fontFamily,
@@ -236,7 +235,7 @@ ThemeData lightTheme() {
     scaffoldBackgroundColor: AppColors.background,
     textTheme: textTheme,
     primaryTextTheme: textTheme,
-    colorScheme: const ColorScheme.light(
+    colorScheme: const ColorScheme.dark(
       primary: AppColors.primary,
       secondary: AppColors.accent,
       surface: AppColors.surface,
@@ -366,8 +365,8 @@ ThemeData lightTheme() {
     iconTheme: const IconThemeData(color: AppColors.textSecondary, size: 22),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      backgroundColor: AppColors.textPrimary,
-      contentTextStyle: AppTypography.body.copyWith(color: Colors.white),
+      backgroundColor: AppColors.surfaceLight,
+      contentTextStyle: AppTypography.body.copyWith(color: AppColors.textPrimary),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.md),
       ),
@@ -392,10 +391,11 @@ ThemeData lightTheme() {
     ),
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
-        color: AppColors.textPrimary,
+        color: AppColors.inkBandAlt,
         borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.border),
       ),
-      textStyle: AppTypography.caption.copyWith(color: Colors.white),
+      textStyle: AppTypography.caption.copyWith(color: AppColors.textPrimary),
     ),
   );
 }
