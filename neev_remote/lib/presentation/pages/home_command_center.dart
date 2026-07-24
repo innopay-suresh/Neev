@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/audit_log.dart';
 import '../../data/services/discovery_model.dart';
@@ -304,6 +305,12 @@ class _CommandNavRailState extends State<CommandNavRail> {
                   style: AppTypography.pageTitle.copyWith(fontSize: 18)),
             ]),
           ),
+          // profile
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
+            child: _ProfileChip(
+                onSettings: () => widget.onSelect(widget.items.length - 1)),
+          ),
           // nav
           Expanded(
             child: ListView(
@@ -319,10 +326,10 @@ class _CommandNavRailState extends State<CommandNavRail> {
               ],
             ),
           ),
-          // this-device (own ID + password) pinned at the bottom
+          // live activity pinned at the bottom
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: _ThisDeviceCard(service: widget.service),
+            child: _LiveActivityMini(service: widget.service),
           ),
         ],
       ),
@@ -533,16 +540,7 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 40),
       children: [
-        _IdleFloat(
-          amplitude: 2.5,
-          child: _ConnectionDock(
-            idController: widget.idController,
-            passwordController: widget.passwordController,
-            onConnect: widget.onConnect,
-            recents: ref.watch(recentConnectionsProvider).take(3).toList(),
-            onPick: widget.onPick,
-          ),
-        ),
+        const _WelcomeBanner(),
         const SizedBox(height: 26),
         _SectionHead(
           title: 'Your devices',
@@ -1570,8 +1568,52 @@ String _ago(DateTime t) {
 /// requests, active file transfers, connected viewers. Real state only.
 class CommandActivityPanel extends StatelessWidget {
   final RemoteService service;
-  const CommandActivityPanel({super.key, required this.service});
+  final TextEditingController idController;
+  final TextEditingController passwordController;
+  final VoidCallback onConnect;
+  final List<RecentConnection> recents;
+  final void Function(String id) onPick;
+  const CommandActivityPanel({
+    super.key,
+    required this.service,
+    required this.idController,
+    required this.passwordController,
+    required this.onConnect,
+    required this.recents,
+    required this.onPick,
+  });
 
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 344,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(left: BorderSide(color: AppColors.border)),
+      ),
+      child: ListView(
+        padding: const EdgeInsets.all(18),
+        children: [
+          _ConnectPanel(
+            idController: idController,
+            passwordController: passwordController,
+            onConnect: onConnect,
+            recents: recents,
+            onPick: onPick,
+          ),
+          const SizedBox(height: 16),
+          _ThisDeviceCard(service: service),
+        ],
+      ),
+    );
+  }
+}
+
+// Legacy live-activity fragment kept below only so old references compile; the
+// live feed now lives in the nav rail (_LiveActivityMini).
+class _LegacyActivityBody extends StatelessWidget {
+  final RemoteService service;
+  const _LegacyActivityBody({required this.service});
   @override
   Widget build(BuildContext context) {
     final consent = service.pendingConsent;
@@ -1580,40 +1622,10 @@ class CommandActivityPanel extends StatelessWidget {
             t.status == FileStatus.active || t.status == FileStatus.sent)
         .toList();
     final viewers = service.connectedViewers;
-
     return Container(
-      width: 328,
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(left: BorderSide(color: AppColors.border)),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // header
-          Container(
-            height: 74,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: AppColors.border)),
-            ),
-            child: Row(children: [
-              Text('Live activity', style: AppTypography.sectionTitle),
-              const Spacer(),
-              Container(
-                width: 7,
-                height: 7,
-                decoration: const BoxDecoration(
-                    color: AppColors.success, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 6),
-              Text('Live',
-                  style: AppTypography.caption.copyWith(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.success)),
-            ]),
-          ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.all(16),
@@ -1657,6 +1669,390 @@ class CommandActivityPanel extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------------------- welcome banner
+class _WelcomeBanner extends StatefulWidget {
+  const _WelcomeBanner();
+  @override
+  State<_WelcomeBanner> createState() => _WelcomeBannerState();
+}
+
+class _WelcomeBannerState extends State<_WelcomeBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(seconds: 7))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  String _greeting() {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reduce = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppRadii.panel),
+      child: Container(
+        height: 128,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [Color(0xFF251B13), Color(0xFF1B1712)],
+          ),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Stack(children: [
+          // slow-drifting ember glow behind the copy (the "welcome" motion)
+          if (!reduce)
+            AnimatedBuilder(
+              animation: _c,
+              builder: (_, __) {
+                final t = _c.value;
+                final wave = t < 0.5 ? t * 2 : 2 - t * 2; // 0..1..0
+                return Positioned(
+                  right: 10 + 70 * wave,
+                  top: -60 + 26 * wave,
+                  child: Container(
+                    width: 230,
+                    height: 230,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [
+                        Color(0x3DFF6A32),
+                        Color(0x00FF6A32),
+                      ]),
+                    ),
+                  ),
+                );
+              },
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 26),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  const Icon(Icons.bolt_rounded,
+                      size: 14, color: AppColors.primary),
+                  const SizedBox(width: 6),
+                  Text('${_greeting().toUpperCase()} · WELCOME BACK',
+                      style: AppTypography.microLabel.copyWith(
+                          fontSize: 9,
+                          letterSpacing: 1.2,
+                          color: AppColors.primaryHover)),
+                ]),
+                const SizedBox(height: 9),
+                Text('Control any device, anywhere.',
+                    style: AppTypography.pageTitle
+                        .copyWith(fontSize: 23, letterSpacing: -0.4)),
+                const SizedBox(height: 5),
+                Text('Enter an ID on the right to start a session, '
+                    'or pick a saved device below.',
+                    style: AppTypography.caption.copyWith(
+                        fontSize: 12.5, color: AppColors.textSecondary)),
+              ],
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------------------- connect (right)
+class _ConnectPanel extends StatelessWidget {
+  final TextEditingController idController;
+  final TextEditingController passwordController;
+  final VoidCallback onConnect;
+  final List<RecentConnection> recents;
+  final void Function(String id) onPick;
+  const _ConnectPanel({
+    required this.idController,
+    required this.passwordController,
+    required this.onConnect,
+    required this.recents,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: AppColors.primarySoft,
+            borderRadius: BorderRadius.circular(AppRadii.md),
+          ),
+          child: const Icon(Icons.cast_connected_rounded,
+              size: 18, color: AppColors.primary),
+        ),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Connect to a device',
+                  style: AppTypography.sectionTitle.copyWith(fontSize: 14.5)),
+              Text('Enter an ID and password',
+                  style: AppTypography.meta.copyWith(fontSize: 11)),
+            ],
+          ),
+        ),
+      ]),
+      const SizedBox(height: 14),
+      _DockField(
+        controller: idController,
+        hint: 'Remote ID or device name',
+        icon: Icons.devices_rounded,
+        mono: true,
+        onSubmitted: (_) => onConnect(),
+      ),
+      const SizedBox(height: 9),
+      _DockField(
+        controller: passwordController,
+        hint: 'Password',
+        icon: Icons.lock_outline_rounded,
+        obscure: true,
+        onSubmitted: (_) => onConnect(),
+      ),
+      const SizedBox(height: 9),
+      const _ModeSelector(),
+      const SizedBox(height: 11),
+      _WideConnectButton(onTap: onConnect),
+      if (recents.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        Text('RECENT',
+            style: AppTypography.microLabel
+                .copyWith(fontSize: 8.5, color: AppColors.textTertiary)),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final r in recents.take(4))
+              _RecentChip(name: r.name, onTap: () => onPick(r.id)),
+          ],
+        ),
+      ],
+    ]);
+  }
+}
+
+class _WideConnectButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _WideConnectButton({required this.onTap});
+  @override
+  State<_WideConnectButton> createState() => _WideConnectButtonState();
+}
+
+class _WideConnectButtonState extends State<_WideConnectButton> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 46,
+          decoration: BoxDecoration(
+            color: _hover ? AppColors.primaryDark : AppColors.primary,
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            boxShadow: [
+              BoxShadow(
+                  color: AppColors.primary.withValues(alpha: _hover ? 0.5 : 0.34),
+                  blurRadius: _hover ? 22 : 14,
+                  offset: Offset(0, _hover ? 9 : 5)),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Text('Connect',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14.5)),
+            SizedBox(width: 8),
+            Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------- live activity (sidebar bottom)
+class _LiveActivityMini extends StatelessWidget {
+  final RemoteService service;
+  const _LiveActivityMini({required this.service});
+  @override
+  Widget build(BuildContext context) {
+    final consent = service.pendingConsent;
+    final xfers = service.fileTransfers
+        .where((t) =>
+            t.status == FileStatus.active || t.status == FileStatus.sent)
+        .toList();
+    final viewers = service.connectedViewers;
+    final active = consent != null || viewers > 0 || xfers.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+                color: active ? AppColors.success : AppColors.textTertiary,
+                shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text('LIVE ACTIVITY',
+              style: AppTypography.microLabel
+                  .copyWith(fontSize: 8.5, letterSpacing: 1)),
+        ]),
+        const SizedBox(height: 10),
+        if (consent != null)
+          Text('Connection request waiting',
+              style: AppTypography.caption
+                  .copyWith(fontSize: 11.5, color: AppColors.primary))
+        else if (viewers > 0)
+          Text('$viewers viewer${viewers == 1 ? '' : 's'} connected',
+              style: AppTypography.caption
+                  .copyWith(fontSize: 11.5, color: AppColors.success))
+        else if (xfers.isNotEmpty)
+          Text('${xfers.length} transfer${xfers.length == 1 ? '' : 's'} in progress',
+              style: AppTypography.caption
+                  .copyWith(fontSize: 11.5, color: AppColors.success))
+        else
+          Text('Idle — nothing active',
+              style: AppTypography.caption.copyWith(fontSize: 11.5)),
+        const SizedBox(height: 10),
+        Row(children: [
+          const Icon(Icons.lock_rounded, size: 12, color: AppColors.success),
+          const SizedBox(width: 6),
+          Text('End-to-end encrypted',
+              style: AppTypography.caption
+                  .copyWith(fontSize: 10.5, color: AppColors.textTertiary)),
+        ]),
+      ]),
+    );
+  }
+}
+
+// ------------------------------------------------------------- profile (sidebar)
+class _ProfileChip extends StatelessWidget {
+  final VoidCallback onSettings;
+  const _ProfileChip({required this.onSettings});
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      offset: const Offset(0, 46),
+      color: AppColors.surfaceLight,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadii.md),
+        side: const BorderSide(color: AppColors.border),
+      ),
+      onSelected: (v) {
+        if (v == 'settings') onSettings();
+        if (v == 'about') {
+          // handled in itemBuilder context via showAboutDialog below
+        }
+      },
+      itemBuilder: (ctx) => [
+        PopupMenuItem(
+            value: 'settings',
+            height: 40,
+            child: Row(children: [
+              const Icon(Icons.settings_outlined,
+                  size: 16, color: AppColors.textSecondary),
+              const SizedBox(width: 10),
+              Text('Settings',
+                  style: AppTypography.body.copyWith(fontSize: 13)),
+            ])),
+        PopupMenuItem(
+            value: 'about',
+            height: 40,
+            onTap: () => showAboutDialog(
+                  context: ctx,
+                  applicationName: 'Neev Remote',
+                  applicationVersion: AppConstants.buildTag,
+                ),
+            child: Row(children: [
+              const Icon(Icons.info_outline_rounded,
+                  size: 16, color: AppColors.textSecondary),
+              const SizedBox(width: 10),
+              Text('About Neev',
+                  style: AppTypography.body.copyWith(fontSize: 13)),
+            ])),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(AppRadii.md),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF3A4A63), Color(0xFF2A3547)],
+              ),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.person_rounded,
+                size: 16, color: Color(0xFFCBD6E6)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('My workspace',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodyStrong.copyWith(fontSize: 12.5)),
+                Text('Local profile',
+                    style: AppTypography.meta.copyWith(fontSize: 9.5)),
+              ],
+            ),
+          ),
+          const Icon(Icons.unfold_more_rounded,
+              size: 15, color: AppColors.textTertiary),
+        ]),
       ),
     );
   }

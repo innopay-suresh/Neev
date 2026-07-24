@@ -213,7 +213,15 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
           ),
           // Live activity panel — Home only (this is where you share your ID and
           // watch incoming connections/transfers).
-          if (onHome) CommandActivityPanel(service: service),
+          if (onHome)
+            CommandActivityPanel(
+              service: service,
+              idController: _idController,
+              passwordController: _passwordController,
+              onConnect: _connect,
+              recents: ref.watch(recentConnectionsProvider).take(4).toList(),
+              onPick: _fillId,
+            ),
         ],
       ),
     );
