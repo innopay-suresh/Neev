@@ -35,9 +35,10 @@ type fileReceiver struct {
 type recvFile struct {
 	f       *os.File
 	path    string
-	size    int64
-	written int64
-	lastLog int64 // bytes at last progress log (so a stalled large file is visible)
+	size     int64
+	written  int64
+	lastLog  int64 // bytes at last progress log (so a stalled large file is visible)
+	lastProg int64 // bytes at last {t:prog} ack sent to the viewer (flow control)
 }
 
 func newFileReceiver(conn *ipc.Conn) *fileReceiver {
@@ -108,7 +109,19 @@ func (f *fileReceiver) handle(payload []byte) bool {
 			if werr != nil {
 				log.Warn().Err(werr).Str("id", m.ID).Msg("worker: write received chunk failed")
 				f.fail(m.ID, "write error: "+werr.Error())
-			} else if rf.written-rf.lastLog >= 8*1024*1024 {
+				return true
+			}
+			// Flow-control ack every ~1 MB: tell the viewer how much we've written
+			// so it paces to our real drain rate instead of dumping the whole file
+			// into the ~16 MB SCTP buffer (that overflow tore down the channel and
+			// killed the session — large uploads died, small ones fit). Small hi-
+			// lane message; ordered after the chunk it acks.
+			if rf.written-rf.lastProg >= 1024*1024 {
+				rf.lastProg = rf.written
+				f.sendFT(map[string]interface{}{"k": "ft", "t": "prog",
+					"id": m.ID, "recv": rf.written})
+			}
+			if rf.written-rf.lastLog >= 8*1024*1024 {
 				// Progress every ~8 MB so a large-file receive is observable and a
 				// stall shows exactly how far it got.
 				rf.lastLog = rf.written

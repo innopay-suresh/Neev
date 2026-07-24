@@ -53,6 +53,9 @@ class _Incoming {
   _Incoming(this.ft) : buf = BytesBuilder(copy: false);
   final FileTransfer ft;
   final BytesBuilder buf;
+  // Bytes at the last {t:'prog'} ack we sent back to the sender, so we ack the
+  // sender's flow-control window about once per _progInterval (not per chunk).
+  int lastProg = 0;
   // Unique destination path, reserved (atomically created) the MOMENT the offer
   // arrives — keyed off this transfer, never a shared/reused path. Because the
   // placeholder exists on disk before the next offer is handled, two rapid
@@ -101,15 +104,7 @@ class FileTransferManager {
   /// the ~256 KB channel limit.
   static const int rawChunk = 36 * 1024;
 
-  /// Pause sending while more than this many bytes are queued in the channel's
-  /// SCTP send buffer. Kept SMALL (512 KB) on purpose: libwebrtc's send buffer
-  /// caps around 16 MB, and if we let it fill (as the old 4 MB high-water + a
-  /// give-up-and-send-anyway loop did) it saturates after ~4 medium files and
-  /// wedges BOTH directions of the one shared bidirectional file channel until
-  /// reconnect. Draining to 512 KB between chunks keeps it nowhere near the cap.
-  static const int _highWater = 512 * 1024;
-
-  /// If the buffer won't drain for this long the peer isn't receiving — abort
+  /// If the receiver stops acking for this long the peer isn't receiving — abort
   /// the transfer as failed. NEVER force-send into a full buffer (that's what
   /// corrupted the channel and broke every later transfer).
   static const Duration _drainTimeout = Duration(seconds: 30);
@@ -132,6 +127,26 @@ class FileTransferManager {
   /// How long an outgoing transfer waits for the host's saved-ack before it
   /// stops showing "confirming…" and settles as delivered-but-unconfirmed.
   static const Duration _ackTimeout = Duration(seconds: 30);
+
+  /// Receiver-driven flow control (the ONLY reliable backpressure). The viewer's
+  /// SCTP `bufferedAmount` reads 0 on some platforms (flutter_webrtc Windows), so
+  /// the old drain loop never engaged and a large file was dumped whole into the
+  /// ~16 MB SCTP buffer → overflow → the channel/peer tore down and the WHOLE
+  /// session died (large uploads killed everything; small files fit, so they
+  /// "worked"). Instead the RECEIVER acks bytes-written every [_progInterval];
+  /// the sender never runs more than [_sendWindow] ahead of the last ack. This
+  /// paces to the real drain rate on ANY link and can never flood the buffer.
+  static const int _sendWindow = 2 * 1024 * 1024; // 2 MB in flight, max
+  static const int _progInterval = 1024 * 1024; // receiver acks every 1 MB
+  /// Grace before assuming the receiver doesn't ack (older build) and falling
+  /// back to fixed-rate pacing instead of blocking on acks that never come.
+  static const int _noAckGraceMs = 400;
+
+  /// Per outgoing id: bytes the RECEIVER has confirmed writing (from {t:'prog'}),
+  /// and whether any prog ack was ever seen (else the peer is an old build and we
+  /// pace by time instead). Cleared when the transfer settles.
+  final Map<String, int> _sendAcked = {};
+  final Map<String, bool> _sendProgSeen = {};
 
   /// Send [bytes] as [name] to the peer. Returns the transfer, or null if the
   /// file is too large.
@@ -168,39 +183,39 @@ class FileTransferManager {
       seq++;
       t.transferred = end;
       onChange();
-      // Wait for the SCTP buffer to DRAIN before queuing more (bufferedAmount is
-      // updated by native events, so this sees real values). Reset the stall timer
-      // whenever the buffer actually drains — only abort when it's GENUINELY stuck
-      // (no drain at all for the whole window). A large file over a slow/contended
-      // link keeps going (draining steadily, just slowly) instead of being falsely
-      // aborted; only a peer that truly stopped receiving trips the timeout. (The
-      // old fixed timeout aborted healthy-but-slow large transfers once the buffers
-      // filled — the "big file dies after ~8–16 MB, works again after reconnect"
-      // bug: reconnect just reset the buffers.)
+      // Receiver-driven backpressure: never run more than [_sendWindow] ahead of
+      // the bytes the RECEIVER has confirmed writing ({t:'prog'} acks). This is
+      // the real pacing — it adapts to the actual drain rate on any link and can
+      // never dump the whole file into the ~16 MB SCTP buffer (the overflow that
+      // tore down the channel and killed the session). `bufferedAmount` is NOT
+      // used to gate here: it reads 0 on flutter_webrtc Windows, which is exactly
+      // why the old loop never engaged. Yield once so inbound prog acks land.
       await Future<void>.delayed(Duration.zero);
       var stalledMs = 0;
-      var lastBuffered = buffered();
-      while (buffered() > _highWater) {
+      while (t.transferred - (_sendAcked[id] ?? 0) > _sendWindow) {
         if (t.status == FileStatus.error) return t; // cancelled
-        await Future<void>.delayed(const Duration(milliseconds: 15));
-        final b = buffered();
-        if (b < lastBuffered) {
-          stalledMs = 0; // draining → healthy, keep waiting as long as it drains
-          lastBuffered = b;
-        } else {
-          stalledMs += 15;
-        }
-        if (stalledMs > _drainTimeout.inMilliseconds) {
-          // No drain progress at all for the window → the peer really stopped.
-          // Tell the host so it deletes the partial file instead of leaking it.
+        // Older host that never sends prog acks → don't block forever waiting on
+        // acks that won't come; fall back to fixed-rate pacing (still no dump).
+        if (!(_sendProgSeen[id] ?? false) && stalledMs >= _noAckGraceMs) break;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        stalledMs += 10;
+        if ((_sendProgSeen[id] ?? false) &&
+            stalledMs > _drainTimeout.inMilliseconds) {
+          // Receiver WAS acking, then stopped for the whole window → it really
+          // died. Tell the host to drop the partial and fail cleanly.
           send(jsonEncode({'k': 'ft', 't': 'cancel', 'id': id}));
           t.status = FileStatus.error;
           t.error = 'Transfer stalled — the other side stopped receiving.';
           DiagLog.log('ft', 'send STALLED id=$id at ${t.transferred}/${t.size} '
-              '— no drain in ${_drainTimeout.inSeconds}s, cancelled');
+              '— no ack progress in ${_drainTimeout.inSeconds}s, cancelled');
           onChange();
           return t;
         }
+      }
+      // No-ack fallback pace: without receiver feedback, cap the raw rate so we
+      // still never flood SCTP (~36 KB / 4 ms ≈ 9 MB/s, steady).
+      if (!(_sendProgSeen[id] ?? false)) {
+        await Future<void>.delayed(const Duration(milliseconds: 4));
       }
     }
     if (t.status == FileStatus.error) return t;
@@ -279,7 +294,24 @@ class FileTransferManager {
         final bytes = base64Decode(d);
         inc.buf.add(bytes);
         inc.ft.transferred += bytes.length;
+        // Drive the SENDER's flow control: ack bytes-received every ~1 MB so it
+        // paces to our drain rate instead of dumping the whole file (which
+        // overflowed SCTP and killed the session). Cheap control message.
+        if (inc.ft.transferred - inc.lastProg >= _progInterval) {
+          inc.lastProg = inc.ft.transferred;
+          send(jsonEncode(
+              {'k': 'ft', 't': 'prog', 'id': id, 'recv': inc.ft.transferred}));
+        }
         onChange();
+        break;
+      case 'prog':
+        // Sender side: the receiver confirmed it has written this many bytes.
+        // Advances the flow-control window in sendFile so we send more.
+        final recv = m['recv'] as int?;
+        if (recv != null) {
+          _sendProgSeen[id] = true;
+          if (recv > (_sendAcked[id] ?? 0)) _sendAcked[id] = recv;
+        }
         break;
       case 'end':
         DiagLog.log('ft', 'recv end id=$id');
@@ -296,6 +328,8 @@ class FileTransferManager {
         // the ONLY place a send is allowed to show success.
         DiagLog.log('ft', 'recv saved id=$id');
         _ackTimers.remove(id)?.cancel();
+        _sendAcked.remove(id);
+        _sendProgSeen.remove(id);
         for (final tr in transfers) {
           if (tr.id == id && tr.direction == FileDirection.outgoing) {
             tr.savedPath = m['path'] as String?;
@@ -311,6 +345,8 @@ class FileTransferManager {
         // on the sender instead of an endless "confirming…".
         DiagLog.log('ft', 'recv failed id=$id err=${m['err']}');
         _ackTimers.remove(id)?.cancel();
+        _sendAcked.remove(id);
+        _sendProgSeen.remove(id);
         for (final tr in transfers) {
           if (tr.id == id && tr.direction == FileDirection.outgoing) {
             tr.status = FileStatus.error;

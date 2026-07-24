@@ -401,6 +401,27 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-24 — THE real large-upload fix: receiver-driven ack flow control (r82).
+  Supersedes the r77/r81 keyframe theory — that was the WRONG layer.** Decisive
+  logs: viewer app.log `sent end` for a 24MB file just 1.3s after `send` (a full
+  dump, no pacing), then host worker.log `receiving file progress written=8404992`
+  then NOTHING, then viewer `ack TIMEOUT` + peer dies + input dies. ROOT CAUSE: the
+  viewer never paces large uploads. `FileTransferManager.sendFile` gated on
+  `bufferedAmount` (`while buffered() > 512KB`), but flutter_webrtc's `bufferedAmount`
+  reads ~0 on Windows (async-cached value the tight send loop starves), so the loop
+  NEVER blocked → the whole file dumped into the ~16MB SCTP send buffer at once →
+  overflow → the 'file' data channel + peer connection tore down → the host froze
+  ~8MB in and EVERY later transfer failed too (small files fit the buffer, so they
+  "worked" — the misleading clue). r80 (clipagent) and r81 (keyframe) both fixed the
+  wrong layer; `8404992` was just the every-8MB progress-LOG mark, not a hard buffer.
+  FIX (bufferedAmount-independent, drain-rate-adaptive): the RECEIVER acks bytes-
+  written every 1MB (`{k:ft,t:prog,id,recv}` — Go `filerecv.go` + Dart host
+  `handleMessage 'data'`); the SENDER never runs more than a 2MB window ahead of the
+  last ack (`file_transfer_service.dart`), so it paces to the real drain rate on any
+  link and can never flood SCTP. Graceful fallback: if the receiver never acks (old
+  build) the sender time-paces (~9MB/s) instead of blocking. Refines LD-15 (pacing is
+  now receiver-ack-driven, NOT bufferedAmount, which is unreliable). Kept r80+r81
+  (independent, correct). Go builds (win) + vet + Dart analyze clean.
 - **2026-07-24 — RESTORED the r77 large-upload fix that a botched revert silently
   dropped (r81). THE actual cause of "file/clipboard broken after switch".** The
   viewer app.log (app 10.log) was decisive and reframed the whole hunt: small
