@@ -925,11 +925,21 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
         _DeviceGrid(
           devices: _filtered(all),
           onPick: widget.onPick,
+          onToggleFav: (id) =>
+              ref.read(addressBookProvider.notifier).toggleFavorite(id),
         ),
         const SizedBox(height: 28),
-        const _SectionHead(title: 'Recent activity', tabs: []),
-        const SizedBox(height: 14),
-        _ActivityTimeline(recents: ref.watch(recentConnectionsProvider)),
+        _BottomPanels(
+          recents: ref.watch(recentConnectionsProvider),
+          favorites: all.where((d) => d.favorite).toList(),
+          onPick: widget.onPick,
+          unattended: ref.watch(settingsProvider).unattendedEnabled,
+          onComingSoon: (label) => ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content: Text('$label — configure in Settings / coming soon'),
+                duration: const Duration(seconds: 2)),
+          ),
+        ),
       ],
     );
   }
@@ -1493,7 +1503,9 @@ class _TabPill extends StatelessWidget {
 class _DeviceGrid extends StatelessWidget {
   final List<_HomeDevice> devices;
   final void Function(String id) onPick;
-  const _DeviceGrid({required this.devices, required this.onPick});
+  final void Function(String id) onToggleFav;
+  const _DeviceGrid(
+      {required this.devices, required this.onPick, required this.onToggleFav});
 
   @override
   Widget build(BuildContext context) {
@@ -1528,7 +1540,10 @@ class _DeviceGrid extends StatelessWidget {
         runSpacing: gap,
         children: [
           for (final d in devices)
-            SizedBox(width: w, child: _DeviceCard(device: d, onPick: onPick)),
+            SizedBox(
+                width: w,
+                child: _DeviceCard(
+                    device: d, onPick: onPick, onToggleFav: onToggleFav)),
         ],
       );
     });
@@ -1542,10 +1557,28 @@ const List<Color> _grounds = [
   AppColors.deviceWalnut,
 ];
 
+const List<Color> _deviceTints = [
+  Color(0xFF4C9AFF),
+  Color(0xFF36B37E),
+  Color(0xFF9F7AEA),
+  Color(0xFFFF8B3D),
+  Color(0xFFF06A6A),
+  Color(0xFF2DD4BF),
+];
+
+IconData _deviceGlyph(String os) {
+  final o = os.toLowerCase();
+  if (o.contains('mac') || o.contains('darwin')) return Icons.laptop_mac_rounded;
+  if (o.contains('linux') || o.contains('server')) return Icons.dns_rounded;
+  return Icons.desktop_windows_rounded;
+}
+
 class _DeviceCard extends StatefulWidget {
   final _HomeDevice device;
   final void Function(String id) onPick;
-  const _DeviceCard({required this.device, required this.onPick});
+  final void Function(String id) onToggleFav;
+  const _DeviceCard(
+      {required this.device, required this.onPick, required this.onToggleFav});
   @override
   State<_DeviceCard> createState() => _DeviceCardState();
 }
@@ -1603,106 +1636,103 @@ class _DeviceCardState extends State<_DeviceCard> {
   @override
   Widget build(BuildContext context) {
     final d = widget.device;
-    // Subtle premium depth: the whole card tips a few degrees toward the pointer
-    // (perspective), with the thumbnail glyph parallaxing a touch more. Small
-    // angles + a soft settle on exit — no continuous spin.
-    final tilt = Matrix4.identity()
-      ..setEntry(3, 2, 0.0011)
-      ..rotateY(_hover ? _tilt.dx * 0.12 : 0)
-      ..rotateX(_hover ? -_tilt.dy * 0.10 : 0);
+    final tint = _deviceTints[
+        d.id.codeUnits.fold<int>(0, (a, b) => a + b) % _deviceTints.length];
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
-      onHover: _onHover,
-      onExit: (_) => setState(() {
-        _hover = false;
-        _tilt = Offset.zero;
-      }),
+      onExit: (_) => setState(() => _hover = false),
       cursor: SystemMouseCursors.click,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-        transformAlignment: Alignment.center,
-        transform: tilt..translateByDouble(0.0, _hover ? -4.0 : 0.0, 0.0, 1.0),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: _hover
-                  ? AppColors.primary.withValues(alpha: 0.4)
-                  : AppColors.border),
-          boxShadow: _hover ? AppShadows.cardHover : AppShadows.card,
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // thumbnail (real screen if captured, else a light placeholder)
-            SizedBox(
-              height: 108,
-              width: double.infinity,
-              child: (d.thumbPath != null)
-                  ? thumbImage(d.thumbPath!, fallback: _placeholder(d))
-                  : _placeholder(d),
-            ),
-            // body
-            Padding(
-              padding: const EdgeInsets.fromLTRB(13, 11, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: d.online
-                            ? AppColors.success
-                            : AppColors.textTertiary,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(d.name.isEmpty ? d.id : d.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              AppTypography.cardTitle.copyWith(fontSize: 14.5)),
-                    ),
-                    Icon(
-                        d.favorite
-                            ? Icons.star_rounded
-                            : Icons.star_outline_rounded,
-                        size: 16,
-                        color: d.favorite
-                            ? AppColors.warning
-                            : AppColors.textTertiary),
-                  ]),
-                  const SizedBox(height: 3),
-                  Text('${_osLabel(d.os)}  ·  ID ${_group(d.id)}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.mono.copyWith(
-                          fontSize: 11.5, color: AppColors.textTertiary)),
-                  const SizedBox(height: 11),
-                  Row(children: [
-                    Expanded(
-                      child: Text(
-                        d.lastConnected != null
-                            ? _ago(d.lastConnected!)
-                            : (d.online ? 'Online now' : 'Not connected yet'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.caption.copyWith(fontSize: 11),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _CardConnect(onTap: () => widget.onPick(d.id)),
-                  ]),
-                ],
+      child: GestureDetector(
+        onTap: () => widget.onPick(d.id), // CONNECT — audit: connectToHost
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          transformAlignment: Alignment.center,
+          transform: Matrix4.translationValues(0, _hover ? -3 : 0, 0),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 15),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadii.card),
+            border: Border.all(
+                color: _hover
+                    ? AppColors.primary.withValues(alpha: 0.5)
+                    : AppColors.border),
+            boxShadow: _hover ? AppShadows.cardHover : AppShadows.card,
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                    color: d.online ? AppColors.success : AppColors.error,
+                    shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 7),
+              Text(d.online ? 'Online' : 'Offline',
+                  style: AppTypography.caption.copyWith(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: d.online ? AppColors.success : AppColors.error)),
+              const Spacer(),
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () =>
+                    widget.onToggleFav(d.id), // FAVORITE — audit: toggleFavorite
+                child: Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: Icon(
+                      d.favorite
+                          ? Icons.star_rounded
+                          : Icons.star_outline_rounded,
+                      size: 18,
+                      color: d.favorite
+                          ? AppColors.warning
+                          : AppColors.textTertiary),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 14),
+            Center(
+              child: Container(
+                width: 66,
+                height: 66,
+                decoration: BoxDecoration(
+                    color: tint.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(18)),
+                child: Icon(_deviceGlyph(d.os), size: 32, color: tint),
               ),
             ),
-          ],
+            const SizedBox(height: 14),
+            Center(
+                child: Text(_group(d.id),
+                    style: AppTypography.idLarge.copyWith(fontSize: 16.5))),
+            const SizedBox(height: 3),
+            Center(
+              child: Text(d.name.isEmpty ? _osLabel(d.os) : d.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.caption
+                      .copyWith(fontSize: 12.5, color: AppColors.textSecondary)),
+            ),
+            const SizedBox(height: 14),
+            Container(height: 1, color: AppColors.border),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(
+                child: Text('ID ${_group(d.id)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.mono.copyWith(
+                        fontSize: 10.5, color: AppColors.textTertiary)),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                  d.lastConnected != null
+                      ? _ago(d.lastConnected!)
+                      : (d.online ? 'online' : '—'),
+                  style: AppTypography.meta.copyWith(fontSize: 10.5)),
+            ]),
+          ]),
         ),
       ),
     );
@@ -1747,6 +1777,182 @@ class _CardConnectState extends State<_CardConnect> {
         ),
       ),
     );
+  }
+}
+
+// ---------------------------------------------------- bottom panels (mockup)
+class _BottomPanels extends StatelessWidget {
+  final List<RecentConnection> recents;
+  final List<_HomeDevice> favorites;
+  final void Function(String id) onPick;
+  final bool unattended;
+  final void Function(String label) onComingSoon;
+  const _BottomPanels({
+    required this.recents,
+    required this.favorites,
+    required this.onPick,
+    required this.unattended,
+    required this.onComingSoon,
+  });
+
+  Widget _card(String title, Widget child) => Container(
+        padding: const EdgeInsets.fromLTRB(18, 16, 14, 12),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadii.card),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppShadows.card,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: AppTypography.sectionTitle),
+          const SizedBox(height: 12),
+          child,
+        ]),
+      );
+
+  Widget _empty(String msg) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 22),
+        child: Center(
+            child: Text(msg,
+                textAlign: TextAlign.center,
+                style: AppTypography.caption.copyWith(fontSize: 12))),
+      );
+
+  Widget _deviceRow(String id, String name, String os, Widget trailing,
+      VoidCallback onTap) {
+    final tint =
+        _deviceTints[id.codeUnits.fold<int>(0, (a, b) => a + b) % _deviceTints.length];
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadii.md),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+        child: Row(children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+                color: tint.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(9)),
+            child: Icon(_deviceGlyph(os), size: 15, color: tint),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_group(id),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.mono.copyWith(
+                      fontSize: 12.5, fontWeight: FontWeight.w600)),
+              if (name.isNotEmpty && name != id)
+                Text(name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.meta.copyWith(fontSize: 10.5)),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          trailing,
+        ]),
+      ),
+    );
+  }
+
+  Widget _quickAction(IconData icon, String label, String state) => InkWell(
+        onTap: () => onComingSoon(label),
+        borderRadius: BorderRadius.circular(AppRadii.md),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: Row(children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                  color: AppColors.primarySoft,
+                  borderRadius: BorderRadius.circular(9)),
+              child: Icon(icon, size: 15, color: AppColors.primary),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+                child: Text(label,
+                    style: AppTypography.body.copyWith(fontSize: 13))),
+            Text(state,
+                style: AppTypography.meta.copyWith(
+                    fontSize: 10.5,
+                    color: state == 'On'
+                        ? AppColors.success
+                        : AppColors.textTertiary)),
+            const SizedBox(width: 6),
+            const Icon(Icons.chevron_right_rounded,
+                size: 16, color: AppColors.textTertiary),
+          ]),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final sessions = _card(
+      'Recent Sessions',
+      recents.isEmpty
+          ? _empty('No sessions yet')
+          : Column(children: [
+              for (final r in recents.take(5))
+                _deviceRow(
+                    r.id,
+                    r.name,
+                    '',
+                    Text(r.lastConnected != null ? _ago(r.lastConnected!) : '',
+                        style: AppTypography.meta.copyWith(fontSize: 10.5)),
+                    () => onPick(r.id)),
+            ]),
+    );
+    final favs = _card(
+      'Favorites',
+      favorites.isEmpty
+          ? _empty("No favorites yet —\ntap a device's star")
+          : Column(children: [
+              for (final d in favorites.take(5))
+                _deviceRow(
+                    d.id,
+                    d.name,
+                    d.os,
+                    const Icon(Icons.star_rounded,
+                        size: 16, color: AppColors.warning),
+                    () => onPick(d.id)),
+            ]),
+    );
+    final actions = _card(
+      'Quick Actions',
+      Column(children: [
+        _quickAction(
+            Icons.podcasts_rounded, 'Unattended Access', unattended ? 'On' : 'Off'),
+        _quickAction(Icons.download_rounded, 'Install Agent', 'Coming soon'),
+        _quickAction(Icons.wifi_tethering_rounded, 'Wake-on-LAN', 'Coming soon'),
+        _quickAction(
+            Icons.person_add_alt_1_rounded, 'Invite a friend', 'Coming soon'),
+        _quickAction(
+            Icons.help_outline_rounded, 'Help & Support', 'Coming soon'),
+      ]),
+    );
+
+    return LayoutBuilder(builder: (context, c) {
+      if (c.maxWidth >= 940) {
+        return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: sessions),
+          const SizedBox(width: 16),
+          Expanded(child: favs),
+          const SizedBox(width: 16),
+          Expanded(child: actions),
+        ]);
+      }
+      return Column(children: [
+        sessions,
+        const SizedBox(height: 16),
+        favs,
+        const SizedBox(height: 16),
+        actions,
+      ]);
+    });
   }
 }
 
