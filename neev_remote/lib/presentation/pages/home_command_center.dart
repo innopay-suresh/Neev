@@ -679,54 +679,73 @@ class _ConnectionDock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(30, 28, 30, 26),
+      padding: const EdgeInsets.fromLTRB(18, 15, 18, 15),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadii.panel),
+        borderRadius: BorderRadius.circular(AppRadii.lg),
         border: Border.all(color: AppColors.border),
         boxShadow: AppShadows.dock,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Connect securely to another device',
-              style: AppTypography.pageTitle.copyWith(fontSize: 22)),
-          const SizedBox(height: 5),
-          Text('Access, support, transfer files or collaborate in real time.',
-              style: AppTypography.body.copyWith(color: AppColors.textSecondary)),
-          const SizedBox(height: 20),
+          Row(children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: AppColors.primarySoft,
+                borderRadius: BorderRadius.circular(AppRadii.md),
+              ),
+              child: const Icon(Icons.cast_connected_rounded,
+                  size: 18, color: AppColors.primary),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Connect to a device',
+                      style: AppTypography.sectionTitle.copyWith(fontSize: 14.5)),
+                  Text('Enter an ID and password to start a session',
+                      style: AppTypography.meta.copyWith(fontSize: 11)),
+                ],
+              ),
+            ),
+          ]),
+          const SizedBox(height: 12),
           _DockField(
             controller: idController,
-            hint: 'Remote ID, device name or contact',
+            hint: 'Remote ID or device name',
             icon: Icons.devices_rounded,
             mono: true,
             onSubmitted: (_) => onConnect(),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 9),
           Row(
             children: [
               Expanded(
-                flex: 3,
+                flex: 5,
                 child: _DockField(
                   controller: passwordController,
-                  hint: 'Password / Access key',
+                  hint: 'Password',
                   icon: Icons.lock_outline_rounded,
                   obscure: true,
                   onSubmitted: (_) => onConnect(),
                 ),
               ),
-              const SizedBox(width: 12),
-              const Expanded(flex: 2, child: _ModeSelector()),
-              const SizedBox(width: 12),
+              const SizedBox(width: 9),
+              const Expanded(flex: 3, child: _ModeSelector()),
+              const SizedBox(width: 9),
               _ConnectButton(onTap: onConnect),
             ],
           ),
           if (recents.isNotEmpty) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             Row(children: [
               Text('Recent',
                   style: AppTypography.label
-                      .copyWith(fontSize: 11.5, color: AppColors.textTertiary)),
+                      .copyWith(fontSize: 11, color: AppColors.textTertiary)),
               const SizedBox(width: 8),
               ...recents.map((r) => Padding(
                     padding: const EdgeInsets.only(right: 8),
@@ -759,24 +778,24 @@ class _DockField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 13),
       decoration: BoxDecoration(
         color: AppColors.surfaceLight,
-        borderRadius: BorderRadius.circular(AppRadii.lg),
+        borderRadius: BorderRadius.circular(AppRadii.md),
         border: Border.all(color: AppColors.borderStrong),
       ),
       child: Row(children: [
-        Icon(icon, size: 18, color: AppColors.textTertiary),
-        const SizedBox(width: 11),
+        Icon(icon, size: 17, color: AppColors.textTertiary),
+        const SizedBox(width: 10),
         Expanded(
           child: TextField(
             controller: controller,
             obscureText: obscure,
             onSubmitted: onSubmitted,
             style: mono
-                ? AppTypography.idLarge.copyWith(fontSize: 16, letterSpacing: 1.5)
-                : AppTypography.body.copyWith(fontSize: 15),
+                ? AppTypography.idLarge.copyWith(fontSize: 14.5, letterSpacing: 0.8)
+                : AppTypography.body.copyWith(fontSize: 14),
             decoration: InputDecoration(
               hintText: hint,
               hintStyle:
@@ -813,9 +832,9 @@ class _ModeSelectorState extends State<_ModeSelector> {
     return PopupMenuButton<String>(
       initialValue: _mode,
       onSelected: (v) => setState(() => _mode = v),
-      offset: const Offset(0, 54),
+      offset: const Offset(0, 46),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.lg),
+        borderRadius: BorderRadius.circular(AppRadii.md),
         side: const BorderSide(color: AppColors.border),
       ),
       color: AppColors.surface,
@@ -823,33 +842,28 @@ class _ModeSelectorState extends State<_ModeSelector> {
         for (final m in _modes)
           PopupMenuItem(
               value: m,
-              height: 40,
-              child: Text(m, style: AppTypography.body.copyWith(fontSize: 13.5))),
+              height: 38,
+              child: Text(m, style: AppTypography.body.copyWith(fontSize: 13))),
       ],
       child: Container(
-        height: 52,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: AppColors.surfaceLight,
-          borderRadius: BorderRadius.circular(AppRadii.lg),
+          borderRadius: BorderRadius.circular(AppRadii.md),
           border: Border.all(color: AppColors.borderStrong),
         ),
         child: Row(children: [
+          const Icon(Icons.tune_rounded, size: 15, color: AppColors.textTertiary),
+          const SizedBox(width: 8),
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('MODE', style: AppTypography.microLabel),
-                Text(_mode,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.bodyStrong.copyWith(fontSize: 13.5)),
-              ],
-            ),
+            child: Text(_mode,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.bodyStrong.copyWith(fontSize: 12.5)),
           ),
           const Icon(Icons.keyboard_arrow_down_rounded,
-              size: 18, color: AppColors.textTertiary),
+              size: 17, color: AppColors.textTertiary),
         ]),
       ),
     );
@@ -880,8 +894,8 @@ class _ConnectButtonState extends State<_ConnectButton> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOutCubic,
-          height: 52,
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           transform: Matrix4.translationValues(
               0, _down ? 0 : (_hover ? -2 : 0), 0)
             ..scaleByDouble(
@@ -889,12 +903,12 @@ class _ConnectButtonState extends State<_ConnectButton> {
           transformAlignment: Alignment.center,
           decoration: BoxDecoration(
             color: _hover ? AppColors.primaryDark : AppColors.primary,
-            borderRadius: BorderRadius.circular(AppRadii.lg),
+            borderRadius: BorderRadius.circular(AppRadii.md),
             boxShadow: [
               BoxShadow(
-                color: AppColors.primary.withValues(alpha: _hover ? 0.45 : 0.3),
+                color: AppColors.primary.withValues(alpha: _hover ? 0.5 : 0.34),
                 blurRadius: _hover ? 22 : 14,
-                offset: Offset(0, _hover ? 10 : 6),
+                offset: Offset(0, _hover ? 9 : 5),
               ),
             ],
           ),
@@ -903,13 +917,13 @@ class _ConnectButtonState extends State<_ConnectButton> {
                 style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
-                    fontSize: 15)),
-            const SizedBox(width: 9),
+                    fontSize: 14)),
+            const SizedBox(width: 8),
             AnimatedSlide(
               duration: const Duration(milliseconds: 160),
               offset: Offset(_hover ? 0.25 : 0, 0),
               child: const Icon(Icons.arrow_forward_rounded,
-                  color: Colors.white, size: 19),
+                  color: Colors.white, size: 18),
             ),
           ]),
         ),
