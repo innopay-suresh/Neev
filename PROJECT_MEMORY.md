@@ -285,6 +285,11 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Working Features (confirmed)
 
+- Large file transfer (viewer→host, tens of MB) over TransportMode — receiver-ack
+  flow control (r82), hardware-confirmed 2026-07-24. Sends multiple files back-to-
+  back incl. a 24MB one under live mouse movement with no ack-timeout, no peer drop,
+  no input death. Do NOT pace on `bufferedAmount` (reads 0 on flutter_webrtc Windows)
+  — the RECEIVER acks bytes/1MB, the sender windows 2MB ahead (see LD-15 / r82).
 - Normal remote control host↔viewer (~20 fps), Windows/macOS/Linux.
 - Clicks/drags correct (no click-becomes-drag; no dead clicks; no stuck-Alt →
   double-click opens files, not Properties).
@@ -402,6 +407,7 @@ hardware-confirmed intact.
 ## Change Log
 
 - **2026-07-24 — THE real large-upload fix: receiver-driven ack flow control (r82).
+  ✅ HARDWARE-CONFIRMED by user ("now everything is working after this test").
   Supersedes the r77/r81 keyframe theory — that was the WRONG layer.** Decisive
   logs: viewer app.log `sent end` for a 24MB file just 1.3s after `send` (a full
   dump, no pacing), then host worker.log `receiving file progress written=8404992`
