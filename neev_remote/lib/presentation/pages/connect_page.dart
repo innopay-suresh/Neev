@@ -1465,29 +1465,35 @@ class _TopBar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final online = service.hostStatus == HostStatus.online;
+    final isHome = title == 'Home';
     return Container(
-      height: 68,
+      height: 86,
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      padding: const EdgeInsets.symmetric(horizontal: 30),
       child: Row(
         children: [
-          // Brand lives in the sidebar; the top bar carries just the page title.
-          // The build stamp moved to Settings → About (Command Center redesign —
-          // the Home header shouldn't show an engineering identifier).
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: AppTypography.pageTitle),
-            ],
-          ),
+          if (isHome)
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Welcome back 👋',
+                    style: AppTypography.pageTitle.copyWith(fontSize: 24)),
+                const SizedBox(height: 3),
+                Text('Securely access and manage your devices from anywhere.',
+                    style:
+                        AppTypography.caption.copyWith(fontSize: 12.5)),
+              ],
+            )
+          else
+            Text(title, style: AppTypography.pageTitle.copyWith(fontSize: 22)),
           const SizedBox(width: AppSpacing.md),
           const Spacer(),
-          SizedBox(width: 260, height: 40, child: _TopSearchField()),
-          const SizedBox(width: AppSpacing.sm),
+          SizedBox(width: 300, height: 42, child: _TopSearchField()),
+          const SizedBox(width: AppSpacing.md),
           _StatusPill(online: online),
           const SizedBox(width: AppSpacing.sm),
           _TopIconButton(
@@ -1500,11 +1506,36 @@ class _TopBar extends ConsumerWidget {
             ),
           ),
           _TopIconButton(
+              icon: Icons.help_outline_rounded,
+              tooltip: 'Help & Support',
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Help & Support — coming soon'),
+                        duration: Duration(seconds: 2)),
+                  )),
+          _TopIconButton(
               icon: Icons.settings_outlined,
               tooltip: 'Settings',
               onTap: onSettings),
-          // "This PC" profile chip removed — the single device identity lives in
-          // the activity panel's "This device" card (no duplicate profiles).
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onSettings,
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                    colors: [AppColors.primary, AppColors.primaryDark]),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              alignment: Alignment.center,
+              child: const Text('N',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14)),
+            ),
+          ),
         ],
       ),
     );
@@ -1520,7 +1551,7 @@ class _TopSearchField extends ConsumerWidget {
       style: AppTypography.body,
       decoration: InputDecoration(
         isDense: true,
-        hintText: 'Search recent connections',
+        hintText: 'Search by ID, device name or contact',
         prefixIcon: const Icon(Icons.search, size: 18),
         prefixIconConstraints:
             const BoxConstraints(minWidth: 38, minHeight: 38),
