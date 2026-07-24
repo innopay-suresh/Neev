@@ -401,6 +401,32 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-24 — RESTORED the r77 large-upload fix that a botched revert silently
+  dropped (r81). THE actual cause of "file/clipboard broken after switch".** The
+  viewer app.log (app 10.log) was decisive and reframed the whole hunt: small
+  files SAVE instantly (19KB docx, 298KB pdf → `recv saved`), but LARGE uploads
+  (24MB exe, 13MB zip) → `sent end` then NO ack → the WHOLE viewer peer dies
+  (`no live viewer peer` floods from the instant the big files land) → `ft: ack
+  TIMEOUT` at 30s. Input dies with it. This is NOT a clipboard/switch bug — it is
+  the exact r77 symptom (large upload → host receive-lane starves → worker wedges
+  ~8MB → no ack → peer drops → everything dead). ROOT CAUSE of the regression: the
+  r77→r78 revert dance. r77 (b814309, keyframe throttle + IPC writeLoop fairness)
+  was reverted by b76b335 (the code revert). The intended "un-revert" then ran
+  `git revert HEAD` against the WRONG commit — 68a8ae7, the r78 build-TAG bump
+  ("1 file, 1 insertion") — NOT b76b335. So r77's CODE was never restored; r79 and
+  r80 shipped without it (verified: ipc.go writeLoop had no `hiStreak` fairness,
+  transport.go had no `lastKeyframe`). FIX: `git revert b76b335` (code files only;
+  kept current docs/tag) → restored the keyframe throttle (`requestKeyframe`
+  ≤1/200ms via `lastKeyframe atomic.Int64`) + writeLoop bulk-fairness (a bulk slot
+  after 8 consecutive hi, so a keyframe flood can't starve the file lane). r80's
+  clipagent recv-timeout + dial logging STAY (independent, real hardening — the
+  dial-fail log confirmed the clipagent was healthy, exonerating it). LESSON
+  (reinforces LD-23 meta): after ANY `git revert` of a revert, VERIFY the code
+  actually came back (grep for the restored symbols), never trust the commit
+  subject — a revert can silently target the tag-bump commit instead of the code.
+  Re-test: viewer→host send several files back-to-back INCLUDING a >15MB one while
+  moving the mouse; all must save, none time out, peer must not drop. Go builds
+  (win+darwin) + vet clean.
 - **2026-07-23 — Clipagent wedge-hardening + clipboard-file diagnostics (r80).
   Part 1 of the file/clipboard session-switch investigation — HARDENING + DIAG
   only; the targeted fix + full isolation refactor are GATED on a switch-repro

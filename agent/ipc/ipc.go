@@ -131,22 +131,48 @@ func NewConn(c net.Conn) *Conn {
 }
 
 func (c *Conn) writeLoop() {
+	hiStreak := 0
 	for {
 		var b []byte
-		// Strictly prefer the hi lane: drain it first, non-blocking, so input and
-		// acks are never stuck behind bulk file data.
-		select {
-		case b = <-c.hi:
-		case <-c.done:
-			return
-		default:
+		fromHi := false
+		// FAIRNESS: after a run of hi-lane messages, force a bulk slot. hi (input +
+		// keyframe requests) can otherwise flood — e.g. a PLI storm or rapid mouse
+		// moves during a big transfer — and STARVE the bulk file lane, wedging the
+		// upload (the reported "large file stalls at ~8MB"). This still gives hi
+		// ~8:1 priority (input stays snappy) while guaranteeing file data always
+		// makes progress.
+		if hiStreak >= 8 {
 			select {
-			case b = <-c.hi:
 			case b = <-c.bulk:
-			case b = <-c.vid:
+				hiStreak = 0
 			case <-c.done:
 				return
+			default:
 			}
+		}
+		// Prefer the hi lane: drain it first (non-blocking) so input/acks are never
+		// stuck behind bulk file data.
+		if b == nil {
+			select {
+			case b = <-c.hi:
+				fromHi = true
+			case <-c.done:
+				return
+			default:
+				select {
+				case b = <-c.hi:
+					fromHi = true
+				case b = <-c.bulk:
+				case b = <-c.vid:
+				case <-c.done:
+					return
+				}
+			}
+		}
+		if fromHi {
+			hiStreak++
+		} else {
+			hiStreak = 0
 		}
 		if _, err := c.Conn.Write(b); err != nil {
 			// CRITICAL: on a write error the writer is done, but producers are
