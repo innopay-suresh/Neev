@@ -197,6 +197,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
             selected: _section,
             online: service.hostStatus == HostStatus.online,
             onSelect: (i) => setState(() => _section = i),
+            service: service,
           ),
           Expanded(
             child: Column(
@@ -210,9 +211,6 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
               ],
             ),
           ),
-          // Live activity panel — Home only (this is where you share your ID and
-          // watch incoming connections/transfers).
-          if (onHome) CommandActivityPanel(service: service),
         ],
       ),
     );

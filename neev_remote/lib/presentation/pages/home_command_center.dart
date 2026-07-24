@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -237,17 +238,371 @@ class NavRailItem {
 /// Compact expandable navigation rail (88 → 240px on hover) — the left edge of
 /// the Command Center shell. Icons always; labels + brand + device name fade in
 /// when expanded. Active item: soft-orange fill + a coral indicator on the left.
+// ============================================================ START CONNECTION
+// Mockup hero: "Start a new connection" card with the animated orange globe.
+class _StartConnectionCard extends StatelessWidget {
+  final TextEditingController idController;
+  final TextEditingController passwordController;
+  final VoidCallback onConnect;
+  final List<RecentConnection> recents;
+  final void Function(String id) onPick;
+  final VoidCallback onClear;
+  const _StartConnectionCard({
+    required this.idController,
+    required this.passwordController,
+    required this.onConnect,
+    required this.recents,
+    required this.onPick,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppRadii.panel),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadii.panel),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppShadows.card,
+        ),
+        child: LayoutBuilder(builder: (context, c) {
+          final formW = (c.maxWidth - 300).clamp(360.0, 1120.0);
+          return Stack(children: [
+            Positioned(
+              right: -48,
+              top: -42,
+              bottom: -42,
+              width: 440,
+              child: const IgnorePointer(child: _AnimatedGlobe()),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(28, 24, 28, 22),
+              child: SizedBox(
+                width: formW,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Start a new connection',
+                          style: AppTypography.pageTitle.copyWith(fontSize: 20)),
+                      const SizedBox(height: 4),
+                      Text('Connect to any device using ID, device name or alias.',
+                          style: AppTypography.caption.copyWith(fontSize: 13)),
+                      const SizedBox(height: 18),
+                      Row(children: [
+                        Expanded(
+                          flex: 4,
+                          child: _LabeledField(
+                            controller: idController,
+                            label: 'Remote ID',
+                            hint: 'Enter Remote ID or Device Name',
+                            icon: Icons.devices_rounded,
+                            mono: true,
+                            onSubmitted: (_) => onConnect(),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 4,
+                          child: _LabeledField(
+                            controller: passwordController,
+                            label: 'Password',
+                            hint: 'Enter Password',
+                            icon: Icons.lock_outline_rounded,
+                            obscure: true,
+                            onSubmitted: (_) => onConnect(),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const SizedBox(width: 150, child: _ModeSelector()),
+                        const SizedBox(width: 12),
+                        _WideConnectButton(onTap: onConnect),
+                      ]),
+                      if (recents.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        Row(children: [
+                          Text('Recent IDs:',
+                              style: AppTypography.caption.copyWith(
+                                  fontSize: 12.5,
+                                  color: AppColors.textSecondary)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                for (final r in recents.take(4))
+                                  _RecentChip(
+                                      name: r.name, onTap: () => onPick(r.id)),
+                                InkWell(
+                                  onTap: onClear,
+                                  child: Text('Clear all',
+                                      style: AppTypography.bodyStrong.copyWith(
+                                          fontSize: 12.5,
+                                          color: AppColors.primary)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ]),
+                      ],
+                    ]),
+              ),
+            ),
+          ]);
+        }),
+      ),
+    );
+  }
+}
+
+// A field with a small label above the input + a leading icon (mockup style).
+class _LabeledField extends StatefulWidget {
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  final IconData icon;
+  final bool mono;
+  final bool obscure;
+  final ValueChanged<String>? onSubmitted;
+  const _LabeledField({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    required this.icon,
+    this.mono = false,
+    this.obscure = false,
+    this.onSubmitted,
+  });
+  @override
+  State<_LabeledField> createState() => _LabeledFieldState();
+}
+
+class _LabeledFieldState extends State<_LabeledField> {
+  late bool _hide = widget.obscure;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(AppRadii.md),
+        border: Border.all(color: AppColors.borderStrong),
+      ),
+      child: Row(children: [
+        Icon(widget.icon, size: 18, color: AppColors.textTertiary),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.clip,
+                  style: AppTypography.microLabel.copyWith(fontSize: 9)),
+              SizedBox(
+                height: 22,
+                child: TextField(
+                  controller: widget.controller,
+                  obscureText: _hide,
+                  onSubmitted: widget.onSubmitted,
+                  style: widget.mono
+                      ? AppTypography.mono.copyWith(fontSize: 14)
+                      : AppTypography.body.copyWith(fontSize: 14),
+                  decoration: InputDecoration(
+                    isCollapsed: true,
+                    border: InputBorder.none,
+                    hintText: widget.hint,
+                    hintStyle: AppTypography.body.copyWith(
+                        fontSize: 13.5, color: AppColors.textTertiary),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (widget.obscure)
+          InkWell(
+            onTap: () => setState(() => _hide = !_hide),
+            child: Icon(
+                _hide
+                    ? Icons.visibility_off_rounded
+                    : Icons.visibility_rounded,
+                size: 17,
+                color: AppColors.textTertiary),
+          ),
+      ]),
+    );
+  }
+}
+
+// Full-width-ish ember/orange Connect button (reused by the hero card).
+class _WideConnectButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _WideConnectButton({required this.onTap});
+  @override
+  State<_WideConnectButton> createState() => _WideConnectButtonState();
+}
+
+class _WideConnectButtonState extends State<_WideConnectButton> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 22),
+          decoration: BoxDecoration(
+            color: _hover ? AppColors.primaryDark : AppColors.primary,
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            boxShadow: [
+              BoxShadow(
+                  color: AppColors.primary.withValues(alpha: _hover ? 0.4 : 0.28),
+                  blurRadius: _hover ? 20 : 12,
+                  offset: Offset(0, _hover ? 8 : 5)),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Text('Connect',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15)),
+            SizedBox(width: 9),
+            Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 19),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// Animated orange wireframe globe with orbiting network dots (the "earth").
+class _AnimatedGlobe extends StatefulWidget {
+  const _AnimatedGlobe();
+  @override
+  State<_AnimatedGlobe> createState() => _AnimatedGlobeState();
+}
+
+class _AnimatedGlobeState extends State<_AnimatedGlobe>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(seconds: 26))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reduce = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) =>
+          CustomPaint(painter: _GlobePainter(reduce ? 0 : _c.value)),
+    );
+  }
+}
+
+class _GlobePainter extends CustomPainter {
+  final double t;
+  _GlobePainter(this.t);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final ctr = Offset(size.width / 2, size.height / 2);
+    final r = math.min(size.width, size.height) / 2 * 0.8;
+
+    // soft glow
+    canvas.drawCircle(
+        ctr,
+        r * 1.35,
+        Paint()
+          ..shader = const RadialGradient(colors: [
+            Color(0x33F05A28),
+            Color(0x00F05A28),
+          ]).createShader(Rect.fromCircle(center: ctr, radius: r * 1.35)));
+
+    final line = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+
+    // sphere outline
+    canvas.drawCircle(ctr, r, line..color = const Color(0x59F05A28));
+
+    // latitude ellipses (fixed)
+    for (double lat = -0.7; lat <= 0.7; lat += 0.35) {
+      final y = ctr.dy + r * lat;
+      final w = r * math.sqrt(1 - lat * lat) * 2;
+      canvas.drawOval(
+          Rect.fromCenter(center: Offset(ctr.dx, y), width: w, height: r * 0.30),
+          line..color = const Color(0x40F05A28));
+    }
+
+    // longitude ellipses (rotating -> spin)
+    for (int i = 0; i < 6; i++) {
+      final phase = t * 2 * math.pi + i * math.pi / 6;
+      final w = (r * 2 * math.cos(phase)).abs();
+      final a = 0.18 + 0.30 * math.sin(phase).abs();
+      canvas.drawOval(Rect.fromCenter(center: ctr, width: w, height: r * 2),
+          line..color = Color.fromRGBO(240, 90, 40, a));
+    }
+
+    // orbiting network dots + a connecting arc
+    final dot = Paint()..color = const Color(0xFFF05A28);
+    Offset? prev;
+    for (int i = 0; i < 8; i++) {
+      final ang = t * 2 * math.pi + i * 2 * math.pi / 8;
+      final p = Offset(ctr.dx + r * 0.92 * math.cos(ang),
+          ctr.dy + r * 0.5 * math.sin(ang * 1.3));
+      canvas.drawCircle(p, 2.0 + 1.2 * math.sin(ang).abs(), dot);
+      if (prev != null && i % 2 == 0) {
+        canvas.drawLine(
+            prev,
+            p,
+            Paint()
+              ..color = const Color(0x33F05A28)
+              ..strokeWidth = 1);
+      }
+      prev = p;
+    }
+  }
+
+  @override
+  bool shouldRepaint(_GlobePainter old) => old.t != t;
+}
+
 class CommandNavRail extends StatefulWidget {
   final List<NavRailItem> items;
   final int selected;
   final bool online;
   final ValueChanged<int> onSelect;
+  final RemoteService service;
   const CommandNavRail({
     super.key,
     required this.items,
     required this.selected,
     required this.online,
     required this.onSelect,
+    required this.service,
   });
 
   @override
@@ -255,50 +610,37 @@ class CommandNavRail extends StatefulWidget {
 }
 
 class _CommandNavRailState extends State<CommandNavRail> {
-  bool _open = false;
+  static const bool _open = true; // always expanded (mockup)
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _open = true),
-      onExit: (_) => setState(() => _open = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
-        width: _open ? 240 : 88,
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: const Border(right: BorderSide(color: AppColors.border)),
-          boxShadow: _open
-              ? [
-                  BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 40,
-                      offset: const Offset(8, 0)),
-                ]
-              : null,
-        ),
-        clipBehavior: Clip.hardEdge,
-        child: Column(
+    return Container(
+      width: 236,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(right: BorderSide(color: AppColors.border)),
+      ),
+      clipBehavior: Clip.hardEdge,
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // logo
+            // brand
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 20, 18),
+              padding: const EdgeInsets.fromLTRB(20, 20, 18, 16),
               child: Row(children: [
                 Container(
-                  width: 34,
-                  height: 34,
+                  width: 36,
+                  height: 36,
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [AppColors.primary, AppColors.primaryDark],
                     ),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(11),
                     boxShadow: [
                       BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.4),
+                          color: AppColors.primary.withValues(alpha: 0.35),
                           blurRadius: 12,
                           offset: const Offset(0, 4)),
                     ],
@@ -308,25 +650,23 @@ class _CommandNavRailState extends State<CommandNavRail> {
                       style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
-                          fontSize: 16)),
+                          fontSize: 17)),
                 ),
-                if (_open) ...[
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Neev Remote',
-                            maxLines: 1,
-                            overflow: TextOverflow.clip,
-                            style: AppTypography.cardTitle.copyWith(fontSize: 15)),
-                        Text('COMMAND CENTER',
-                            style: AppTypography.microLabel
-                                .copyWith(fontSize: 9, letterSpacing: 0.8)),
-                      ],
-                    ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Neev Remote',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              AppTypography.sectionTitle.copyWith(fontSize: 15)),
+                      Text('Global Remote Access',
+                          style: AppTypography.meta.copyWith(fontSize: 10)),
+                    ],
                   ),
-                ],
+                ),
               ]),
             ),
             // nav
@@ -344,10 +684,13 @@ class _CommandNavRailState extends State<CommandNavRail> {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            // this-device (own id + password) — real data
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+              child: _ThisDeviceCard(service: widget.service),
+            ),
           ],
         ),
-      ),
     );
   }
 }
@@ -561,24 +904,13 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 40),
       children: [
-        _IdleFloat(
-          amplitude: 2.5,
-          child: _ConnectionDock(
-            idController: widget.idController,
-            passwordController: widget.passwordController,
-            onConnect: widget.onConnect,
-            recents: ref.watch(recentConnectionsProvider).take(3).toList(),
-            onPick: widget.onPick,
-          ),
-        ),
-        const SizedBox(height: 26),
-        _StatusStrip(
-          onlineCount: onlineCount,
-          knownCount: all.length,
-          activeXfer: activeXfer,
-          sharing: sharing,
-          unattended: unattended,
-          connectedViewers: service.connectedViewers,
+        _StartConnectionCard(
+          idController: widget.idController,
+          passwordController: widget.passwordController,
+          onConnect: widget.onConnect,
+          recents: ref.watch(recentConnectionsProvider).take(4).toList(),
+          onPick: widget.onPick,
+          onClear: () => ref.read(recentConnectionsProvider.notifier).clear(),
         ),
         const SizedBox(height: 26),
         _SectionHead(
