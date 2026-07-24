@@ -1,5 +1,17 @@
 # Design System — Neev Remote
 
+## Active direction — v4 "Obsidian" (2026-07-24, user-approved)
+**Dark-first.** Warm-charcoal canvas `#131210`, elevated dark cards `#1C1A16`, one
+ember accent `#FF6A32` that glows only on the brand mark + primary Connect action
+(never ambient). Thumbnails read as lit windows. Warm off-white ink `#F4EFE4`;
+status hues brightened for the dark ground (online `#3ECF8E`, amber `#FFB655`).
+Forced regardless of OS brightness. Implemented as a token RETUNE in
+`app_theme.dart` (`AppColors` names unchanged so all widgets keep compiling; same
+method as v2→v3) + `obsidianTheme()` (`Brightness.dark`). The **layout, spacing,
+type scale, radii and Data Honesty Rule below are unchanged** — only the palette,
+shadows (deeper) and one ember-glow flourish are new. The warm-bento sections
+below describe the superseded v3 light identity, kept for history.
+
 ## Product Context
 - **What this is:** Cross-platform remote-desktop control app (Flutter, macOS + Windows). Viewer connects to a host by 9-digit device ID + password; screen, input, clipboard and file transfer ride WebRTC.
 - **Who it's for:** IT admins and support staff running unattended and attended remote sessions.
@@ -71,3 +83,4 @@ Placeholder or invented numbers are not acceptable in shipped builds.
 | 2026-07-21 | "Command Center" redesign direction approved (prototype) | User-supplied premium spec. Three-column shell: 88→240px expandable nav rail · connection-dock-led workspace · collapsible live-activity panel. Subtle 3D device cards, connection-sequence animation, command palette. Prototype: claude.ai/code/artifact/44999bc8. |
 | 2026-07-21 | Palette retuned coral→orange `#E8622C`→`#F05A28`, canvas `#EEEAE0`→`#F5F1E8`, warm-dark mode defined | Aligns with the approved Command Center spec; token names kept stable so no widget breaks. |
 | 2026-07-21 | Redesign honors Data Honesty Rule: latency/FPS/bandwidth/codec/CPU/MEM tiles gated on WebRTC getStats + host telemetry; multi-session/terminal/WoL/recording/MFA/per-permission gated on their (absent) backends | Same rule as before — the layout ships, fabricated-metric tiles and dead feature controls do not. |
+| 2026-07-24 | v4 "Obsidian" dark-first theme adopted (retune of AppColors → warm-charcoal + ember; obsidianTheme Brightness.dark) | User picked Obsidian from 4 premium directions; token names unchanged so no widget breaks. Layout/type/honesty rule intact. |
