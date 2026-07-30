@@ -281,6 +281,57 @@ moves to **Working Features** after it is confirmed working on real hardware.
   test the full connection flow after ANY change to the consent popup or connect
   buttons.
 
+- **LD-24 — A zero-byte or short transfer is NEVER reported as success, at any
+  layer.** A file that is open and being written (a live log) or locked by the
+  app that owns it can read as 0 bytes on Windows. Every layer used to accept
+  that: the viewer logged `file: send "worker.log" (0 B)`, the host's truncation
+  guard was `rf.size > 0 && rf.written != rf.size` so a transfer DECLARING 0
+  bytes skipped verification entirely and logged `file transfer finished`, and
+  `serveExport` shipped whatever `os.ReadFile` returned and logged `sent file to
+  viewer bytes=0`. The user saw a completed transfer and an empty file. RULE:
+  reads are verified against the on-disk size (`readFileVerified` in Go,
+  `_readVerified` in Dart — retry 3×/150 ms for a transient lock, then a real
+  error), the receiver compares written-vs-declared UNCONDITIONALLY, and a file
+  that cannot be read fails VISIBLY (`{t:failed}` / `failLocal`) instead of
+  moving zero bytes successfully. Applies to import, export and clipboard files.
+  Never re-introduce a size>0 escape into an integrity check.
+
+- **LD-25 — GUI that the remote user must actually SEE aborts when it cannot
+  attach to the input desktop.** `bindInputDesktop()` logged
+  `SetThreadDesktop failed err="The requested resource is in use."` and returned
+  normally, so `serveExport` opened a file picker on a thread with no desktop —
+  invisible or absent — and the export proceeded anyway. That error is transient
+  (the thread still owns a window/hook on its current desktop), so the bind
+  retries 3×/150 ms and RETURNS whether it succeeded. Callers whose result the
+  remote user depends on (the export picker) must abort and report a failure the
+  viewer can retry; callers showing optional GUI (chat window, privacy overlay)
+  may ignore it. Note: this was NOT the cause of the 0-byte export in the
+  2026-07-30 log — that file was already 0 bytes on disk (see LD-24).
+
+- **LD-26 — Per-session child processes are supervised by what they SERVE, not
+  by whether the process object still exists.** The clipboard agent was judged
+  solely by `WaitForSingleObject(clip, 0)`, so one that was alive but not
+  listening on 47922 was neither "dead" nor "moved" and was never relaunched —
+  the file clipboard stayed broken for the rest of the session while every op
+  got "the target machine actively refused it". Reachable in practice: with
+  `SO_REUSEADDR`, Windows lets a bind take a port another socket already holds,
+  so a leftover agent from a previous user session can leave the new one running
+  without a live listener. RULE: probe the actual service (non-blocking connect,
+  500 ms select, every ~15 s, act after 2 consecutive failures) and restart on
+  failure. Any future per-session helper that owns a port gets the same
+  treatment. The service process needs its own `WSAStartup` for this.
+
+- **LD-27 — Clipboard files are delayed-render: an announce WITHOUT a pull is
+  correct, but a pull that fails must fail LOUDLY.** `clipfann` means the host
+  clipboard now holds files; bytes move only when the other side actually pastes
+  (`clipfreq`). Copying eight things and pasting one legitimately produces eight
+  announces and one pull, so un-pulled announce tokens are NOT evidence of
+  failure and must never be given acks, retries or expiry — that machinery would
+  fire constantly on correct behaviour. What DOES need to be explicit is a
+  failed pull: on Windows the paste is a blocked delayed-render call, so any
+  abandoned receive (an out-of-order chunk, an unreadable source) must complete
+  as a failure or Explorer hangs until the session ends.
+
 ---
 
 ## Working Features (confirmed)
@@ -405,6 +456,42 @@ hardware-confirmed intact.
 ---
 
 ## Change Log
+
+- **2026-07-30 — Four evidence-based fixes from worker.log: silent zero-byte
+  transfers, the ignored desktop bind, unsupervised clipagent, and hung
+  clipboard pulls (r105). Implements LD-24..LD-27. Pending hardware
+  validation.** Three of the four reported root causes were confirmed in code;
+  the fourth was investigated and REJECTED with its evidence (see LD-27).
+  (1) `filerecv.go` end-guard `rf.size > 0 && rf.written != rf.size` skipped
+  verification whenever a transfer declared 0 bytes → `file transfer finished
+  size=0` and an empty file in Downloads. Now compared unconditionally. The 0
+  bytes originated on the SENDER, where an in-use file (`worker.log`, a
+  spreadsheet open in Excel) read as empty and was sent as a valid transfer;
+  both sides now verify reads against the on-disk size with a short retry, and
+  report a visible failure instead. `serveExport` aborts rather than logging
+  `sent file to viewer bytes=0`.
+  (2) `bindInputDesktop()` warned `SetThreadDesktop failed err="The requested
+  resource is in use."` and returned normally; `serveExport` then opened a
+  picker on a desktop-less thread. Now retries 3×/150 ms, returns success, and
+  the export aborts with `{t:failed}` when it can't attach. NOTE: this did not
+  cause the 0-byte Airtel export — that file was already 0 bytes on disk from
+  the import at 16:27:56, so the correlation in the log is coincidental. Two
+  real bugs, not cause and effect.
+  (3) `clipagent dial FAILED ... actively refused` with no recovery: the helper
+  judged the clipboard agent by process liveness only, so an agent that was
+  alive but not listening was never relaunched. Added a loopback health probe
+  (+ `WSAStartup` in the service process, which had none, and a log line for a
+  failed clipagent launch — previously silent).
+  (4) "Announce tokens never retrieved" is NOT a bug — it is the documented
+  deliver-on-paste design (LD-4/LD-27), and the log contains a healthy pair
+  (18:23:33 announce h2 → 18:23:42 served). No ack/retry/expiry added. The real
+  gap was a FAILED pull: an out-of-order chunk removed the receive record and
+  returned, leaving the blocked delayed-render paste hung in Explorer until the
+  session ended; and the source side swallowed read errors in `catch (_) {}`.
+  Both now complete as explicit failures and are logged.
+  Large-file transfer is deliberately untouched — chunking, the 1 MB `{t:prog}`
+  acks and the 2 MB send window (r82, hardware-confirmed) are unchanged, and a
+  large file stats and reads equal so it takes exactly the same path.
 
 - **2026-07-24 — THE real large-upload fix: receiver-driven ack flow control (r82).
   ✅ HARDWARE-CONFIRMED by user ("now everything is working after this test").
