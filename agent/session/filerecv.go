@@ -186,7 +186,16 @@ func (f *fileReceiver) serveExport() {
 	// first (same reason the chat window needed it), or it can fail to appear.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	bindInputDesktop()
+	// Abort if the thread can't be bound: without a desktop the picker either
+	// never appears or opens somewhere the user can't see it, and the export
+	// then completes against whatever (or nothing) came back. Better a reported
+	// failure the viewer can retry than a phantom transfer.
+	if !bindInputDesktop() {
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed",
+			"id":  fmt.Sprintf("hx-%d", f.seq.Add(1)),
+			"err": "host could not open the file picker (desktop busy) — try again"})
+		return
+	}
 	path, ok := showOpenFileDialog()
 	if !ok {
 		log.Info().Msg("worker: export picker closed/cancelled — nothing sent")
