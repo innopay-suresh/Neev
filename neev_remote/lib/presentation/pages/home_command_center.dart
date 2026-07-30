@@ -346,16 +346,11 @@ class _StartConnectionCard extends StatelessWidget {
                 ]),
           );
           if (!wide) return form;
-          // center-aligned + fixed globe height: 'stretch' here would demand an
-          // unbounded height from the Row and render nothing.
-          return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            Expanded(child: form),
-            SizedBox(
-              width: globeW,
-              height: 168,
-              child: const IgnorePointer(child: _AnimatedGlobe()),
-            ),
-          ]);
+          // The night map is the card's BACKGROUND (CustomPaint paints before
+          // its child), so it fills the whole panel edge-to-edge and the form
+          // sits on top — no layout participation, so it can never displace the
+          // fields the way the old Stack/Row versions did.
+          return _AnimatedGlobe(child: form);
         }),
       ),
     );
@@ -508,7 +503,8 @@ class _WideConnectButtonState extends State<_WideConnectButton> {
 // Earth at night, seen from space: dark equirectangular world map with glowing
 // city lights. Replaces the old wireframe globe (read as an empty cage).
 class _AnimatedGlobe extends StatefulWidget {
-  const _AnimatedGlobe();
+  final Widget child;
+  const _AnimatedGlobe({required this.child});
   @override
   State<_AnimatedGlobe> createState() => _AnimatedGlobeState();
 }
@@ -534,8 +530,10 @@ class _AnimatedGlobeState extends State<_AnimatedGlobe>
     final reduce = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     return AnimatedBuilder(
       animation: _c,
-      builder: (_, __) =>
-          CustomPaint(painter: _NightEarthPainter(reduce ? 0 : _c.value)),
+      builder: (_, __) => CustomPaint(
+        painter: _NightEarthPainter(reduce ? 0 : _c.value),
+        child: widget.child,
+      ),
     );
   }
 }
@@ -677,36 +675,33 @@ class _NightEarthPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const inset = 8.0;
-    // Reserve room for the tilt + extrusion so nothing clips.
-    final mapW = size.width - inset * 2;
-    final mapH = math.min(size.height * 0.80, mapW * 0.50);
-    final left = inset;
-    final top = (size.height - mapH) / 2 - 6;
+    // FULL-BLEED: the ENTIRE world spans the whole panel — longitude across the
+    // full width, latitude across the full height (with a small bleed). The card
+    // is far wider than a 2:1 map, so latitude is compressed rather than
+    // cropping continents off-frame; every landmass stays visible edge-to-edge.
+    const bleed = 10.0;
+    final mapW = size.width + bleed * 2;
+    final mapH = size.height + bleed * 2;
+    final left = -bleed;
+    final top = -bleed;
 
     Offset proj(double lon, double lat) => Offset(
           left + (lon + 180) / 360 * mapW,
           top + (_latN - lat) / (_latN - _latS) * mapH,
         );
 
-    // --- 3D: tilt the whole map plane back in perspective -------------------
-    final cx = left + mapW / 2, cy = top + mapH / 2;
     canvas.save();
-    canvas.translate(cx, cy);
-    canvas.transform((Matrix4.identity()
-          ..setEntry(3, 2, 0.0016) // perspective
-          ..rotateX(0.52) // lean the plane away from the viewer
-          ..rotateZ(-0.04))
-        .storage);
-    canvas.translate(-cx, -cy);
+    canvas.clipRect(Offset.zero & size);
 
-    // Atmospheric wash (space).
+    // Deep-space wash behind the continents.
     canvas.drawRect(
-      Rect.fromLTWH(left, top, mapW, mapH),
+      Offset.zero & size,
       Paint()
         ..shader = const RadialGradient(
-          colors: [Color(0x1FFF7A28), Color(0x00FF7A28)],
-        ).createShader(Rect.fromLTWH(left, top, mapW, mapH)),
+          center: Alignment(0.45, 0),
+          radius: 0.95,
+          colors: [Color(0x2EFF7A28), Color(0x00FF7A28)],
+        ).createShader(Offset.zero & size),
     );
 
     // Landmass outline path (shared by the extrusion + the top face).
@@ -723,30 +718,27 @@ class _NightEarthPainter extends CustomPainter {
       land.addPath(sub, Offset.zero);
     }
 
-    // --- 3D: extrude the continents — stacked copies below the top face read
-    // as raised landmass walls (darker with depth), then a contact shadow.
-    const depth = 7.0;
-    for (var d = depth; d >= 1; d -= 1) {
-      final k = d / depth; // 1 = deepest
-      canvas.drawPath(
-        land.shift(Offset(0, d)),
+    // Landmasses GLOW like the night-from-space reference: a wide soft bloom
+    // under the shape, then the body, then a hot lit coastline.
+    canvas.drawPath(
+        land,
         Paint()
-          ..color = Color.fromRGBO(
-              (120 * (1 - k * 0.55)).round(),
-              (52 * (1 - k * 0.55)).round(),
-              (18 * (1 - k * 0.55)).round(),
-              0.95),
-      );
-    }
-
-    // Top face + lit coastline.
-    canvas.drawPath(land, Paint()..color = const Color(0x73FF7A28));
+          ..color = const Color(0x3DFF6B00)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16));
+    canvas.drawPath(
+        land,
+        Paint()
+          ..shader = const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xA6FF8A3D), Color(0x8CE05A14)],
+          ).createShader(Offset.zero & size));
     canvas.drawPath(
         land,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0
-          ..color = const Color(0xB3FFB379));
+          ..strokeWidth = 1.2
+          ..color = const Color(0xD9FFC08A));
 
     // Internal country borders (thin, dim — reads as countries, not continents).
     final borderPaint = Paint()
@@ -781,7 +773,25 @@ class _NightEarthPainter extends CustomPainter {
           p, 1.4, Paint()..color = Color.fromRGBO(255, 210, 160, 0.98 * tw));
     }
 
-    canvas.restore(); // end 3D tilt
+    // Readability scrim: the form sits on the left, so fade the card colour
+    // across the left ~55% — the map stays vivid on the right, text stays sharp.
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            AppColors.surface,
+            AppColors.surface.withValues(alpha: 0.92),
+            AppColors.surface.withValues(alpha: 0.35),
+            AppColors.surface.withValues(alpha: 0.0),
+          ],
+          stops: const [0.0, 0.34, 0.56, 0.80],
+        ).createShader(Offset.zero & size),
+    );
+
+    canvas.restore();
   }
 
   @override
