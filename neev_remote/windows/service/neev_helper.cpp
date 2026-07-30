@@ -468,6 +468,47 @@ static HANDLE LaunchTransportSession0() {
 // above it — forward-declare so it's visible here.
 static HANDLE LaunchClipAgentAsUser(DWORD sid);
 
+// Loopback port the user-session clipboard agent serves (see RunClipAgent).
+// Declared here because the supervisor's health probe below needs it.
+static const unsigned short kClipPort = 47922;
+
+// ClipAgentListening probes 127.0.0.1:47922 to prove the clipboard agent is
+// actually SERVING, not merely running. Process liveness alone is not enough:
+// the agent can be alive with no listening socket (its bind lost the port to a
+// stale agent left over from a previous user session — SO_REUSEADDR on Windows
+// permits that hijack), and then every clipboard-file op fails with "No
+// connection could be made because the target machine actively refused it"
+// forever, because nothing ever exits to trigger a relaunch.
+//
+// Connect-and-close is safe for the agent: ClipRecvMsg fails on the empty
+// client, it closes that socket and goes back to accept(). Non-blocking connect
+// with a short select() so the supervisor loop is never stalled by this.
+//
+// Limit: this proves the listening socket exists. It cannot detect an agent
+// wedged inside recv() on another client — the 5s SO_RCVTIMEO added in r80
+// bounds that case separately.
+static bool ClipAgentListening() {
+  SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+  if (s == INVALID_SOCKET) return true;  // can't probe — assume healthy
+  u_long nb = 1;
+  ioctlsocket(s, FIONBIO, &nb);
+  sockaddr_in a = {0};
+  a.sin_family = AF_INET;
+  a.sin_port = htons(kClipPort);
+  inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+  connect(s, (sockaddr*)&a, sizeof(a));
+  fd_set wr, ex;
+  FD_ZERO(&wr);
+  FD_ZERO(&ex);
+  FD_SET(s, &wr);
+  FD_SET(s, &ex);
+  timeval tv = {0, 500 * 1000};  // 500 ms
+  int n = select(0, nullptr, &wr, &ex, &tv);
+  bool ok = (n > 0 && FD_ISSET(s, &wr));
+  closesocket(s);
+  return ok;
+}
+
 // --------------------------------------------------------------------------
 // Service control + main loop. Keeps exactly one agent alive, relaunching it
 // when it exits (e.g. session switch / logoff).
@@ -504,12 +545,20 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   // the published id stable + service-owned on every laptop, first boot included.
   EnsureMachineId();
 
+  // Winsock for the clipboard-agent health probe below. The other WSAStartup
+  // calls live in the agent / clipagent processes; the service had none, so
+  // socket() here would fail and the probe would silently never run.
+  WSADATA wsaSvc;
+  WSAStartup(MAKEWORD(2, 2), &wsaSvc);
+
   HANDLE agent = nullptr;
   DWORD agentSession = 0xFFFFFFFF;
   HANDLE host = nullptr;  // ServiceHost mode: the service-owned Flutter host
   DWORD hostSession = 0xFFFFFFFF;
   HANDLE clip = nullptr;  // user-context clipboard agent (file clipboard)
   DWORD clipSession = 0xFFFFFFFF;
+  int clipProbeTick = 0;   // loops since the last health probe (loop = 3s)
+  int clipProbeFails = 0;  // consecutive failed probes
   HANDLE transport = nullptr;  // TransportMode: session-0 persistent transport
   HANDLE worker = nullptr;     // TransportMode: per-session capture worker
   DWORD workerSession = 0xFFFFFFFF;
@@ -520,18 +569,51 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
     bool transportMode = ReadTransportModeFlag();
 
     // ---- clipboard agent (runs as the logged-in USER; file clipboard) ----
-    // Relaunch when it dies OR the active session moves. It self-skips at the
-    // logon screen (no interactive user), so retry keeps it best-effort.
+    // Relaunch when it dies, when the active session moves, OR when it is alive
+    // but no longer serving. It self-skips at the logon screen (no interactive
+    // user), so retry keeps it best-effort.
     bool cDead = (!clip || WaitForSingleObject(clip, 0) == WAIT_OBJECT_0);
     bool cMoved = (clip && target != 0xFFFFFFFF && target != clipSession);
-    if (cDead || cMoved) {
+
+    // Liveness by process handle alone missed the failure seen in the field:
+    // the agent was running yet every clipboard-file op got "the target machine
+    // actively refused it", and nothing ever restarted it because the process
+    // never exited. Probe the port instead of trusting the handle. Only when we
+    // believe it should be up (already launched, session settled), every ~15s,
+    // and only after two consecutive failures (~30s) so a momentary blip during
+    // a switch doesn't kill a healthy agent.
+    bool cWedged = false;
+    if (clip && !cDead && !cMoved) {
+      if (++clipProbeTick >= 5) {
+        clipProbeTick = 0;
+        if (ClipAgentListening()) {
+          clipProbeFails = 0;
+        } else if (++clipProbeFails >= 2) {
+          Log(L"svc",
+              L"clipboard agent alive but not listening on %u; restarting",
+              kClipPort);
+          cWedged = true;
+        }
+      }
+    } else {
+      clipProbeTick = 0;
+      clipProbeFails = 0;
+    }
+
+    if (cDead || cMoved || cWedged) {
       if (clip) {
-        if (cMoved) TerminateProcess(clip, 0);
+        if (cMoved || cWedged) TerminateProcess(clip, 0);
         CloseHandle(clip);
         clip = nullptr;
       }
       clip = LaunchClipAgentAsUser(target);  // may be null at logon screen
       clipSession = target;
+      clipProbeFails = 0;
+      clipProbeTick = 0;
+      // Was silent either way, so a session with no working file clipboard gave
+      // the log nothing to go on.
+      if (!clip && target != 0xFFFFFFFF)
+        Log(L"svc", L"clipboard agent launch failed for session %lu", target);
     }
 
     // ---- helper agent (always kept alive in the active session) ----
@@ -1013,7 +1095,7 @@ static std::string NarrowUtf8(const std::wstring& w) {
 // launched by the service with the user's OWN token (WTSQueryUserToken), so it
 // runs as the real user on winsta0\default and can. The Flutter host asks it
 // over 127.0.0.1:47922. (Text clipboard already works and is untouched.)
-static const unsigned short kClipPort = 47922;
+// kClipPort is declared near the supervisor loop, which health-probes it.
 #ifndef DROPEFFECT_COPY
 #define DROPEFFECT_COPY 1
 #endif
