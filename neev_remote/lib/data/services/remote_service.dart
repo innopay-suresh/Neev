@@ -2435,7 +2435,14 @@ class RemoteService extends ChangeNotifier {
       _clipRecv[key] = rec;
     }
     if (rec == null || total != rec.total || seq != rec.next) {
+      // Out-of-order/duplicate chunk: the transfer is unrecoverable. Dropping it
+      // silently left the pending delayed-render paste blocked in the native
+      // layer until the session ended — complete it as a FAILURE so Explorer
+      // returns instead of hanging.
+      DiagLog.log('clip',
+          'clip pull $key aborted: chunk seq=$seq total=$total (expected ${rec?.next}/${rec?.total})');
       _clipRecv.remove(key);
+      _completeClipRecv(token, index, false, null);
       return;
     }
     rec.buf.write(d);
