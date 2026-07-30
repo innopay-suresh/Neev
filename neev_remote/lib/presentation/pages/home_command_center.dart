@@ -114,10 +114,10 @@ class _ConnectionSequenceState extends State<ConnectionSequence>
                     width: 20,
                     height: 20,
                     child: done
-                        ? const Icon(Icons.check_circle_rounded,
+                        ? Icon(Icons.check_circle_rounded,
                             size: 18, color: AppColors.success)
                         : active
-                            ? const CircularProgressIndicator(
+                            ? CircularProgressIndicator(
                                 strokeWidth: 2,
                                 valueColor: AlwaysStoppedAnimation(
                                     AppColors.primary))
@@ -399,21 +399,24 @@ class _LabeledFieldState extends State<_LabeledField> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text(widget.label,
                   maxLines: 1,
                   softWrap: false,
                   overflow: TextOverflow.clip,
-                  style: AppTypography.microLabel.copyWith(fontSize: 9)),
+                  style: AppTypography.microLabel
+                      .copyWith(fontSize: 9.5, letterSpacing: 0.8, height: 1.0)),
+              const SizedBox(height: 4),
               SizedBox(
-                height: 22,
+                height: 19,
                 child: TextField(
                   controller: widget.controller,
                   obscureText: _hide,
                   onSubmitted: widget.onSubmitted,
                   style: widget.mono
-                      ? AppTypography.mono.copyWith(fontSize: 14)
-                      : AppTypography.body.copyWith(fontSize: 14),
+                      ? AppTypography.mono.copyWith(fontSize: 14, height: 1.0)
+                      : AppTypography.body.copyWith(fontSize: 14, height: 1.0),
                   // Clear EVERY border + the fill: `border:` alone is only a
                   // fallback — the theme's enabledBorder/focusedBorder and
                   // filled:true still merge in, drawing a nested inner pill
@@ -426,7 +429,9 @@ class _LabeledFieldState extends State<_LabeledField> {
                     focusedBorder: InputBorder.none,
                     hintText: widget.hint,
                     hintStyle: AppTypography.body.copyWith(
-                        fontSize: 13.5, color: AppColors.textTertiary),
+                        fontSize: 13.5,
+                        height: 1.0,
+                        color: AppColors.textTertiary),
                   ),
                 ),
               ),
@@ -530,9 +535,52 @@ class _AnimatedGlobeState extends State<_AnimatedGlobe>
   }
 }
 
+/// Coarse world landmass mask (24 lon columns × 12 lat rows, ~75N..60S).
+/// '#' = land dot. Decorative only — reads as continents at small sizes.
+const List<String> _worldMask = [
+  '   ###     ## ######    ',
+  '  #####   ############  ',
+  ' ###### ## ###########  ',
+  '  ####   ############## ',
+  '   ###   ####### ###### ',
+  '    ##    ##### ###### ',
+  '     #    ######  ###   ',
+  '    ###    #####   #    ',
+  '    ####   ####     ##  ',
+  '     ###    ###     ### ',
+  '      #     ##          ',
+  '            #           ',
+];
+
 class _GlobePainter extends CustomPainter {
   final double t;
   _GlobePainter(this.t);
+
+  /// Dotted continents: project each mask cell onto the sphere and rotate with
+  /// [t]. Front-facing dots only (z > 0), faded toward the limb.
+  void _paintWorld(Canvas canvas, Offset ctr, double r) {
+    final rows = _worldMask.length;
+    final cols = _worldMask[0].length;
+    final spin = t * 2 * math.pi;
+    for (var row = 0; row < rows; row++) {
+      // Map row → latitude 75°N .. 60°S.
+      final lat = (75 - row * (135 / (rows - 1))) * math.pi / 180;
+      final cosLat = math.cos(lat), sinLat = math.sin(lat);
+      for (var col = 0; col < cols; col++) {
+        if (_worldMask[row][col] != '#') continue;
+        final lon = (col / cols) * 2 * math.pi + spin;
+        final x = cosLat * math.sin(lon);
+        final z = cosLat * math.cos(lon);
+        if (z <= 0.05) continue; // back hemisphere
+        final p = Offset(ctr.dx + x * r * 0.96, ctr.dy - sinLat * r * 0.96);
+        final a = (0.25 + 0.55 * z).clamp(0.0, 0.8);
+        canvas.drawCircle(
+            p,
+            1.6 + 0.9 * z,
+            Paint()..color = Color.fromRGBO(255, 122, 40, a));
+      }
+    }
+  }
   @override
   void paint(Canvas canvas, Size size) {
     final ctr = Offset(size.width / 2, size.height / 2);
@@ -572,6 +620,9 @@ class _GlobePainter extends CustomPainter {
       canvas.drawOval(Rect.fromCenter(center: ctr, width: w, height: r * 2),
           line..color = Color.fromRGBO(240, 90, 40, a));
     }
+
+    // dotted continents rotating with the sphere (fills the empty globe)
+    _paintWorld(canvas, ctr, r);
 
     // orbiting network dots + a connecting arc
     final dot = Paint()..color = const Color(0xFFF05A28);
@@ -623,7 +674,7 @@ class _CommandNavRailState extends State<CommandNavRail> {
   Widget build(BuildContext context) {
     return Container(
       width: 236,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(right: BorderSide(color: AppColors.border)),
       ),
@@ -639,7 +690,7 @@ class _CommandNavRailState extends State<CommandNavRail> {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
+                    gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [AppColors.primary, AppColors.primaryDark],
@@ -770,7 +821,7 @@ class _RailItemState extends State<_RailItem> {
                 bottom: 11,
                 child: Container(
                   width: 3,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     color: AppColors.primary,
                     borderRadius: BorderRadius.horizontal(right: Radius.circular(3)),
                   ),
@@ -1167,7 +1218,7 @@ class _ModeSelectorState extends State<_ModeSelector> {
       offset: const Offset(0, 54),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadii.lg),
-        side: const BorderSide(color: AppColors.border),
+        side: BorderSide(color: AppColors.border),
       ),
       color: AppColors.surface,
       itemBuilder: (_) => [
@@ -1199,7 +1250,7 @@ class _ModeSelectorState extends State<_ModeSelector> {
               ],
             ),
           ),
-          const Icon(Icons.keyboard_arrow_down_rounded,
+          Icon(Icons.keyboard_arrow_down_rounded,
               size: 18, color: AppColors.textTertiary),
         ]),
       ),
@@ -1290,7 +1341,7 @@ class _RecentChip extends StatelessWidget {
           Container(
               width: 7,
               height: 7,
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                   color: AppColors.success, shape: BoxShape.circle)),
           const SizedBox(width: 7),
           Text(name,
@@ -1528,7 +1579,7 @@ class _DeviceGrid extends StatelessWidget {
           border: Border.all(color: AppColors.border),
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.devices_other_rounded,
+          Icon(Icons.devices_other_rounded,
               size: 30, color: AppColors.textTertiary),
           const SizedBox(height: 10),
           Text('No devices here yet',
@@ -1559,7 +1610,7 @@ class _DeviceGrid extends StatelessWidget {
   }
 }
 
-const List<Color> _grounds = [
+List<Color> _grounds = [
   AppColors.deviceNavy,
   AppColors.deviceForest,
   AppColors.devicePlum,
@@ -1892,7 +1943,7 @@ class _BottomPanels extends StatelessWidget {
                         ? AppColors.success
                         : AppColors.textTertiary)),
             const SizedBox(width: 6),
-            const Icon(Icons.chevron_right_rounded,
+            Icon(Icons.chevron_right_rounded,
                 size: 16, color: AppColors.textTertiary),
           ]),
         ),
@@ -1925,7 +1976,7 @@ class _BottomPanels extends StatelessWidget {
                     d.id,
                     d.name,
                     d.os,
-                    const Icon(Icons.star_rounded,
+                    Icon(Icons.star_rounded,
                         size: 16, color: AppColors.warning),
                     () => onPick(d.id)),
             ]),
@@ -2016,7 +2067,7 @@ class _TimelineRow extends StatelessWidget {
       decoration: BoxDecoration(
         border: first
             ? null
-            : const Border(top: BorderSide(color: AppColors.border)),
+            : Border(top: BorderSide(color: AppColors.border)),
       ),
       child: Row(children: [
         SizedBox(
@@ -2033,7 +2084,7 @@ class _TimelineRow extends StatelessWidget {
             color: AppColors.success.withValues(alpha: 0.14),
             borderRadius: BorderRadius.circular(999),
           ),
-          child: const Icon(Icons.link_rounded,
+          child: Icon(Icons.link_rounded,
               size: 13, color: AppColors.success),
         ),
         Expanded(
@@ -2121,7 +2172,7 @@ class CommandActivityPanel extends StatelessWidget {
 
     return Container(
       width: 328,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(left: BorderSide(color: AppColors.border)),
       ),
@@ -2132,7 +2183,7 @@ class CommandActivityPanel extends StatelessWidget {
           Container(
             height: 74,
             padding: const EdgeInsets.symmetric(horizontal: 20),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               border: Border(bottom: BorderSide(color: AppColors.border)),
             ),
             child: Row(children: [
@@ -2141,7 +2192,7 @@ class CommandActivityPanel extends StatelessWidget {
               Container(
                 width: 7,
                 height: 7,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                     color: AppColors.success, shape: BoxShape.circle),
               ),
               const SizedBox(width: 6),
@@ -2179,7 +2230,7 @@ class CommandActivityPanel extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(top: 30),
                     child: Column(children: [
-                      const Icon(Icons.bolt_rounded,
+                      Icon(Icons.bolt_rounded,
                           size: 28, color: AppColors.textTertiary),
                       const SizedBox(height: 8),
                       Text('Nothing happening right now',
@@ -2379,7 +2430,7 @@ class _TransferRow extends StatelessWidget {
           color: AppColors.primary.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(9),
         ),
-        child: const Icon(Icons.swap_vert_rounded,
+        child: Icon(Icons.swap_vert_rounded,
             size: 15, color: AppColors.primary),
       ),
       const SizedBox(width: 12),
@@ -2400,7 +2451,7 @@ class _TransferRow extends StatelessWidget {
               minHeight: 5,
               backgroundColor: AppColors.surfaceLight,
               valueColor:
-                  const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  AlwaysStoppedAnimation<Color>(AppColors.primary),
             ),
           ),
         ]),
@@ -2420,7 +2471,7 @@ class _SecurityBadges extends StatelessWidget {
             borderRadius: BorderRadius.circular(999),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.lock_rounded, size: 11, color: AppColors.success),
+            Icon(Icons.lock_rounded, size: 11, color: AppColors.success),
             const SizedBox(width: 5),
             Text(t,
                 style: AppTypography.caption.copyWith(

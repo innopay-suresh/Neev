@@ -42,7 +42,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         // Section list
         Container(
           width: 190,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             border: Border(right: BorderSide(color: AppColors.border)),
           ),
           child: ListView(

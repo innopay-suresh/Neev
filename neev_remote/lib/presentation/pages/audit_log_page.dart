@@ -128,7 +128,7 @@ class _AuditLogPageState extends State<AuditLogPage> {
                     padding: const EdgeInsets.symmetric(vertical: 30),
                     alignment: Alignment.center,
                     child: Column(children: [
-                      const Icon(Icons.receipt_long_rounded,
+                      Icon(Icons.receipt_long_rounded,
                           size: 26, color: AppColors.textTertiary),
                       const SizedBox(height: 10),
                       Text('No sessions recorded yet',

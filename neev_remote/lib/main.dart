@@ -9,6 +9,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   DiagLog.init();
   await initWindowManager();
+  // Restore the saved theme BEFORE the first frame so there's no flash.
+  await restoreAppTheme();
   runApp(const ProviderScope(child: NeevRemoteApp()));
 }
 
@@ -17,11 +19,16 @@ class NeevRemoteApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Neev Remote',
-      debugShowCheckedModeBanner: false,
-      theme: lightTheme(),
-      home: const ConnectPage(),
+    // Rebuild the whole app when the theme flips — AppColors getters read the
+    // active palette, so every widget re-colors on the next frame.
+    return ValueListenableBuilder<bool>(
+      valueListenable: themeIsDark,
+      builder: (_, __, ___) => MaterialApp(
+        title: 'Neev Remote',
+        debugShowCheckedModeBanner: false,
+        theme: lightTheme(),
+        home: const ConnectPage(),
+      ),
     );
   }
 }

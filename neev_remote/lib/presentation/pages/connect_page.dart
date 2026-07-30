@@ -320,7 +320,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         title: Row(children: [
-          const Icon(Icons.shield_outlined, color: AppColors.primary),
+          Icon(Icons.shield_outlined, color: AppColors.primary),
           const SizedBox(width: 10),
           Text('Incoming connection', style: AppTypography.title),
         ]),
@@ -433,7 +433,7 @@ class _ChatToast extends StatelessWidget {
                 color: AppColors.primary.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.chat_bubble_rounded,
+              child: Icon(Icons.chat_bubble_rounded,
                   color: AppColors.primary, size: 16),
             ),
             const SizedBox(width: 10),
@@ -472,7 +472,7 @@ class _ChatToast extends StatelessWidget {
                   InkWell(
                     onTap: onOpen,
                     borderRadius: BorderRadius.circular(6),
-                    child: const Text('Open chat',
+                    child: Text('Open chat',
                         style: TextStyle(
                             color: AppColors.primary,
                             fontWeight: FontWeight.w600,
@@ -521,7 +521,7 @@ class _Sidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 216,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(right: BorderSide(color: AppColors.border)),
       ),
@@ -566,7 +566,7 @@ class _Sidebar extends StatelessWidget {
           Container(
             margin: const EdgeInsets.fromLTRB(20, 0, 20, 0),
             padding: const EdgeInsets.only(top: 10),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               border: Border(top: BorderSide(color: AppColors.border)),
             ),
             child: Row(children: [
@@ -688,7 +688,7 @@ class _CopyChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadii.sm),
           border: Border.all(color: AppColors.borderStrong),
         ),
-        child: const Icon(Icons.copy_rounded,
+        child: Icon(Icons.copy_rounded,
             size: 11, color: AppColors.textSecondary),
       ),
     );
@@ -1196,7 +1196,7 @@ class _DiscoveryPage extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(children: [
-                  const Icon(Icons.radar_rounded,
+                  Icon(Icons.radar_rounded,
                       color: AppColors.accentDark, size: 20),
                   const SizedBox(width: AppSpacing.sm),
                   Text('Discovery', style: AppTypography.title),
@@ -1228,7 +1228,7 @@ class _DiscoveryPage extends ConsumerWidget {
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
                     child: Column(children: [
-                      const SizedBox(
+                      SizedBox(
                         width: 26,
                         height: 26,
                         child: CircularProgressIndicator(
@@ -1289,7 +1289,7 @@ class _DiscoveryRowState extends State<_DiscoveryRow> {
                 color: AppColors.primarySoft,
                 borderRadius: BorderRadius.circular(AppRadius.sm)),
             alignment: Alignment.center,
-            child: const Icon(Icons.computer,
+            child: Icon(Icons.computer,
                 size: 18, color: AppColors.primary),
           ),
           const SizedBox(width: AppSpacing.md),
@@ -1468,7 +1468,7 @@ class _TopBar extends ConsumerWidget {
     final isHome = title == 'Home';
     return Container(
       height: 86,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
@@ -1497,6 +1497,11 @@ class _TopBar extends ConsumerWidget {
           _StatusPill(online: online),
           const SizedBox(width: AppSpacing.sm),
           _TopIconButton(
+            icon: AppColors.isDark ? Icons.light_mode : Icons.dark_mode,
+            tooltip: AppColors.isDark ? 'Light theme' : 'Dark theme',
+            onTap: toggleAppTheme,
+          ),
+          _TopIconButton(
             icon: Icons.notifications_none_rounded,
             tooltip: 'Notifications',
             onTap: () => ScaffoldMessenger.of(context).showSnackBar(
@@ -1524,7 +1529,7 @@ class _TopBar extends ConsumerWidget {
               width: 34,
               height: 34,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                     colors: [AppColors.primary, AppColors.primaryDark]),
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -1598,7 +1603,7 @@ class _UserChip extends StatelessWidget {
         Container(
           width: 24,
           height: 24,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
               color: AppColors.primary, shape: BoxShape.circle),
           alignment: Alignment.center,
           child: const Icon(Icons.person, color: Colors.white, size: 15),
@@ -1793,7 +1798,7 @@ class _RecentRowState extends State<_RecentRow> {
                     color: AppColors.primarySoft,
                     borderRadius: BorderRadius.circular(AppRadius.sm)),
                 alignment: Alignment.center,
-                child: const Icon(Icons.computer,
+                child: Icon(Icons.computer,
                     size: 18, color: AppColors.primary),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -1933,7 +1938,7 @@ class _ThisComputerCard extends ConsumerWidget {
                   label: const Text('Stop sharing'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.error,
-                    side: const BorderSide(color: AppColors.error),
+                    side: BorderSide(color: AppColors.error),
                   ),
                 ),
               ),
@@ -2111,7 +2116,7 @@ class _CardHeader extends StatelessWidget {
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
+            gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [AppColors.accent, AppColors.accentDark],
@@ -2151,7 +2156,7 @@ class _ErrorText extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Icon(Icons.error_outline, color: AppColors.error, size: 18),
+        Icon(Icons.error_outline, color: AppColors.error, size: 18),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(message,
@@ -2841,7 +2846,7 @@ class _SessionToolbar extends ConsumerWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Row(children: [
-          const Icon(Icons.password_rounded,
+          Icon(Icons.password_rounded,
               color: AppColors.accentDark, size: 20),
           const SizedBox(width: AppSpacing.sm),
           const Text('Transmit login'),
@@ -2936,7 +2941,7 @@ class _ConnectionBadge extends StatelessWidget {
         Container(
           width: 9,
           height: 9,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
               color: AppColors.success, shape: BoxShape.circle),
         ),
         const SizedBox(width: 8),
@@ -3172,7 +3177,7 @@ class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.dns_outlined, color: AppColors.accent, size: 40),
+          Icon(Icons.dns_outlined, color: AppColors.accent, size: 40),
           const SizedBox(height: AppSpacing.md),
           Text('Connect to your server', style: AppTypography.heading1),
           const SizedBox(height: AppSpacing.xs),
@@ -3484,7 +3489,7 @@ class _SecurityCard extends StatelessWidget {
                 color: AppColors.successSoft,
                 borderRadius: BorderRadius.circular(AppRadii.sm - 1),
               ),
-              child: const Icon(Icons.check_rounded,
+              child: Icon(Icons.check_rounded,
                   size: 12, color: AppColors.success),
             ),
             const SizedBox(width: 9),
@@ -3518,7 +3523,7 @@ class _UnattendedBand extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(26, 24, 26, 24),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.centerLeft,
           end: Alignment.centerRight,
           colors: [AppColors.inkBand, AppColors.inkBandAlt],
@@ -3582,15 +3587,15 @@ class _ConnectBar extends StatelessWidget {
               const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppRadii.md),
-            borderSide: const BorderSide(color: AppColors.borderStrong),
+            borderSide: BorderSide(color: AppColors.borderStrong),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppRadii.md),
-            borderSide: const BorderSide(color: AppColors.borderStrong),
+            borderSide: BorderSide(color: AppColors.borderStrong),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppRadii.md),
-            borderSide: const BorderSide(color: AppColors.primary, width: 1.4),
+            borderSide: BorderSide(color: AppColors.primary, width: 1.4),
           ),
         );
 
@@ -3613,7 +3618,7 @@ class _ConnectBar extends StatelessWidget {
                 color: AppColors.primarySoft,
                 borderRadius: BorderRadius.circular(AppRadii.md),
               ),
-              child: const Icon(Icons.cast_connected_rounded,
+              child: Icon(Icons.cast_connected_rounded,
                   size: 17, color: AppColors.primaryDark),
             ),
             const SizedBox(width: 12),
