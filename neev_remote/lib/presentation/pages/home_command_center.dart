@@ -1198,27 +1198,28 @@ class _DockField extends StatelessWidget {
   }
 }
 
-class _ModeSelector extends StatefulWidget {
+/// Session mode. ONLY the two modes the backend actually implements:
+/// Full Control and View Only (bound to the real `viewOnly` setting, which
+/// gates input in remote_view_widget). 'File Transfer' / 'Privacy Mode' /
+/// 'Support Mode' were removed — they had no backend and would have been a
+/// dropdown that silently does nothing (Data Honesty Rule).
+class _ModeSelector extends ConsumerWidget {
   const _ModeSelector();
-  @override
-  State<_ModeSelector> createState() => _ModeSelectorState();
-}
-
-class _ModeSelectorState extends State<_ModeSelector> {
-  static const _modes = [
-    'Full Control',
-    'View Only',
-    'File Transfer',
-    'Privacy Mode',
-    'Support Mode',
-  ];
-  String _mode = 'Full Control';
+  static const _full = 'Full Control';
+  static const _view = 'View Only';
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final viewOnly = ref.watch(settingsProvider).viewOnly;
+    final mode = viewOnly ? _view : _full;
     return PopupMenuButton<String>(
-      initialValue: _mode,
-      onSelected: (v) => setState(() => _mode = v),
+      initialValue: mode,
+      onSelected: (v) {
+        final wantViewOnly = v == _view;
+        if (wantViewOnly != viewOnly) {
+          ref.read(settingsProvider.notifier).toggleViewOnly();
+        }
+      },
       offset: const Offset(0, 54),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadii.lg),
@@ -1226,18 +1227,28 @@ class _ModeSelectorState extends State<_ModeSelector> {
       ),
       color: AppColors.surface,
       itemBuilder: (_) => [
-        for (final m in _modes)
+        for (final m in const [_full, _view])
           PopupMenuItem(
               value: m,
               height: 40,
-              child: Text(m, style: AppTypography.body.copyWith(fontSize: 13.5))),
+              child: Row(children: [
+                Icon(
+                    m == _view
+                        ? Icons.visibility_outlined
+                        : Icons.mouse_outlined,
+                    size: 15,
+                    color: AppColors.textSecondary),
+                const SizedBox(width: 9),
+                Text(m,
+                    style: AppTypography.body.copyWith(fontSize: 13.5)),
+              ])),
       ],
       child: Container(
-        height: 52,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 13),
         decoration: BoxDecoration(
           color: AppColors.surfaceLight,
-          borderRadius: BorderRadius.circular(AppRadii.lg),
+          borderRadius: BorderRadius.circular(AppRadii.md),
           border: Border.all(color: AppColors.borderStrong),
         ),
         child: Row(children: [
@@ -1245,12 +1256,17 @@ class _ModeSelectorState extends State<_ModeSelector> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text('MODE', style: AppTypography.microLabel),
-                Text(_mode,
+                Text('MODE',
+                    style: AppTypography.microLabel.copyWith(
+                        fontSize: 9.5, letterSpacing: 0.8, height: 1.0)),
+                const SizedBox(height: 4),
+                Text(mode,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: AppTypography.bodyStrong.copyWith(fontSize: 13.5)),
+                    style: AppTypography.bodyStrong
+                        .copyWith(fontSize: 13.5, height: 1.0)),
               ],
             ),
           ),

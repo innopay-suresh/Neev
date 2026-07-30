@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter, PointMode;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -1496,10 +1497,20 @@ class _TopBar extends ConsumerWidget {
           const SizedBox(width: AppSpacing.md),
           _StatusPill(online: online),
           const SizedBox(width: AppSpacing.sm),
-          _TopIconButton(
-            icon: AppColors.isDark ? Icons.light_mode : Icons.dark_mode,
-            tooltip: AppColors.isDark ? 'Light theme' : 'Dark theme',
-            onTap: toggleAppTheme,
+          // Drawn (not a font glyph) so icon tree-shaking can never blank it.
+          Tooltip(
+            message: AppColors.isDark ? 'Light theme' : 'Dark theme',
+            child: InkWell(
+              onTap: toggleAppTheme,
+              borderRadius: BorderRadius.circular(999),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: CustomPaint(
+                  size: const Size(20, 20),
+                  painter: _ThemeGlyph(dark: AppColors.isDark),
+                ),
+              ),
+            ),
           ),
           _TopIconButton(
             icon: Icons.notifications_none_rounded,
@@ -3798,4 +3809,45 @@ class _StatusChip extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Sun (dark mode active → tap for light) / moon (light active → tap for dark),
+/// hand-drawn so it never depends on the icon font subset.
+class _ThemeGlyph extends CustomPainter {
+  final bool dark;
+  _ThemeGlyph({required this.dark});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final p = Paint()
+      ..color = AppColors.textSecondary
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    if (dark) {
+      // sun: core + 8 rays
+      canvas.drawCircle(c, size.width * 0.22, p);
+      for (var i = 0; i < 8; i++) {
+        final a = i * math.pi / 4;
+        final r0 = size.width * 0.33, r1 = size.width * 0.46;
+        canvas.drawLine(
+          Offset(c.dx + r0 * math.cos(a), c.dy + r0 * math.sin(a)),
+          Offset(c.dx + r1 * math.cos(a), c.dy + r1 * math.sin(a)),
+          p,
+        );
+      }
+    } else {
+      // moon: circle minus an offset circle (even-odd crescent)
+      final r = size.width * 0.40;
+      final path = Path()..fillType = PathFillType.evenOdd;
+      path.addOval(Rect.fromCircle(center: c, radius: r));
+      path.addOval(Rect.fromCircle(
+          center: Offset(c.dx + r * 0.55, c.dy - r * 0.35), radius: r * 0.92));
+      canvas.drawPath(path, Paint()..color = AppColors.textSecondary);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ThemeGlyph old) => old.dark != dark;
 }
