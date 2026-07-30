@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/audit_log.dart';
 import '../../data/services/discovery_model.dart';
@@ -995,6 +996,7 @@ class HomeCommandCenter extends ConsumerStatefulWidget {
   final TextEditingController passwordController;
   final VoidCallback onConnect;
   final void Function(String id) onPick;
+  final VoidCallback onOpenSettings;
 
   const HomeCommandCenter({
     super.key,
@@ -1003,6 +1005,7 @@ class HomeCommandCenter extends ConsumerStatefulWidget {
     required this.passwordController,
     required this.onConnect,
     required this.onPick,
+    required this.onOpenSettings,
   });
 
   @override
@@ -1143,13 +1146,79 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
           favorites: all.where((d) => d.favorite).toList(),
           onPick: widget.onPick,
           unattended: ref.watch(settingsProvider).unattendedEnabled,
-          onComingSoon: (label) => ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text('$label — configure in Settings / coming soon'),
-                duration: const Duration(seconds: 2)),
-          ),
+          onOpenSettings: widget.onOpenSettings,
+          onInvite: () => _shareInvite(context),
+          onHelp: () => _showHelp(context),
         ),
       ],
+    );
+  }
+
+  /// Invite = share THIS device's real credentials so someone can connect to
+  /// it. Uses the live id/password from the transport (same values the sidebar
+  /// shows) — nothing invented, no account system implied.
+  Future<void> _shareInvite(BuildContext context) async {
+    final id = widget.service.agentId;
+    final pw = widget.service.password;
+    if (id == null || id.isEmpty) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('This device has no ID yet — start hosting first.'),
+          duration: Duration(seconds: 3)));
+      return;
+    }
+    final text = 'Connect to my computer with Neev Remote\n'
+        'Device ID: ${_group(id)}\n'
+        '${(pw != null && pw.isNotEmpty) ? 'Password: $pw\n' : ''}'
+        'Download: http://172.17.17.77:8080';
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Invite copied — paste it to share this device'),
+        duration: Duration(seconds: 3)));
+  }
+
+  /// Help = the real facts we have (build stamp, relay, log location), not a
+  /// dead link to a support site that does not exist.
+  void _showHelp(BuildContext context) {
+    final relay = ref.read(settingsProvider).relayUrl;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text('Help & Support', style: AppTypography.heading2),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Build: ${AppConstants.buildTag}',
+                style: AppTypography.caption.copyWith(fontSize: 12.5)),
+            const SizedBox(height: 8),
+            Text('Relay: $relay',
+                style: AppTypography.caption.copyWith(fontSize: 12.5)),
+            const SizedBox(height: 8),
+            Text('Downloads: http://172.17.17.77:8080',
+                style: AppTypography.caption.copyWith(fontSize: 12.5)),
+            const SizedBox(height: 8),
+            Text(
+                'Logs: %ProgramData%\\NeevRemote (Windows) · '
+                '~/.neev_remote (macOS)',
+                style: AppTypography.caption.copyWith(fontSize: 12.5)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(
+                  text: 'Neev Remote ${AppConstants.buildTag}\nRelay: $relay'));
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Copy details'),
+          ),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
     );
   }
 
@@ -2013,13 +2082,17 @@ class _BottomPanels extends StatelessWidget {
   final List<_HomeDevice> favorites;
   final void Function(String id) onPick;
   final bool unattended;
-  final void Function(String label) onComingSoon;
+  final VoidCallback onOpenSettings;
+  final VoidCallback onInvite;
+  final VoidCallback onHelp;
   const _BottomPanels({
     required this.recents,
     required this.favorites,
     required this.onPick,
     required this.unattended,
-    required this.onComingSoon,
+    required this.onOpenSettings,
+    required this.onInvite,
+    required this.onHelp,
   });
 
   Widget _card(String title, Widget child) => Container(
@@ -2085,8 +2158,10 @@ class _BottomPanels extends StatelessWidget {
     );
   }
 
-  Widget _quickAction(IconData icon, String label, String state) => InkWell(
-        onTap: () => onComingSoon(label),
+  Widget _quickAction(
+          IconData icon, String label, String state, VoidCallback onTap) =>
+      InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(AppRadii.md),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
@@ -2150,15 +2225,20 @@ class _BottomPanels extends StatelessWidget {
     );
     final actions = _card(
       'Quick Actions',
+      // Every row does something real. Wake-on-LAN was removed: it needs each
+      // device's MAC address, which nothing in the app collects — a WoL button
+      // could only ever no-op (Data Honesty Rule).
       Column(children: [
+        _quickAction(Icons.podcasts_rounded, 'Unattended Access',
+            unattended ? 'On' : 'Off', onOpenSettings),
+        _quickAction(Icons.shield_outlined, 'Security & access', 'Settings',
+            onOpenSettings),
+        _quickAction(Icons.download_rounded, 'Install agent / daemon',
+            'Settings', onOpenSettings),
+        _quickAction(Icons.person_add_alt_1_rounded, 'Invite a friend',
+            'Copy invite', onInvite),
         _quickAction(
-            Icons.podcasts_rounded, 'Unattended Access', unattended ? 'On' : 'Off'),
-        _quickAction(Icons.download_rounded, 'Install Agent', 'Coming soon'),
-        _quickAction(Icons.wifi_tethering_rounded, 'Wake-on-LAN', 'Coming soon'),
-        _quickAction(
-            Icons.person_add_alt_1_rounded, 'Invite a friend', 'Coming soon'),
-        _quickAction(
-            Icons.help_outline_rounded, 'Help & Support', 'Coming soon'),
+            Icons.help_outline_rounded, 'Help & Support', 'Details', onHelp),
       ]),
     );
 

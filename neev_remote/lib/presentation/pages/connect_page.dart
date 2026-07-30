@@ -243,6 +243,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
           passwordController: _passwordController,
           onConnect: _connect,
           onPick: _fillId,
+          onOpenSettings: () => setState(() => _section = 6),
         );
       default: // Contacts — coming soon
         return _ComingSoon(item: _navItems[_section]);
