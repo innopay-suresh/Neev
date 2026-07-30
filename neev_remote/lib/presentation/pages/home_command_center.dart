@@ -505,7 +505,8 @@ class _WideConnectButtonState extends State<_WideConnectButton> {
   }
 }
 
-// Animated orange wireframe globe with orbiting network dots (the "earth").
+// Earth at night, seen from space: dark equirectangular world map with glowing
+// city lights. Replaces the old wireframe globe (read as an empty cage).
 class _AnimatedGlobe extends StatefulWidget {
   const _AnimatedGlobe();
   @override
@@ -518,7 +519,7 @@ class _AnimatedGlobeState extends State<_AnimatedGlobe>
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(seconds: 26))
+    _c = AnimationController(vsync: this, duration: const Duration(seconds: 12))
       ..repeat();
   }
 
@@ -534,122 +535,126 @@ class _AnimatedGlobeState extends State<_AnimatedGlobe>
     return AnimatedBuilder(
       animation: _c,
       builder: (_, __) =>
-          CustomPaint(painter: _GlobePainter(reduce ? 0 : _c.value)),
+          CustomPaint(painter: _NightEarthPainter(reduce ? 0 : _c.value)),
     );
   }
 }
 
-/// Coarse world landmass mask (24 lon columns × 12 lat rows, ~75N..60S).
-/// '#' = land dot. Decorative only — reads as continents at small sizes.
-const List<String> _worldMask = [
-  '   ###     ## ######    ',
-  '  #####   ############  ',
-  ' ###### ## ###########  ',
-  '  ####   ############## ',
-  '   ###   ####### ###### ',
-  '    ##    ##### ###### ',
-  '     #    ######  ###   ',
-  '    ###    #####   #    ',
-  '    ####   ####     ##  ',
-  '     ###    ###     ### ',
-  '      #     ##          ',
-  '            #           ',
+/// Landmass spans on a 64x32 equirectangular grid (col 0 = 180W, col 32 = 0,
+/// row 0 = 80N, row 31 = -60S): [row, colStart, colEnd] inclusive. Coarse but
+/// recognisable — Americas left, Africa/Europe centre, Asia right, Australia
+/// lower right. Decorative only.
+const List<List<int>> _landSpans = [
+  [0, 25, 28], [0, 44, 58],
+  [1, 10, 20], [1, 24, 29], [1, 45, 60],
+  [2, 4, 8], [2, 10, 22], [2, 25, 29], [2, 33, 36], [2, 38, 61],
+  [3, 3, 9], [3, 10, 23], [3, 26, 29], [3, 33, 37], [3, 38, 62],
+  [4, 2, 9], [4, 10, 24], [4, 27, 29], [4, 33, 37], [4, 38, 63],
+  [5, 3, 8], [5, 10, 25], [5, 30, 31], [5, 33, 36], [5, 37, 63],
+  [6, 9, 25], [6, 30, 31], [6, 32, 37], [6, 38, 63],
+  [7, 9, 24], [7, 30, 30], [7, 32, 38], [7, 39, 62],
+  [8, 10, 24], [8, 30, 34], [8, 35, 40], [8, 41, 60],
+  [9, 10, 24], [9, 30, 32], [9, 33, 37], [9, 38, 58],
+  [10, 11, 23], [10, 31, 36], [10, 37, 42], [10, 48, 58],
+  [11, 12, 22], [11, 31, 38], [11, 38, 43], [11, 44, 47], [11, 48, 57],
+  [12, 11, 19], [12, 31, 38], [12, 38, 42], [12, 44, 47], [12, 48, 56],
+  [13, 12, 18], [13, 19, 21], [13, 31, 39], [13, 38, 42], [13, 44, 47],
+  [13, 48, 54],
+  [14, 14, 19], [14, 20, 22], [14, 30, 40], [14, 44, 47], [14, 49, 54],
+  [15, 15, 18], [15, 29, 41], [15, 44, 46], [15, 50, 55],
+  [16, 19, 24], [16, 28, 42], [16, 50, 56],
+  [17, 18, 25], [17, 28, 42], [17, 50, 57],
+  [18, 18, 26], [18, 29, 41], [18, 51, 58],
+  [19, 18, 27], [19, 30, 40], [19, 51, 58],
+  [20, 18, 27], [20, 30, 39], [20, 52, 58],
+  [21, 19, 27], [21, 31, 38], [21, 53, 57],
+  [22, 19, 26], [22, 31, 38], [22, 55, 60],
+  [23, 19, 26], [23, 32, 38], [23, 54, 61],
+  [24, 20, 26], [24, 32, 37], [24, 54, 61],
+  [25, 20, 25], [25, 33, 36], [25, 55, 61],
+  [26, 20, 24], [26, 33, 36], [26, 56, 60],
+  [27, 21, 23], [27, 62, 63],
+  [28, 21, 23], [28, 62, 63],
+  [29, 21, 22],
+  [30, 21, 22],
+  [31, 21, 21],
 ];
 
-class _GlobePainter extends CustomPainter {
-  final double t;
-  _GlobePainter(this.t);
+/// Bright city-light clusters as (col, row) on the same grid — the metros that
+/// actually glow on a night-side photo.
+const List<List<int>> _cityLights = [
+  [13, 8], [15, 9], [19, 8], [20, 9], [17, 12], [21, 13], // N America
+  [23, 17], [24, 20], [22, 24], // S America
+  [31, 9], [33, 8], [34, 8], [35, 9], [36, 8], // Europe
+  [32, 12], [36, 11], [39, 11], [40, 12], // N Africa / Mid-East
+  [34, 20], [35, 25], // Africa
+  [45, 11], [46, 12], [46, 13], // India
+  [50, 10], [53, 10], [55, 10], [56, 11], // China
+  [57, 9], [58, 10], // Japan / Korea
+  [52, 15], [54, 16], [55, 18], // SE Asia
+  [57, 23], [59, 24], [60, 23], // Australia
+];
 
-  /// Dotted continents: project each mask cell onto the sphere and rotate with
-  /// [t]. Front-facing dots only (z > 0), faded toward the limb.
-  void _paintWorld(Canvas canvas, Offset ctr, double r) {
-    final rows = _worldMask.length;
-    final cols = _worldMask[0].length;
-    final spin = t * 2 * math.pi;
-    for (var row = 0; row < rows; row++) {
-      // Map row → latitude 75°N .. 60°S.
-      final lat = (75 - row * (135 / (rows - 1))) * math.pi / 180;
-      final cosLat = math.cos(lat), sinLat = math.sin(lat);
-      for (var col = 0; col < cols; col++) {
-        if (_worldMask[row][col] != '#') continue;
-        final lon = (col / cols) * 2 * math.pi + spin;
-        final x = cosLat * math.sin(lon);
-        final z = cosLat * math.cos(lon);
-        if (z <= 0.05) continue; // back hemisphere
-        final p = Offset(ctr.dx + x * r * 0.96, ctr.dy - sinLat * r * 0.96);
-        final a = (0.25 + 0.55 * z).clamp(0.0, 0.8);
-        canvas.drawCircle(
-            p,
-            1.6 + 0.9 * z,
-            Paint()..color = Color.fromRGBO(255, 122, 40, a));
-      }
-    }
-  }
+class _NightEarthPainter extends CustomPainter {
+  final double t;
+  _NightEarthPainter(this.t);
+
+  static const int _cols = 64;
+  static const int _rows = 32;
+
   @override
   void paint(Canvas canvas, Size size) {
-    final ctr = Offset(size.width / 2, size.height / 2);
-    final r = math.min(size.width, size.height) / 2 * 0.8;
+    // Fit a 2:1 map centred in the panel.
+    const inset = 10.0;
+    final mapW = size.width - inset * 2;
+    final mapH = math.min(size.height, mapW / 2);
+    final left = inset;
+    final top = (size.height - mapH) / 2;
+    final cw = mapW / _cols;
+    final ch = mapH / _rows;
 
-    // soft glow
-    canvas.drawCircle(
-        ctr,
-        r * 1.35,
-        Paint()
-          ..shader = const RadialGradient(colors: [
-            Color(0x33F05A28),
-            Color(0x00F05A28),
-          ]).createShader(Rect.fromCircle(center: ctr, radius: r * 1.35)));
+    Offset cell(num col, num row) =>
+        Offset(left + (col + 0.5) * cw, top + (row + 0.5) * ch);
 
-    final line = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
+    // Faint atmospheric wash so the map sits on "space", not on nothing.
+    canvas.drawRect(
+      Rect.fromLTWH(left, top, mapW, mapH),
+      Paint()
+        ..shader = const RadialGradient(
+          colors: [Color(0x1AFF7A28), Color(0x00FF7A28)],
+        ).createShader(Rect.fromLTWH(left, top, mapW, mapH)),
+    );
 
-    // sphere outline
-    canvas.drawCircle(ctr, r, line..color = const Color(0x59F05A28));
-
-    // latitude ellipses (fixed)
-    for (double lat = -0.7; lat <= 0.7; lat += 0.35) {
-      final y = ctr.dy + r * lat;
-      final w = r * math.sqrt(1 - lat * lat) * 2;
-      canvas.drawOval(
-          Rect.fromCenter(center: Offset(ctr.dx, y), width: w, height: r * 0.30),
-          line..color = const Color(0x40F05A28));
-    }
-
-    // longitude ellipses (rotating -> spin)
-    for (int i = 0; i < 6; i++) {
-      final phase = t * 2 * math.pi + i * math.pi / 6;
-      final w = (r * 2 * math.cos(phase)).abs();
-      final a = 0.18 + 0.30 * math.sin(phase).abs();
-      canvas.drawOval(Rect.fromCenter(center: ctr, width: w, height: r * 2),
-          line..color = Color.fromRGBO(240, 90, 40, a));
-    }
-
-    // dotted continents rotating with the sphere (fills the empty globe)
-    _paintWorld(canvas, ctr, r);
-
-    // orbiting network dots + a connecting arc
-    final dot = Paint()..color = const Color(0xFFF05A28);
-    Offset? prev;
-    for (int i = 0; i < 8; i++) {
-      final ang = t * 2 * math.pi + i * 2 * math.pi / 8;
-      final p = Offset(ctr.dx + r * 0.92 * math.cos(ang),
-          ctr.dy + r * 0.5 * math.sin(ang * 1.3));
-      canvas.drawCircle(p, 2.0 + 1.2 * math.sin(ang).abs(), dot);
-      if (prev != null && i % 2 == 0) {
-        canvas.drawLine(
-            prev,
-            p,
-            Paint()
-              ..color = const Color(0x33F05A28)
-              ..strokeWidth = 1);
+    // Landmass: dim warm dots (the unlit continents).
+    final landR = math.max(0.9, math.min(cw, ch) * 0.30);
+    final land = Paint()..color = const Color(0x40FF7A28);
+    for (final s in _landSpans) {
+      for (var c = s[1]; c <= s[2]; c++) {
+        canvas.drawCircle(cell(c, s[0]), landR, land);
       }
-      prev = p;
     }
+
+    // City lights: brighter, with a soft halo + slow twinkle.
+    for (var i = 0; i < _cityLights.length; i++) {
+      final c = _cityLights[i];
+      final p = cell(c[0], c[1]);
+      // Each city twinkles on its own phase.
+      final tw = 0.72 + 0.28 * math.sin(t * 2 * math.pi + i * 0.9);
+      final r = landR * 1.5;
+      canvas.drawCircle(
+          p,
+          r * 3.2,
+          Paint()
+            ..color = Color.fromRGBO(255, 150, 60, 0.16 * tw)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+      canvas.drawCircle(
+          p, r, Paint()..color = Color.fromRGBO(255, 190, 120, 0.95 * tw));
+    }
+
   }
 
   @override
-  bool shouldRepaint(_GlobePainter old) => old.t != t;
+  bool shouldRepaint(_NightEarthPainter old) => old.t != t;
 }
 
 class CommandNavRail extends StatefulWidget {
