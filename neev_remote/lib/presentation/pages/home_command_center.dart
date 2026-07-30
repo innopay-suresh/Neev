@@ -608,6 +608,52 @@ const List<List<List<double>>> _worldLand = [
   [[166, -46], [171, -44], [174, -41], [178, -38], [176, -37], [173, -40], [168, -44]],
 ];
 
+/// Internal country borders as [lon, lat] polylines — drawn thinner/dimmer than
+/// the coastline so the map reads as countries, not just continents.
+const List<List<List<double>>> _worldBorders = [
+  // North America
+  [[-123, 49], [-95, 49], [-89, 48], [-83, 42], [-79, 43], [-74, 45], [-69, 47]],
+  [[-117, 32], [-111, 31], [-106, 31], [-103, 29], [-99, 27], [-97, 26]],
+  [[-141, 70], [-141, 60]],
+  // South America
+  [[-70, -10], [-65, -10], [-60, -13], [-58, -20], [-55, -24], [-54, -26]],
+  [[-70, -18], [-69, -24], [-70, -30], [-71, -37], [-72, -45], [-72, -52]],
+  [[-73, 10], [-70, 7], [-67, 6], [-63, 4]],
+  [[-69, -14], [-65, -18], [-58, -20]],
+  // Europe
+  [[-1, 43], [3, 42]],
+  [[8, 49], [7, 47]],
+  [[14, 54], [15, 51], [19, 49]],
+  [[7, 45], [13, 46]],
+  [[12, 59], [15, 66], [21, 69]],
+  [[24, 50], [30, 52], [33, 52]],
+  [[20, 45], [28, 44]],
+  // Africa
+  [[-12, 22], [5, 22], [16, 22], [25, 22], [34, 22]],
+  [[0, 15], [1, 6]],
+  [[15, 21], [14, 6]],
+  [[12, -5], [22, -5], [29, -5]],
+  [[20, -22], [26, -22], [32, -22]],
+  [[33, 10], [37, 8]],
+  [[25, 22], [25, 10]],
+  [[30, -1], [30, -12]],
+  // Asia
+  [[80, 50], [95, 50], [110, 50], [120, 49], [130, 45]],
+  [[76, 35], [81, 30], [88, 28], [95, 29]],
+  [[70, 24], [72, 28], [74, 32]],
+  [[90, 45], [105, 42], [118, 45]],
+  [[50, 45], [62, 45], [72, 43], [80, 45]],
+  [[61, 35], [61, 29]],
+  [[44, 37], [46, 33], [48, 30]],
+  [[40, 32], [48, 30]],
+  [[126, 38], [130, 39]],
+  [[100, 20], [105, 15], [107, 11]],
+  // Australia
+  [[129, -14], [129, -31]],
+  [[141, -11], [141, -29]],
+  [[138, -26], [129, -26]],
+];
+
 /// Metro clusters that actually glow on a night-side photo, as [lon, lat].
 const List<List<double>> _cityLights = [
   [-122, 37], [-118, 34], [-112, 33], [-96, 33], [-87, 42], [-84, 34],
@@ -671,6 +717,23 @@ class _NightEarthPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.9
           ..color = const Color(0x8CFFA766));
+
+    // Internal country borders (thin, dim — reads as countries, not continents).
+    final borderPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.7
+      ..color = const Color(0x4DFFB889);
+    for (final line in _worldBorders) {
+      if (line.length < 2) continue;
+      final path = Path();
+      final p0 = proj(line[0][0], line[0][1]);
+      path.moveTo(p0.dx, p0.dy);
+      for (var i = 1; i < line.length; i++) {
+        final p = proj(line[i][0], line[i][1]);
+        path.lineTo(p.dx, p.dy);
+      }
+      canvas.drawPath(path, borderPaint);
+    }
 
     // City lights: halo + core, each on its own slow twinkle phase.
     for (var i = 0; i < _cityLights.length; i++) {
