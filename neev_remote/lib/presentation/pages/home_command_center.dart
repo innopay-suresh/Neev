@@ -675,15 +675,16 @@ class _NightEarthPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // FULL-BLEED: the ENTIRE world spans the whole panel — longitude across the
-    // full width, latitude across the full height (with a small bleed). The card
-    // is far wider than a 2:1 map, so latitude is compressed rather than
-    // cropping continents off-frame; every landmass stays visible edge-to-edge.
-    const bleed = 10.0;
-    final mapW = size.width + bleed * 2;
+    // The map keeps its NATURAL proportions (lon:lat ≈ 2.6:1). Stretching it to
+    // this card's ~6:1 shape squashed latitude ~3x and smeared the continents
+    // into one blob, so instead it is sized by HEIGHT (full 80N..58S visible)
+    // and anchored right; the form occupies the left, over the scrim.
+    const bleed = 8.0;
     final mapH = size.height + bleed * 2;
-    final left = -bleed;
+    final mapW = mapH * (360 / (_latN - _latS)); // no distortion
     final top = -bleed;
+    // Anchor right, nudged so Asia/Australia don't fall off the edge.
+    final left = size.width - mapW * 0.97;
 
     Offset proj(double lon, double lat) => Offset(
           left + (lon + 180) / 360 * mapW,
@@ -723,22 +724,22 @@ class _NightEarthPainter extends CustomPainter {
     canvas.drawPath(
         land,
         Paint()
-          ..color = const Color(0x3DFF6B00)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16));
+          ..color = const Color(0x2EFF6B00)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14));
     canvas.drawPath(
         land,
         Paint()
           ..shader = const LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xA6FF8A3D), Color(0x8CE05A14)],
+            colors: [Color(0x5CFF8A3D), Color(0x47E05A14)],
           ).createShader(Offset.zero & size));
     canvas.drawPath(
         land,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..color = const Color(0xD9FFC08A));
+          ..strokeWidth = 1.0
+          ..color = const Color(0x8CFFC08A));
 
     // Internal country borders (thin, dim — reads as countries, not continents).
     final borderPaint = Paint()
