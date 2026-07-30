@@ -540,117 +540,152 @@ class _AnimatedGlobeState extends State<_AnimatedGlobe>
   }
 }
 
-/// Landmass spans on a 64x32 equirectangular grid (col 0 = 180W, col 32 = 0,
-/// row 0 = 80N, row 31 = -60S): [row, colStart, colEnd] inclusive. Coarse but
-/// recognisable — Americas left, Africa/Europe centre, Asia right, Australia
-/// lower right. Decorative only.
-const List<List<int>> _landSpans = [
-  [0, 25, 28], [0, 44, 58],
-  [1, 10, 20], [1, 24, 29], [1, 45, 60],
-  [2, 4, 8], [2, 10, 22], [2, 25, 29], [2, 33, 36], [2, 38, 61],
-  [3, 3, 9], [3, 10, 23], [3, 26, 29], [3, 33, 37], [3, 38, 62],
-  [4, 2, 9], [4, 10, 24], [4, 27, 29], [4, 33, 37], [4, 38, 63],
-  [5, 3, 8], [5, 10, 25], [5, 30, 31], [5, 33, 36], [5, 37, 63],
-  [6, 9, 25], [6, 30, 31], [6, 32, 37], [6, 38, 63],
-  [7, 9, 24], [7, 30, 30], [7, 32, 38], [7, 39, 62],
-  [8, 10, 24], [8, 30, 34], [8, 35, 40], [8, 41, 60],
-  [9, 10, 24], [9, 30, 32], [9, 33, 37], [9, 38, 58],
-  [10, 11, 23], [10, 31, 36], [10, 37, 42], [10, 48, 58],
-  [11, 12, 22], [11, 31, 38], [11, 38, 43], [11, 44, 47], [11, 48, 57],
-  [12, 11, 19], [12, 31, 38], [12, 38, 42], [12, 44, 47], [12, 48, 56],
-  [13, 12, 18], [13, 19, 21], [13, 31, 39], [13, 38, 42], [13, 44, 47],
-  [13, 48, 54],
-  [14, 14, 19], [14, 20, 22], [14, 30, 40], [14, 44, 47], [14, 49, 54],
-  [15, 15, 18], [15, 29, 41], [15, 44, 46], [15, 50, 55],
-  [16, 19, 24], [16, 28, 42], [16, 50, 56],
-  [17, 18, 25], [17, 28, 42], [17, 50, 57],
-  [18, 18, 26], [18, 29, 41], [18, 51, 58],
-  [19, 18, 27], [19, 30, 40], [19, 51, 58],
-  [20, 18, 27], [20, 30, 39], [20, 52, 58],
-  [21, 19, 27], [21, 31, 38], [21, 53, 57],
-  [22, 19, 26], [22, 31, 38], [22, 55, 60],
-  [23, 19, 26], [23, 32, 38], [23, 54, 61],
-  [24, 20, 26], [24, 32, 37], [24, 54, 61],
-  [25, 20, 25], [25, 33, 36], [25, 55, 61],
-  [26, 20, 24], [26, 33, 36], [26, 56, 60],
-  [27, 21, 23], [27, 62, 63],
-  [28, 21, 23], [28, 62, 63],
-  [29, 21, 22],
-  [30, 21, 22],
-  [31, 21, 21],
+/// Real coastline geometry (simplified), as [lon, lat] rings — a vector world
+/// map, NOT a dot grid. Equirectangular projection at paint time.
+const List<List<List<double>>> _worldLand = [
+  // North America
+  [
+    [-168, 66], [-165, 60], [-158, 57], [-152, 59], [-145, 60], [-138, 58],
+    [-131, 54], [-125, 49], [-124, 43], [-121, 36], [-117, 32], [-114, 30],
+    [-110, 24], [-106, 22], [-101, 19], [-97, 16], [-92, 15], [-88, 16],
+    [-87, 21], [-91, 21], [-95, 19], [-97, 23], [-97, 27], [-94, 29],
+    [-89, 29], [-85, 30], [-81, 25], [-80, 28], [-78, 33], [-75, 36],
+    [-71, 41], [-67, 44], [-60, 47], [-56, 51], [-64, 60], [-71, 62],
+    [-78, 63], [-80, 70], [-90, 72], [-100, 70], [-110, 69], [-120, 70],
+    [-130, 70], [-141, 70], [-155, 71], [-165, 68],
+  ],
+  // Greenland
+  [
+    [-45, 60], [-52, 64], [-56, 70], [-58, 76], [-50, 82], [-30, 83],
+    [-20, 80], [-22, 74], [-32, 68], [-42, 62],
+  ],
+  // South America
+  [
+    [-81, 8], [-77, 8], [-72, 12], [-63, 11], [-60, 7], [-52, 5], [-50, 0],
+    [-44, -2], [-38, -6], [-35, -9], [-38, -13], [-39, -18], [-45, -23],
+    [-48, -26], [-54, -34], [-58, -39], [-63, -41], [-65, -45], [-68, -51],
+    [-71, -55], [-75, -52], [-74, -45], [-73, -38], [-71, -30], [-70, -23],
+    [-70, -18], [-75, -15], [-78, -9], [-81, -5], [-80, 0], [-78, 4],
+  ],
+  // Africa
+  [
+    [-17, 15], [-16, 21], [-12, 26], [-9, 31], [-5, 35], [3, 37], [11, 34],
+    [19, 31], [25, 32], [32, 31], [35, 24], [37, 18], [39, 15], [43, 12],
+    [48, 12], [51, 11], [45, 4], [41, -2], [40, -10], [38, -16], [35, -21],
+    [32, -26], [27, -34], [20, -35], [15, -27], [12, -17], [9, -6], [9, 2],
+    [5, 5], [-2, 5], [-8, 4], [-13, 9],
+  ],
+  // Madagascar
+  [[43, -12], [50, -15], [50, -25], [45, -25], [43, -18]],
+  // Eurasia
+  [
+    [-10, 36], [-9, 43], [-2, 43], [0, 49], [2, 51], [8, 54], [10, 57],
+    [7, 58], [5, 59], [7, 63], [12, 65], [15, 69], [21, 70], [28, 71],
+    [35, 69], [44, 68], [52, 70], [60, 70], [70, 73], [78, 74], [86, 74],
+    [95, 78], [105, 77], [113, 74], [125, 73], [135, 72], [145, 70],
+    [155, 70], [165, 69], [175, 68], [180, 65], [175, 62], [165, 60],
+    [160, 58], [155, 52], [145, 44], [140, 45], [135, 43], [130, 42],
+    [127, 38], [122, 30], [118, 24], [110, 21], [108, 15], [105, 10],
+    [103, 1], [100, 6], [98, 10], [95, 16], [91, 22], [88, 21], [80, 15],
+    [77, 8], [73, 15], [70, 21], [65, 25], [60, 25], [57, 22], [53, 25],
+    [50, 29], [48, 30], [43, 40], [40, 41], [36, 36], [32, 31], [28, 36],
+    [24, 40], [19, 40], [14, 38], [12, 45], [8, 44], [3, 43], [-5, 36],
+  ],
+  // Great Britain
+  [[-5, 50], [-2, 51], [0, 53], [-1, 55], [-3, 58], [-5, 58], [-6, 55], [-5, 52]],
+  // Japan
+  [[130, 31], [135, 34], [140, 38], [142, 42], [145, 44], [141, 45], [139, 40], [135, 35], [131, 33]],
+  // Sumatra / Java / Borneo (indicative)
+  [[95, 5], [103, -2], [106, -6], [113, -8], [117, -3], [117, 2], [110, 2], [100, 4]],
+  // Australia
+  [
+    [113, -22], [114, -26], [116, -32], [119, -34], [125, -32], [131, -31],
+    [137, -33], [140, -38], [146, -39], [150, -37], [153, -30], [153, -25],
+    [149, -20], [146, -18], [142, -11], [136, -12], [132, -11], [130, -13],
+    [125, -14], [122, -17], [117, -20],
+  ],
+  // New Zealand
+  [[166, -46], [171, -44], [174, -41], [178, -38], [176, -37], [173, -40], [168, -44]],
 ];
 
-/// Bright city-light clusters as (col, row) on the same grid — the metros that
-/// actually glow on a night-side photo.
-const List<List<int>> _cityLights = [
-  [13, 8], [15, 9], [19, 8], [20, 9], [17, 12], [21, 13], // N America
-  [23, 17], [24, 20], [22, 24], // S America
-  [31, 9], [33, 8], [34, 8], [35, 9], [36, 8], // Europe
-  [32, 12], [36, 11], [39, 11], [40, 12], // N Africa / Mid-East
-  [34, 20], [35, 25], // Africa
-  [45, 11], [46, 12], [46, 13], // India
-  [50, 10], [53, 10], [55, 10], [56, 11], // China
-  [57, 9], [58, 10], // Japan / Korea
-  [52, 15], [54, 16], [55, 18], // SE Asia
-  [57, 23], [59, 24], [60, 23], // Australia
+/// Metro clusters that actually glow on a night-side photo, as [lon, lat].
+const List<List<double>> _cityLights = [
+  [-122, 37], [-118, 34], [-112, 33], [-96, 33], [-87, 42], [-84, 34],
+  [-80, 26], [-77, 39], [-74, 41], [-71, 42], [-79, 44], [-99, 19],
+  [-70, -34], [-58, -35], [-47, -24], [-43, -23], [-74, 5],
+  [-3, 40], [2, 49], [0, 52], [-6, 53], [7, 51], [13, 53], [16, 50],
+  [12, 42], [23, 38], [28, 41], [30, 60], [37, 56], [31, 30], [3, 37],
+  [35, 32], [44, 33], [51, 36], [55, 25], [47, 24],
+  [77, 29], [72, 19], [80, 13], [88, 23], [67, 25],
+  [100, 14], [104, 1], [107, -6], [121, 14], [117, 32], [121, 31],
+  [113, 23], [114, 40], [126, 38], [127, 37], [135, 35], [140, 36],
+  [151, -34], [145, -38], [153, -27], [175, -37],
+  [31, -26], [3, 6], [7, 9], [39, -6],
 ];
 
 class _NightEarthPainter extends CustomPainter {
   final double t;
   _NightEarthPainter(this.t);
 
-  static const int _cols = 64;
-  static const int _rows = 32;
+  static const double _latN = 80, _latS = -58;
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Fit a 2:1 map centred in the panel.
-    const inset = 10.0;
+    const inset = 8.0;
     final mapW = size.width - inset * 2;
-    final mapH = math.min(size.height, mapW / 2);
+    final mapH = math.min(size.height, mapW * 0.52);
     final left = inset;
     final top = (size.height - mapH) / 2;
-    final cw = mapW / _cols;
-    final ch = mapH / _rows;
 
-    Offset cell(num col, num row) =>
-        Offset(left + (col + 0.5) * cw, top + (row + 0.5) * ch);
+    Offset proj(double lon, double lat) => Offset(
+          left + (lon + 180) / 360 * mapW,
+          top + (_latN - lat) / (_latN - _latS) * mapH,
+        );
 
-    // Faint atmospheric wash so the map sits on "space", not on nothing.
+    // Atmospheric wash (space).
     canvas.drawRect(
       Rect.fromLTWH(left, top, mapW, mapH),
       Paint()
         ..shader = const RadialGradient(
-          colors: [Color(0x1AFF7A28), Color(0x00FF7A28)],
+          colors: [Color(0x1FFF7A28), Color(0x00FF7A28)],
         ).createShader(Rect.fromLTWH(left, top, mapW, mapH)),
     );
 
-    // Landmass: dim warm dots (the unlit continents).
-    final landR = math.max(0.9, math.min(cw, ch) * 0.30);
-    final land = Paint()..color = const Color(0x40FF7A28);
-    for (final s in _landSpans) {
-      for (var c = s[1]; c <= s[2]; c++) {
-        canvas.drawCircle(cell(c, s[0]), landR, land);
+    // Filled landmasses (unlit continents) + a faint lit coastline.
+    final land = Path();
+    for (final ring in _worldLand) {
+      if (ring.isEmpty) continue;
+      final sub = Path()..moveTo(proj(ring[0][0], ring[0][1]).dx,
+          proj(ring[0][0], ring[0][1]).dy);
+      for (var i = 1; i < ring.length; i++) {
+        final p = proj(ring[i][0], ring[i][1]);
+        sub.lineTo(p.dx, p.dy);
       }
+      sub.close();
+      land.addPath(sub, Offset.zero);
     }
+    canvas.drawPath(land, Paint()..color = const Color(0x59FF7A28));
+    canvas.drawPath(
+        land,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.9
+          ..color = const Color(0x8CFFA766));
 
-    // City lights: brighter, with a soft halo + slow twinkle.
+    // City lights: halo + core, each on its own slow twinkle phase.
     for (var i = 0; i < _cityLights.length; i++) {
       final c = _cityLights[i];
-      final p = cell(c[0], c[1]);
-      // Each city twinkles on its own phase.
-      final tw = 0.72 + 0.28 * math.sin(t * 2 * math.pi + i * 0.9);
-      final r = landR * 1.5;
+      final p = proj(c[0], c[1]);
+      final tw = 0.7 + 0.3 * math.sin(t * 2 * math.pi + i * 0.8);
       canvas.drawCircle(
           p,
-          r * 3.2,
+          4.0,
           Paint()
-            ..color = Color.fromRGBO(255, 150, 60, 0.16 * tw)
+            ..color = Color.fromRGBO(255, 150, 60, 0.22 * tw)
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
       canvas.drawCircle(
-          p, r, Paint()..color = Color.fromRGBO(255, 190, 120, 0.95 * tw));
+          p, 1.35, Paint()..color = Color.fromRGBO(255, 205, 150, 0.95 * tw));
     }
-
   }
 
   @override
