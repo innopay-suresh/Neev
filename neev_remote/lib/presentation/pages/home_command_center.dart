@@ -268,7 +268,7 @@ class _StartConnectionCard extends StatelessWidget {
           boxShadow: AppShadows.card,
         ),
         child: LayoutBuilder(builder: (context, c) {
-          final formW = (c.maxWidth - 300).clamp(360.0, 1120.0);
+          final formW = (c.maxWidth - 260).clamp(360.0, 1120.0);
           return Stack(children: [
             Positioned(
               right: -48,
@@ -292,11 +292,11 @@ class _StartConnectionCard extends StatelessWidget {
                       const SizedBox(height: 18),
                       Row(children: [
                         Expanded(
-                          flex: 4,
+                          flex: 5,
                           child: _LabeledField(
                             controller: idController,
                             label: 'Remote ID',
-                            hint: 'Enter Remote ID or Device Name',
+                            hint: 'Enter ID or name',
                             icon: Icons.devices_rounded,
                             mono: true,
                             onSubmitted: (_) => onConnect(),
@@ -304,11 +304,11 @@ class _StartConnectionCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          flex: 4,
+                          flex: 3,
                           child: _LabeledField(
                             controller: passwordController,
                             label: 'Password',
-                            hint: 'Enter Password',
+                            hint: '••••••••',
                             icon: Icons.lock_outline_rounded,
                             obscure: true,
                             onSubmitted: (_) => onConnect(),
@@ -414,9 +414,16 @@ class _LabeledFieldState extends State<_LabeledField> {
                   style: widget.mono
                       ? AppTypography.mono.copyWith(fontSize: 14)
                       : AppTypography.body.copyWith(fontSize: 14),
+                  // Clear EVERY border + the fill: `border:` alone is only a
+                  // fallback — the theme's enabledBorder/focusedBorder and
+                  // filled:true still merge in, drawing a nested inner pill
+                  // inside the field (the cramped double-outline look).
                   decoration: InputDecoration(
                     isCollapsed: true,
+                    filled: false,
                     border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
                     hintText: widget.hint,
                     hintStyle: AppTypography.body.copyWith(
                         fontSize: 13.5, color: AppColors.textTertiary),
@@ -1124,6 +1131,8 @@ class _DockField extends StatelessWidget {
               hintStyle:
                   AppTypography.body.copyWith(color: AppColors.textTertiary),
               border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
               isCollapsed: true,
               filled: false,
             ),
