@@ -678,15 +678,27 @@ class _NightEarthPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     const inset = 8.0;
+    // Reserve room for the tilt + extrusion so nothing clips.
     final mapW = size.width - inset * 2;
-    final mapH = math.min(size.height, mapW * 0.52);
+    final mapH = math.min(size.height * 0.80, mapW * 0.50);
     final left = inset;
-    final top = (size.height - mapH) / 2;
+    final top = (size.height - mapH) / 2 - 6;
 
     Offset proj(double lon, double lat) => Offset(
           left + (lon + 180) / 360 * mapW,
           top + (_latN - lat) / (_latN - _latS) * mapH,
         );
+
+    // --- 3D: tilt the whole map plane back in perspective -------------------
+    final cx = left + mapW / 2, cy = top + mapH / 2;
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.transform((Matrix4.identity()
+          ..setEntry(3, 2, 0.0016) // perspective
+          ..rotateX(0.52) // lean the plane away from the viewer
+          ..rotateZ(-0.04))
+        .storage);
+    canvas.translate(-cx, -cy);
 
     // Atmospheric wash (space).
     canvas.drawRect(
@@ -697,7 +709,7 @@ class _NightEarthPainter extends CustomPainter {
         ).createShader(Rect.fromLTWH(left, top, mapW, mapH)),
     );
 
-    // Filled landmasses (unlit continents) + a faint lit coastline.
+    // Landmass outline path (shared by the extrusion + the top face).
     final land = Path();
     for (final ring in _worldLand) {
       if (ring.isEmpty) continue;
@@ -710,13 +722,31 @@ class _NightEarthPainter extends CustomPainter {
       sub.close();
       land.addPath(sub, Offset.zero);
     }
-    canvas.drawPath(land, Paint()..color = const Color(0x59FF7A28));
+
+    // --- 3D: extrude the continents — stacked copies below the top face read
+    // as raised landmass walls (darker with depth), then a contact shadow.
+    const depth = 7.0;
+    for (var d = depth; d >= 1; d -= 1) {
+      final k = d / depth; // 1 = deepest
+      canvas.drawPath(
+        land.shift(Offset(0, d)),
+        Paint()
+          ..color = Color.fromRGBO(
+              (120 * (1 - k * 0.55)).round(),
+              (52 * (1 - k * 0.55)).round(),
+              (18 * (1 - k * 0.55)).round(),
+              0.95),
+      );
+    }
+
+    // Top face + lit coastline.
+    canvas.drawPath(land, Paint()..color = const Color(0x73FF7A28));
     canvas.drawPath(
         land,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.9
-          ..color = const Color(0x8CFFA766));
+          ..strokeWidth = 1.0
+          ..color = const Color(0xB3FFB379));
 
     // Internal country borders (thin, dim — reads as countries, not continents).
     final borderPaint = Paint()
@@ -735,20 +765,23 @@ class _NightEarthPainter extends CustomPainter {
       canvas.drawPath(path, borderPaint);
     }
 
-    // City lights: halo + core, each on its own slow twinkle phase.
+    // City lights sit ON the raised top face (lifted by the extrusion height so
+    // they don't look sunk into the walls).
     for (var i = 0; i < _cityLights.length; i++) {
       final c = _cityLights[i];
-      final p = proj(c[0], c[1]);
+      final p = proj(c[0], c[1]) - const Offset(0, 1.5);
       final tw = 0.7 + 0.3 * math.sin(t * 2 * math.pi + i * 0.8);
       canvas.drawCircle(
           p,
-          4.0,
+          4.2,
           Paint()
-            ..color = Color.fromRGBO(255, 150, 60, 0.22 * tw)
+            ..color = Color.fromRGBO(255, 150, 60, 0.24 * tw)
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
       canvas.drawCircle(
-          p, 1.35, Paint()..color = Color.fromRGBO(255, 205, 150, 0.95 * tw));
+          p, 1.4, Paint()..color = Color.fromRGBO(255, 210, 160, 0.98 * tw));
     }
+
+    canvas.restore(); // end 3D tilt
   }
 
   @override
