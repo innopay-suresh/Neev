@@ -210,3 +210,35 @@ jobs:
           tag_name: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Auto-prune CI artifacts older than 3 days. Old per-run artifacts are dead
+  # weight (installers live on the portal + rolling ci-windows/ci-macos
+  # releases); unchecked buildup hit the storage cap and blocked CI billing
+  # once (2026-07-07, ~4GB) and reached 5.17GB again by 2026-07-30.
+  cleanup-artifacts:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete artifacts older than 3 days
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+            let deleted = 0;
+            for (let page = 1; page <= 10; page++) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner, repo: context.repo.repo,
+                per_page: 100, page });
+              const old = data.artifacts.filter(a => new Date(a.created_at).getTime() < cutoff);
+              for (const a of old) {
+                try {
+                  await github.rest.actions.deleteArtifact({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    artifact_id: a.id });
+                  deleted++;
+                } catch (e) { /* already gone / race — ignore */ }
+              }
+              if (data.artifacts.length < 100) break;
+            }
+            core.info(`Deleted ${deleted} artifacts older than 3 days`);
