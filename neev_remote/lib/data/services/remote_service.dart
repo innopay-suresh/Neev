@@ -226,13 +226,47 @@ class RemoteService extends ChangeNotifier {
     DiagLog.log('file', 'queue ${files.length} file(s)');
     for (final f in files) {
       try {
-        final bytes = await f.readAsBytes();
+        final bytes = await _readVerified(f);
         await sendFile(f.name, bytes);
       } catch (e) {
         DiagLog.log('file', 'queued "${f.name}" failed: $e');
+        // Surface it: this used to be log-only, so a file that read as 0 bytes
+        // was either skipped invisibly or sent as an empty "success".
+        _files.failLocal(f.name, '$e');
         // continue with the rest — no batch corruption
       }
     }
+  }
+
+  /// Read a picked file, refusing to return a short or empty result. A file
+  /// that is open and being written (a live log) or locked by the app that owns
+  /// it can read as 0 bytes on Windows; sending that produced a real-looking
+  /// transfer that landed as an empty file on the host. Retry briefly to ride
+  /// out a transient lock, then throw so the caller reports a visible failure.
+  Future<Uint8List> _readVerified(XFile f) async {
+    Object? last;
+    for (var i = 0; i < 3; i++) {
+      if (i > 0) await Future<void>.delayed(const Duration(milliseconds: 150));
+      try {
+        final want = await f.length();
+        final bytes = await f.readAsBytes();
+        // A growing file may read longer than the earlier length; only a SHORT
+        // read means data was lost.
+        if (bytes.length < want) {
+          last = 'short read: got ${bytes.length} of $want bytes (file in use?)';
+          continue;
+        }
+        if (bytes.isEmpty) {
+          throw 'file is 0 bytes — it may be locked by another app';
+        }
+        return bytes;
+      } catch (e) {
+        last = e;
+        // A hard read error (0-byte/lock message included) shouldn't be retried
+        // forever; the loop bounds it at 3 attempts.
+      }
+    }
+    throw last ?? 'could not read the file';
   }
 
   /// Import: ask the connected peer to pick a file and send it to us.
@@ -2340,10 +2374,17 @@ class RemoteService extends ChangeNotifier {
     Uint8List? bytes;
     if (paths != null && index >= 0 && index < paths.length) {
       try {
-        bytes = await XFile(paths[index]).readAsBytes();
-      } catch (_) {}
+        // Verified read: a locked/0-byte source used to be served as a valid
+        // empty clipboard file, so the paste landed as an empty file.
+        bytes = await _readVerified(XFile(paths[index]));
+      } catch (e) {
+        // Was silently swallowed — a failed paste looked identical to a paste
+        // that was simply never made.
+        DiagLog.log('clip', 'clip pull "${paths[index]}" failed: $e');
+      }
     }
     if (bytes == null) {
+      DiagLog.log('clip', 'clip pull token=$token index=$index → reporting failure to peer');
       _sendClipCtl(jsonEncode({
         'k': 'clipfdat',
         'token': token,

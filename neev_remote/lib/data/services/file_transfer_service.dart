@@ -148,6 +148,24 @@ class FileTransferManager {
   final Map<String, int> _sendAcked = {};
   final Map<String, bool> _sendProgSeen = {};
 
+  /// Record a transfer that failed locally, before a single byte went out (the
+  /// file couldn't be read: locked by another app, or 0 bytes). Nothing is sent
+  /// to the peer — this exists so the failure is VISIBLE in the transfer list
+  /// instead of the file silently never appearing on the other side.
+  void failLocal(String name, String reason) {
+    transfers.insert(
+        0,
+        FileTransfer(
+          id: _uuid.v4(),
+          name: name,
+          size: 0,
+          direction: FileDirection.outgoing,
+          status: FileStatus.error,
+          error: reason,
+        ));
+    onChange();
+  }
+
   /// Send [bytes] as [name] to the peer. Returns the transfer, or null if the
   /// file is too large.
   Future<FileTransfer?> sendFile(String name, Uint8List bytes,

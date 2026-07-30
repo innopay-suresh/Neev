@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -141,7 +142,12 @@ func (f *fileReceiver) handle(payload []byte) bool {
 		// Truncation guard: if what we wrote doesn't match the announced size, the
 		// transfer was interrupted — report FAILED and delete the partial file
 		// rather than leave corrupt data on disk that looks like a real download.
-		if rf.size > 0 && rf.written != rf.size {
+		// NOTE: compare unconditionally. The old `rf.size > 0 &&` escape meant a
+		// transfer that DECLARED 0 bytes skipped verification entirely and was
+		// logged "file transfer finished" — that is how an in-use/locked source
+		// file (worker.log, a spreadsheet open in Excel) arrived as a silent
+		// 0-byte "success". A genuinely empty file still passes (0 == 0).
+		if rf.written != rf.size {
 			_ = os.Remove(rf.path)
 			log.Warn().Str("id", m.ID).Int64("want", rf.size).Int64("got", rf.written).
 				Msg("worker: incomplete file — reporting failed")
@@ -186,9 +192,16 @@ func (f *fileReceiver) serveExport() {
 		log.Info().Msg("worker: export picker closed/cancelled — nothing sent")
 		return // cancelled
 	}
-	data, err := os.ReadFile(path)
+	data, err := readFileVerified(path)
 	if err != nil {
-		log.Warn().Err(err).Str("path", path).Msg("worker: read export file failed")
+		// Never ship a short/empty read as a successful transfer: a file that is
+		// open and being written (a live log) or locked by its app can read as 0
+		// bytes, which used to be sent as a valid 0-byte file and logged
+		// "sent file to viewer bytes=0". Fail loudly instead.
+		log.Warn().Err(err).Str("path", path).Msg("worker: export ABORTED — could not read the file completely")
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed",
+			"id":  fmt.Sprintf("hx-%d", f.seq.Add(1)),
+			"err": "host could not read " + filepath.Base(path) + ": " + err.Error()})
 		return
 	}
 	id := fmt.Sprintf("hx-%d", f.seq.Add(1))
@@ -209,6 +222,47 @@ func (f *fileReceiver) serveExport() {
 	}
 	f.sendFT(map[string]interface{}{"k": "ft", "t": "end", "id": id})
 	log.Info().Str("name", name).Int("bytes", len(data)).Msg("worker: sent file to viewer")
+}
+
+// readFileVerified reads a file and refuses to return a short or empty result.
+// A file that is open and being written (a live log) or locked by the app that
+// owns it (a spreadsheet open in Excel) can read as 0 bytes or fewer bytes than
+// its on-disk size. Those used to be shipped as valid transfers and logged
+// "sent file to viewer bytes=0" — a silent data-loss success. Retry a few times
+// to ride out a transient lock, then return a real error so the caller aborts.
+func readFileVerified(path string) ([]byte, error) {
+	var last error
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			time.Sleep(150 * time.Millisecond)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			last = err
+			continue
+		}
+		want := fi.Size()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			last = err
+			continue
+		}
+		// A growing file can legitimately read LONGER than the earlier stat; only
+		// a short read means we lost data.
+		if int64(len(data)) < want {
+			last = fmt.Errorf("short read: got %d of %d bytes (file in use?)", len(data), want)
+			continue
+		}
+		if len(data) == 0 {
+			// Nothing to send. Report it rather than completing a 0-byte "transfer".
+			return nil, fmt.Errorf("file is 0 bytes on the host — it may be locked by another app")
+		}
+		return data, nil
+	}
+	if last == nil {
+		last = fmt.Errorf("could not read the file")
+	}
+	return nil, last
 }
 
 // sendFT sends a small control message (offer/end/saved/failed) on the hi lane.
