@@ -24,7 +24,17 @@ func setupFileLog(name string) {
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return
+		// The shared ProgramData file is created by whichever USER's worker ran
+		// first; after a profile switch the second account often cannot open it
+		// (inherited ACL), and the new session then runs completely unlogged —
+		// exactly what made the post-switch clipboard reports undiagnosable.
+		// Fall back to a per-user file so every session is always observable.
+		alt := filepath.Join(os.TempDir(), "NeevRemote-"+name)
+		f, err = os.OpenFile(alt, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return
+		}
+		path = alt
 	}
 	fileW := zerolog.ConsoleWriter{Out: f, TimeFormat: time.RFC3339, NoColor: true}
 	stderrW := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}

@@ -328,8 +328,26 @@ func (cf *clipFiles) finishFile(asm *clipInASM, token string, index int, data []
 // the next success. Single poll goroutine calls this, so no lock needed.
 var clipAgentReadWarned bool
 
+// dialClipAgent connects to the user-session clipagent, retrying briefly. On a
+// user switch the helper KILLS the old clipagent and launches the new one ~3s
+// later (helper.log: "active session 1 -> 2" then "launched clipagent"); a
+// single-shot dial inside that window fails and the clipboard-file operation is
+// silently skipped. Retrying across the gap makes copy/paste survive the switch.
+func dialClipAgent() (net.Conn, error) {
+	var err error
+	for i := 0; i < 6; i++ {
+		var c net.Conn
+		c, err = net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
+		if err == nil {
+			return c, nil
+		}
+		time.Sleep(700 * time.Millisecond)
+	}
+	return nil, err
+}
+
 func clipAgentReadFiles() ([]string, bool) {
-	c, err := net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
+	c, err := dialClipAgent()
 	if err != nil {
 		if !clipAgentReadWarned {
 			clipAgentReadWarned = true
@@ -362,7 +380,7 @@ func clipAgentReadFiles() ([]string, bool) {
 }
 
 func clipAgentWriteFiles(paths []string) bool {
-	c, err := net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
+	c, err := dialClipAgent()
 	if err != nil {
 		log.Warn().Err(err).Msg("worker: clipagent dial FAILED (staging viewer files on host clipboard) — clipagent (47922) down or wedged")
 		return false
