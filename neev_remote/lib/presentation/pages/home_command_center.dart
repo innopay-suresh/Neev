@@ -267,89 +267,93 @@ class _StartConnectionCard extends StatelessWidget {
           border: Border.all(color: AppColors.border),
           boxShadow: AppShadows.card,
         ),
+        // Row (form | globe), NOT a Stack with a negative-Positioned globe: the
+        // old Stack let the decorative globe overlap and displace the form
+        // (title + Remote-ID field flung right, hint orphaned). As siblings the
+        // form always owns its width and the globe can never collide with it.
         child: LayoutBuilder(builder: (context, c) {
-          final formW = (c.maxWidth - 260).clamp(360.0, 1120.0);
-          return Stack(children: [
-            Positioned(
-              right: -48,
-              top: -42,
-              bottom: -42,
-              width: 440,
-              child: const IgnorePointer(child: _AnimatedGlobe()),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(28, 24, 28, 22),
-              child: SizedBox(
-                width: formW,
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Start a new connection',
-                          style: AppTypography.pageTitle.copyWith(fontSize: 20)),
-                      const SizedBox(height: 4),
-                      Text('Connect to any device using ID, device name or alias.',
-                          style: AppTypography.caption.copyWith(fontSize: 13)),
-                      const SizedBox(height: 18),
-                      Row(children: [
-                        Expanded(
-                          flex: 5,
-                          child: _LabeledField(
-                            controller: idController,
-                            label: 'Remote ID',
-                            hint: 'Enter ID or name',
-                            icon: Icons.devices_rounded,
-                            mono: true,
-                            onSubmitted: (_) => onConnect(),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 3,
-                          child: _LabeledField(
-                            controller: passwordController,
-                            label: 'Password',
-                            hint: '••••••••',
-                            icon: Icons.lock_outline_rounded,
-                            obscure: true,
-                            onSubmitted: (_) => onConnect(),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const SizedBox(width: 150, child: _ModeSelector()),
-                        const SizedBox(width: 12),
-                        _WideConnectButton(onTap: onConnect),
-                      ]),
-                      if (recents.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        Row(children: [
-                          Text('Recent IDs:',
-                              style: AppTypography.caption.copyWith(
-                                  fontSize: 12.5,
-                                  color: AppColors.textSecondary)),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                for (final r in recents.take(4))
-                                  _RecentChip(
-                                      name: r.name, onTap: () => onPick(r.id)),
-                                InkWell(
-                                  onTap: onClear,
-                                  child: Text('Clear all',
-                                      style: AppTypography.bodyStrong.copyWith(
-                                          fontSize: 12.5,
-                                          color: AppColors.primary)),
-                                ),
-                              ],
+          final wide = c.maxWidth >= 900;
+          final globeW = wide ? (c.maxWidth * 0.22).clamp(180.0, 300.0) : 0.0;
+          final form = Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 20, 18),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Start a new connection',
+                      style: AppTypography.pageTitle.copyWith(fontSize: 19)),
+                  const SizedBox(height: 3),
+                  Text('Connect to any device using ID, device name or alias.',
+                      style: AppTypography.caption.copyWith(fontSize: 12.5)),
+                  const SizedBox(height: 16),
+                  Row(children: [
+                    Expanded(
+                      flex: 5,
+                      child: _LabeledField(
+                        controller: idController,
+                        label: 'Remote ID',
+                        hint: 'Enter Remote ID or Device Name',
+                        icon: Icons.devices_rounded,
+                        mono: true,
+                        onSubmitted: (_) => onConnect(),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 4,
+                      child: _LabeledField(
+                        controller: passwordController,
+                        label: 'Password',
+                        hint: 'Enter Password',
+                        icon: Icons.lock_outline_rounded,
+                        obscure: true,
+                        onSubmitted: (_) => onConnect(),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const SizedBox(width: 148, child: _ModeSelector()),
+                    const SizedBox(width: 10),
+                    _WideConnectButton(onTap: onConnect),
+                  ]),
+                  if (recents.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                      Text('Recent IDs:',
+                          style: AppTypography.caption.copyWith(
+                              fontSize: 12.5, color: AppColors.textSecondary)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            for (final r in recents.take(4))
+                              _RecentChip(
+                                  name: r.name, onTap: () => onPick(r.id)),
+                            InkWell(
+                              onTap: onClear,
+                              child: Text('Clear all',
+                                  style: AppTypography.bodyStrong.copyWith(
+                                      fontSize: 12.5,
+                                      color: AppColors.primary)),
                             ),
-                          ),
-                        ]),
-                      ],
+                          ],
+                        ),
+                      ),
                     ]),
-              ),
+                  ],
+                ]),
+          );
+          if (!wide) return form;
+          // center-aligned + fixed globe height: 'stretch' here would demand an
+          // unbounded height from the Row and render nothing.
+          return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(child: form),
+            SizedBox(
+              width: globeW,
+              height: 168,
+              child: const IgnorePointer(child: _AnimatedGlobe()),
             ),
           ]);
         }),
