@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import 'audit_log_page.dart';
+import '../../data/services/consent_store.dart';
 import '../../data/services/mac_daemon.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
@@ -214,6 +215,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   onChanged: (v) =>
                       ref.read(settingsProvider.notifier).setAskOnConnect(v),
                 ),
+                const Divider(),
+                // Undo for "Remember this decision" on the consent prompt. A
+                // remembered DECLINE is otherwise a dead end: the device is
+                // refused silently, with no prompt left to change the answer.
+                const _ForgetRememberedDevices(),
                 const Divider(),
                 _buildToggle(
                   label: 'Sound on incoming connection',
@@ -600,6 +606,87 @@ class _AliasFieldState extends ConsumerState<_AliasField> {
                 style: AppTypography.caption.copyWith(color: AppColors.success)),
           ),
       ]),
+    );
+  }
+}
+
+/// "Forget remembered devices" — clears every Accept/Decline decision saved by
+/// the "Remember this decision" checkbox on the consent prompt.
+///
+/// This exists because a remembered DECLINE is otherwise unrecoverable from the
+/// UI: the device is refused before any prompt is shown, so there is nothing
+/// left to click to change the answer.
+class _ForgetRememberedDevices extends StatefulWidget {
+  const _ForgetRememberedDevices();
+
+  @override
+  State<_ForgetRememberedDevices> createState() =>
+      _ForgetRememberedDevicesState();
+}
+
+class _ForgetRememberedDevicesState extends State<_ForgetRememberedDevices> {
+  int _count = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final n = await ConsentStore.count();
+    if (mounted) setState(() => _count = n);
+  }
+
+  Future<void> _forget() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Forget remembered devices?', style: AppTypography.title),
+        content: Text(
+          'Every device with a remembered Accept or Decline will prompt again '
+          'on the next connection. This cannot be undone.',
+          style: AppTypography.caption,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Forget')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await ConsentStore.forgetAll();
+    await _refresh();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Remembered devices cleared')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Data Honesty: show the real count this app knows about, and say plainly
+    // that it counts this app's own store (the host worker keeps its own).
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.history_toggle_off_rounded, size: 20),
+      title: Text('Forget remembered devices', style: AppTypography.body),
+      subtitle: Text(
+        _count == 0
+            ? 'No remembered decisions in this app'
+            : '$_count device${_count == 1 ? '' : 's'} will connect or be '
+                'refused without prompting',
+        style: AppTypography.caption,
+      ),
+      trailing: TextButton(
+        onPressed: _forget,
+        child: const Text('Forget'),
+      ),
     );
   }
 }

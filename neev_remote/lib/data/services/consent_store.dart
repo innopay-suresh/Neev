@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -58,14 +59,45 @@ class ConsentStore {
     await prefs.setString(_key, jsonEncode(m));
   }
 
-  /// Clear every remembered decision. A remembered Decline is otherwise
-  /// impossible to undo from the UI, so this needs to stay reachable.
+  /// Clear every remembered decision, in BOTH stores. A remembered Decline is
+  /// otherwise impossible to undo from the UI — the device would just keep
+  /// being refused with no prompt and no explanation.
+  ///
+  /// Also deletes the Go worker's `consent-decisions.json`. That file lives in
+  /// the same user's data dir (agent/session/consentstore.go → userDataDir),
+  /// so this app can reach it; clearing only the Flutter side would leave a
+  /// TransportMode host still auto-answering from the worker's copy.
   static Future<void> forgetAll() async {
     _cache = {};
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_key);
+    try {
+      final f = File(_workerStorePath());
+      if (await f.exists()) await f.delete();
+    } catch (_) {
+      // Best effort: the Flutter store is cleared either way.
+    }
   }
 
-  /// How many devices currently have a remembered decision (for Settings).
+  /// Mirrors userDataDir() in agent/session/datadir.go.
+  static String _workerStorePath() {
+    final env = Platform.environment;
+    if (Platform.isWindows) {
+      final base = env['LOCALAPPDATA'] ?? env['APPDATA'] ?? '';
+      return '$base\\NeevRemote\\consent-decisions.json';
+    }
+    final home = env['HOME'] ?? '';
+    if (Platform.isMacOS) {
+      return '$home/Library/Application Support/NeevRemote/'
+          'consent-decisions.json';
+    }
+    final xdg = env['XDG_DATA_HOME'];
+    final base = (xdg == null || xdg.isEmpty) ? '$home/.local/share' : xdg;
+    return '$base/NeevRemote/consent-decisions.json';
+  }
+
+  /// How many devices this app has a remembered decision for. Counts the
+  /// Flutter store only — the worker's file is not read here, so treat a zero
+  /// count as "none from this app", not "none anywhere".
   static Future<int> count() async => (await _load()).length;
 }
