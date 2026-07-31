@@ -147,6 +147,12 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     // directly, but the keyboard hook and shortcut buttons live in the service
     // and never see it — mirror it so view-only actually blocks them.
     service.viewOnlySetting = _s.viewOnly;
+    // The SAME setting, applied in the other direction: as a HOST, "View only
+    // mode" means viewers of THIS machine may watch but not control. Mirrored
+    // to viewonly.txt for the SYSTEM/root transport, which is the process that
+    // actually injects input in TransportMode.
+    service.hostGrantsControl = !_s.viewOnly;
+    service.syncViewOnlyFlag(_s.viewOnly);
     service.defaultPermClipboard = _s.defaultAllowClipboard;
     service.defaultPermFiles = _s.defaultAllowFiles;
     service.lockOnSessionEnd = _s.lockOnSessionEnd;
@@ -326,7 +332,10 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     final choice = await showDialog<ConsentChoice>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => ConsentDialog(deviceId: req.controllerId),
+      builder: (ctx) => ConsentDialog(
+        deviceId: req.controllerId,
+        defaultControl: !ref.read(settingsProvider).viewOnly,
+      ),
     );
     // A null choice means the route was popped without an answer — treat it as
     // a refusal. Accepting on anything other than an explicit Accept would be
@@ -336,7 +345,10 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       await ConsentStore.remember(req.controllerId, accepted);
     }
     if (accepted) {
-      await service.acceptConnection();
+      // The host's choice is authoritative for this session: a view-only grant
+      // makes the host DROP input, rather than trusting the viewer not to send.
+      service.hostGrantsControl = choice?.control ?? true;
+      await service.acceptConnection(control: choice?.control ?? true);
     } else {
       service.rejectConnection();
     }

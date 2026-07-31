@@ -12,7 +12,16 @@ import 'dart:io';
 /// transport reads the console user's copy (see consentflag_darwin.go). Without
 /// this the flag was never written on macOS at all, so a Mac daemon host
 /// auto-accepted every connection no matter what the setting said.
-Future<void> writeConsentFlag(bool ask) async {
+Future<void> writeConsentFlag(bool ask) => _writeHostFlag('consent.txt', ask);
+
+/// Mirrors the host's "View only mode" setting to viewonly.txt, which the
+/// root/SYSTEM transport reads to decide the DEFAULT access level for incoming
+/// viewers. Without this the host's own view-only wish never reached the
+/// process that actually injects input, so it did nothing.
+Future<void> writeViewOnlyFlag(bool viewOnly) =>
+    _writeHostFlag('viewonly.txt', viewOnly);
+
+Future<void> _writeHostFlag(String name, bool on) async {
   try {
     final Directory dir;
     if (Platform.isWindows) {
@@ -32,7 +41,6 @@ Future<void> writeConsentFlag(bool ask) async {
       return;
     }
     final sep = Platform.isWindows ? '\\' : '/';
-    await File('${dir.path}${sep}consent.txt')
-        .writeAsString(ask ? '1' : '0', flush: true);
+    await File('${dir.path}$sep$name').writeAsString(on ? '1' : '0', flush: true);
   } catch (_) {}
 }

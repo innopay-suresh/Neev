@@ -7,4 +7,6 @@ package session
 // so deny rather than accept: "ask before allowing connections" with nobody
 // able to answer means NOT allowed. This used to return true, which would have
 // silently auto-accepted every connection the moment the flag was readable.
-func showConsentDialog(viewerID string) (allow bool, remember bool) { return false, false }
+func showConsentDialog(viewerID string) (allow, control, remember bool) {
+	return false, false, false
+}

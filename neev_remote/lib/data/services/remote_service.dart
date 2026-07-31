@@ -438,6 +438,9 @@ class RemoteService extends ChangeNotifier {
     permControl = control;
     permClipboard = clipboard;
     permFiles = files;
+    // permControl was assigned in three places and READ IN NONE — which is why
+    // a host granting view-only had no effect. It now drives the host-side gate.
+    hostGrantsControl = control;
     _pendingConsent = null;
     notifyListeners();
     await _startHostOffer(req.controllerId);
@@ -840,6 +843,7 @@ class RemoteService extends ChangeNotifier {
             permControl = defaultPermControl;
             permClipboard = defaultPermClipboard;
             permFiles = defaultPermFiles;
+            hostGrantsControl = defaultPermControl;
             await _startHostOffer(controllerId);
           } else {
             _hostSignaling?.sendBye(controllerId);
@@ -859,6 +863,7 @@ class RemoteService extends ChangeNotifier {
           permControl = defaultPermControl;
           permClipboard = defaultPermClipboard;
           permFiles = defaultPermFiles;
+          hostGrantsControl = defaultPermControl;
           await _startHostOffer(controllerId);
         }
         break;
@@ -1192,6 +1197,40 @@ class RemoteService extends ChangeNotifier {
   }
 
   int _lastInputDropLogMs = -10000;
+  int _lastViewOnlyHostDropMs = -10000;
+
+  /// HOST side: whether viewers connected to THIS machine may control it.
+  /// Mirrored from the host's own "View only mode" setting. The host is the
+  /// authority — a viewer cannot raise this for itself.
+  bool hostGrantsControl = true;
+
+  /// Whether a control-channel payload would actually CONTROL this machine, as
+  /// opposed to observing it or exchanging data. Mirrors isControlAttempt() in
+  /// agent/session/transport.go — keep the two in step.
+  ///
+  /// A denylist, deliberately: the four input kinds are defined in exactly one
+  /// place and are stable, while new non-control message kinds get added often.
+  /// Clipboard, chat, file transfer, monitor switch and quality keep working
+  /// while view-only, so a watcher stays useful.
+  bool _isControlAttempt(String raw) {
+    try {
+      final m = jsonDecode(raw);
+      if (m is! Map) return false;
+      switch (m['k']) {
+        case 'mv':
+        case 'btn':
+        case 'whl':
+        case 'key':
+          return true;
+        case 'cmd':
+          const mutating = {'lock', 'logoff', 'reboot', 'privacy', 'sas'};
+          return mutating.contains(m['c']);
+      }
+    } catch (_) {
+      // Undecodable payloads inject nothing downstream either.
+    }
+    return false;
+  }
   int _lastViewOnlyDropLogMs = -10000;
 
   // Keys the host currently believes are pressed (by HID usage). Used to release
@@ -1871,10 +1910,23 @@ class RemoteService extends ChangeNotifier {
     }
 
     if (isHost) {
-      // NOTE: no host-side "control permission" gate here — it silently dropped
-      // ALL input if the flag was ever false (a footgun that broke clicking).
-      // View-only is enforced on the VIEWER side (it simply doesn't send input),
-      // which is the reliable place for it.
+      // HOST-SIDE view-only enforcement. Viewer-side view-only is a courtesy —
+      // the viewer simply stops sending — so it could never express "I am the
+      // host and I only want you to WATCH". A viewer that ignored the flag, or
+      // an older build, kept full control regardless of the host's wish.
+      //
+      // The earlier gate here was removed because it silently dropped ALL input
+      // whenever its flag was unset. That footgun is avoided by defaulting to
+      // ALLOW and only refusing when the host has explicitly granted view-only,
+      // and by logging the refusal instead of dropping in silence.
+      if (!hostGrantsControl && _isControlAttempt(raw)) {
+        final now = _inputClock.elapsedMilliseconds;
+        if (now - _lastViewOnlyHostDropMs > 1000) {
+          _lastViewOnlyHostDropMs = now;
+          DiagLog.log('host', 'input DROPPED — this host granted view-only');
+        }
+        return;
+      }
       final event = InputEvent.decode(raw);
       if (event != null) {
         _lastInputMs = _inputClock.elapsedMilliseconds;
@@ -2038,6 +2090,9 @@ class RemoteService extends ChangeNotifier {
   /// Flutter-hosted box this is a harmless extra write; the in-app dialog still
   /// governs there.
   Future<void> syncConsentFlag(bool ask) => writeConsentFlag(ask);
+
+  /// Mirror the host's "View only mode" to the transport (see writeViewOnlyFlag).
+  Future<void> syncViewOnlyFlag(bool viewOnly) => writeViewOnlyFlag(viewOnly);
 
   /// Fetch the machine-wide id + password from the SYSTEM helper, or null when
   /// the helper isn't reachable. Lets the UI show the shared credentials.

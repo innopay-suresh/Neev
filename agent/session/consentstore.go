@@ -25,9 +25,19 @@ import (
 // /Library/Application Support/NeevRemote is root-owned. It also scopes the
 // decision to the user who actually made it, which is the correct blast radius
 // for a security choice.
+
+// consentDecision is what the host user chose for a device: whether to admit it
+// at all, and at what access level. Stored as an object so a remembered
+// "view only" grant stays view-only on every later connection — remembering the
+// admission but silently upgrading it to full control would be a security bug.
+type consentDecision struct {
+	Allow   bool `json:"allow"`
+	Control bool `json:"control"`
+}
+
 var (
 	consentMu    sync.Mutex
-	consentCache map[string]bool
+	consentCache map[string]consentDecision
 )
 
 func consentStorePath() string {
@@ -50,18 +60,18 @@ func normConsentID(id string) string {
 	return b.String()
 }
 
-func loadConsentDecisions() map[string]bool {
+func loadConsentDecisions() map[string]consentDecision {
 	consentMu.Lock()
 	defer consentMu.Unlock()
 	if consentCache != nil {
 		return consentCache
 	}
-	consentCache = map[string]bool{}
+	consentCache = map[string]consentDecision{}
 	data, err := os.ReadFile(consentStorePath())
 	if err != nil {
 		return consentCache // no file yet — nothing remembered
 	}
-	var m map[string]bool
+	var m map[string]consentDecision
 	if err := json.Unmarshal(data, &m); err != nil {
 		// A corrupt file must not wedge every future connection behind a parse
 		// error; start clean and let the next decision rewrite it.
@@ -74,19 +84,20 @@ func loadConsentDecisions() map[string]bool {
 
 // rememberedConsent reports a previously remembered decision for a device.
 // ok is false when the user has never chosen "Remember this decision" for it.
-func rememberedConsent(viewerID string) (allow bool, ok bool) {
+func rememberedConsent(viewerID string) (d consentDecision, ok bool) {
 	m := loadConsentDecisions()
 	consentMu.Lock()
 	defer consentMu.Unlock()
-	allow, ok = m[normConsentID(viewerID)]
+	d, ok = m[normConsentID(viewerID)]
 	return
 }
 
-// saveConsentDecision persists the user's choice for this device.
-func saveConsentDecision(viewerID string, allow bool) {
+// saveConsentDecision persists the user's choice for this device, including the
+// access level granted.
+func saveConsentDecision(viewerID string, allow, control bool) {
 	m := loadConsentDecisions()
 	consentMu.Lock()
-	m[normConsentID(viewerID)] = allow
+	m[normConsentID(viewerID)] = consentDecision{Allow: allow, Control: control}
 	data, err := json.MarshalIndent(m, "", "  ")
 	consentMu.Unlock()
 	if err != nil {
@@ -110,6 +121,7 @@ func saveConsentDecision(viewerID string, allow bool) {
 		return
 	}
 	log.Info().Str("device", normConsentID(viewerID)).Bool("allow", allow).
+		Bool("control", control).
 		Msg("worker: remembered consent decision for this device")
 }
 
@@ -118,7 +130,7 @@ func saveConsentDecision(viewerID string, allow bool) {
 // remembered Decline is otherwise impossible to undo from the UI.
 func ForgetConsentDecisions() {
 	consentMu.Lock()
-	consentCache = map[string]bool{}
+	consentCache = map[string]consentDecision{}
 	consentMu.Unlock()
 	_ = os.Remove(consentStorePath())
 }

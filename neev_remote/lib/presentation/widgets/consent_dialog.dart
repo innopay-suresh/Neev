@@ -14,16 +14,33 @@ import '../../core/theme/app_theme.dart';
 /// Returns a [ConsentChoice], or null only if the dialog is dismissed by a
 /// route pop — callers must treat that as a refusal, never as an accept.
 class ConsentChoice {
-  const ConsentChoice({required this.accepted, required this.remember});
+  const ConsentChoice({
+    required this.accepted,
+    required this.control,
+    required this.remember,
+  });
   final bool accepted;
+
+  /// The ACCESS LEVEL the host granted. The host decides this — a viewer can
+  /// never raise itself from view-only to control.
+  final bool control;
   final bool remember;
 }
 
 class ConsentDialog extends StatefulWidget {
-  const ConsentDialog({super.key, required this.deviceId});
+  const ConsentDialog({
+    super.key,
+    required this.deviceId,
+    this.defaultControl = true,
+  });
 
   /// The viewer's device id, already stripped of the internal "ctrl-" prefix.
   final String deviceId;
+
+  /// Which access level the selector opens on — the host's own "View only
+  /// mode" setting, so the prompt defaults to what this machine already asked
+  /// for.
+  final bool defaultControl;
 
   @override
   State<ConsentDialog> createState() => _ConsentDialogState();
@@ -32,6 +49,7 @@ class ConsentDialog extends StatefulWidget {
 class _ConsentDialogState extends State<ConsentDialog> {
   bool _remember = false;
   bool _copied = false;
+  late bool _control = widget.defaultControl;
 
   /// Groups a 9-digit id as "926 941 775" — the form the user reads aloud.
   String get _prettyId {
@@ -41,8 +59,8 @@ class _ConsentDialogState extends State<ConsentDialog> {
         '${digits.substring(6, 9)}';
   }
 
-  void _close(bool accepted) => Navigator.of(context)
-      .pop(ConsentChoice(accepted: accepted, remember: _remember));
+  void _close(bool accepted) => Navigator.of(context).pop(ConsentChoice(
+      accepted: accepted, control: _control, remember: _remember));
 
   @override
   Widget build(BuildContext context) {
@@ -55,25 +73,41 @@ class _ConsentDialogState extends State<ConsentDialog> {
       insetPadding: const EdgeInsets.all(AppSpacing.lg),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
+        // The card grew when the access-level selector was added and can be
+        // taller than a short window. Scroll the BODY, but keep the header and
+        // the Allow/Decline row pinned: a security prompt whose actions have
+        // scrolled out of sight is worse than one that scrolls.
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _header(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.lg),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _medallion(),
-                  const SizedBox(width: AppSpacing.lg),
-                  Expanded(child: _body()),
-                ],
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.lg),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _medallion(),
+                          const SizedBox(width: AppSpacing.lg),
+                          Expanded(child: _body()),
+                        ],
+                      ),
+                    ),
+                    Divider(height: 1, color: AppColors.border),
+                    _accessLevel(),
+                    Divider(height: 1, color: AppColors.border),
+                    _securityNote(),
+                  ],
+                ),
               ),
             ),
-            Divider(height: 1, color: AppColors.border),
-            _securityNote(),
             Divider(height: 1, color: AppColors.border),
             _footer(),
           ],
@@ -175,6 +209,60 @@ class _ConsentDialogState extends State<ConsentDialog> {
           ],
         ),
       ],
+    );
+  }
+
+  /// The access level being granted. This is the whole point of the prompt:
+  /// the HOST chooses whether this viewer may control the machine or only watch.
+  Widget _accessLevel() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_control ? 'Full Control Access' : 'View Only Access',
+              style: AppTypography.body
+                  .copyWith(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 3),
+          Text(
+            _control
+                ? 'The remote user will be able to see your screen and control '
+                    'your computer.'
+                : 'The remote user will be able to see your screen but NOT '
+                    'control it.',
+            style: AppTypography.caption.copyWith(height: 1.4),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Row(children: [
+            Expanded(child: _segment('Full control', true)),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(child: _segment('View only', false)),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _segment(String label, bool control) {
+    final on = _control == control;
+    return InkWell(
+      onTap: () => setState(() => _control = control),
+      borderRadius: BorderRadius.circular(AppRadii.md),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: on ? AppColors.primarySoft : Colors.transparent,
+          border: Border.all(
+              color: on ? AppColors.primary : AppColors.borderStrong),
+          borderRadius: BorderRadius.circular(AppRadii.md),
+        ),
+        child: Text(label,
+            style: AppTypography.caption.copyWith(
+                color: on ? AppColors.primary : AppColors.textSecondary,
+                fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+      ),
     );
   }
 

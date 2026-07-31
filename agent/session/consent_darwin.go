@@ -42,16 +42,40 @@ function run(argv) {
     'Only allow if you recognise this request. If you don\'t recognise this ' +
     'device, do not allow the connection.';
   alert.alertStyle = 2; // critical — this is a security decision
-  alert.addButtonWithTitle('Accept');
+  alert.addButtonWithTitle('Allow');
   alert.addButtonWithTitle('Decline');
-  var cb = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, 0, 280, 20));
+
+  // Accessory: the ACCESS LEVEL the host is granting, plus the remember box.
+  // The host decides here — a viewer cannot escalate itself to control.
+  var box = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, 300, 66));
+  var viewOnly = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, 44, 300, 20));
+  viewOnly.setButtonType(4); // NSButtonTypeRadio
+  viewOnly.title = 'View only — they can see the screen';
+  var fullCtl = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, 24, 300, 20));
+  fullCtl.setButtonType(4);
+  fullCtl.title = 'Full control — they can control this Mac';
+  // argv[1] is "1" when the host's own View-only setting is on: preselect it so
+  // the prompt defaults to the host's stated wish.
+  if (argv[1] === '1') { viewOnly.setState(1); } else { fullCtl.setState(1); }
+  var cb = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, 0, 300, 20));
   cb.setButtonType(3); // NSButtonTypeSwitch
   cb.title = 'Remember this decision';
-  alert.setAccessoryView(cb);
+  box.addSubview(viewOnly);
+  box.addSubview(fullCtl);
+  box.addSubview(cb);
+  alert.setAccessoryView(box);
   app.activateIgnoringOtherApps(true);
   var button = alert.runModal;
-  // 1000 = first button (Accept). Anything else is a refusal.
-  return JSON.stringify({accept: button === 1000, remember: cb.state === 1});
+  // 1000 = first button (Allow). Anything else is a refusal.
+  // NSButton.state comes back through the ObjC bridge as a wrapper object, NOT
+  // a JS number: 'state === 1' is ALWAYS false. Coerce with Number() or every
+  // checkbox silently reads as unticked (which is exactly what happened to
+  // "Remember this decision" before this was caught).
+  return JSON.stringify({
+    accept: button === 1000,
+    control: Number(fullCtl.state) === 1,
+    remember: Number(cb.state) === 1
+  });
 }
 `
 
@@ -61,11 +85,15 @@ function run(argv) {
 // Any failure returns false (deny). That is deliberate and matches the toggle's
 // intent: at the login window there is no user who can consent, and "ask before
 // allowing" with nobody there to accept means not allowed.
-func showConsentDialog(viewerID string) (allow bool, remember bool) {
+func showConsentDialog(viewerID string) (allow bool, control bool, remember bool) {
 	// Bound the wait so a prompt nobody answers can't pin the transport's
 	// consent waiter forever; the transport applies its own 30s timeout too.
+	viewOnlyDefault := "0"
+	if hostViewOnlyDefault() {
+		viewOnlyDefault = "1"
+	}
 	cmd := exec.Command("osascript", "-l", "JavaScript", "-e", consentAlertJS,
-		prettyConsentID(viewerID))
+		prettyConsentID(viewerID), viewOnlyDefault)
 	done := make(chan struct{})
 	var out []byte
 	var err error
@@ -78,22 +106,23 @@ func showConsentDialog(viewerID string) (allow bool, remember bool) {
 	case <-time.After(90 * time.Second):
 		_ = cmd.Process.Kill()
 		log.Warn().Msg("worker: consent prompt timed out with no answer — denying")
-		return false, false
+		return false, false, false
 	}
 	if err != nil {
 		log.Warn().Err(err).Msg("worker: could not show the consent prompt — denying")
-		return false, false
+		return false, false, false
 	}
 	var res struct {
 		Accept   bool `json:"accept"`
+		Control  bool `json:"control"`
 		Remember bool `json:"remember"`
 	}
 	if e := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &res); e != nil {
 		log.Warn().Err(e).Str("out", strings.TrimSpace(string(out))).
 			Msg("worker: unreadable consent answer — denying")
-		return false, false
+		return false, false, false
 	}
-	return res.Accept, res.Remember
+	return res.Accept, res.Control, res.Remember
 }
 
 // prettyConsentID strips the internal "ctrl-" prefix and groups a 9-digit id as

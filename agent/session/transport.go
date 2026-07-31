@@ -49,7 +49,15 @@ type Transport struct {
 	// Consent gate (TransportMode "Ask before allowing connections"): pending
 	// approvals keyed by viewer id, each answered by the worker's Accept/Deny.
 	consentMu      sync.Mutex
-	consentWaiters map[string]chan bool
+	consentWaiters map[string]chan consentAnswer
+
+	// Per-viewer CONTROL permission, decided by the HOST (consent choice, or the
+	// host's view-only default when no prompt is shown). The host is the only
+	// authority here: view-only used to be enforced solely on the viewer, which
+	// made it an honour system — a viewer that ignored the flag, or an older
+	// build, had full control no matter what the host wanted.
+	controlMu      sync.Mutex
+	controlAllowed map[string]bool
 
 	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
 	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
@@ -78,6 +86,9 @@ type Transport struct {
 	inToWorker atomic.Uint64
 	inToBridge atomic.Uint64
 	inDropped  atomic.Uint64
+	// Input refused because the HOST granted view-only (distinct from inDropped,
+	// which counts input lost for lack of a worker).
+	inViewOnlyDropped atomic.Uint64
 }
 
 type peerSession struct {
@@ -100,7 +111,8 @@ func RunTransport(ctx context.Context, port int) error {
 	t := &Transport{
 		relayURL:       relayURL,
 		peers:          make(map[string]*peerSession),
-		consentWaiters: make(map[string]chan bool),
+		consentWaiters: make(map[string]chan consentAnswer),
+		controlAllowed: make(map[string]bool),
 	}
 	if err := t.setupSignaling(ctx); err != nil {
 		return err
@@ -227,12 +239,26 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	// it asks the per-session worker to show the dialog and waits for the answer.
 	// Deny/timeout/no-user-session → refuse (no offer), matching the toggle's
 	// intent ("ask before allowing"; nobody there to accept = not allowed).
+	// Decide, HOST-side, whether this viewer may control the machine or only
+	// watch. Default comes from the host's own view-only setting; the consent
+	// prompt can override it per connection.
+	control := !hostViewOnlyDefault()
 	if t.consentRequired() {
-		if !t.askConsent(ctx, m.From) {
+		allow, granted := t.askConsent(ctx, m.From)
+		if !allow {
 			log.Info().Str("from", m.From).Msg("transport: connection DENIED (consent)")
 			return
 		}
-		log.Info().Str("from", m.From).Msg("transport: connection approved (consent)")
+		control = granted
+		log.Info().Str("from", m.From).Bool("control", control).
+			Msg("transport: connection approved (consent)")
+	}
+	t.controlMu.Lock()
+	t.controlAllowed[m.From] = control
+	t.controlMu.Unlock()
+	if !control {
+		log.Info().Str("from", m.From).
+			Msg("transport: viewer is VIEW-ONLY — input will be dropped host-side")
 	}
 
 	t.dropPeer(m.From) // replace any stale session
@@ -272,6 +298,7 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	// Route it to whoever owns the CURRENT input path: the SYSTEM helper while a
 	// secure or elevated desktop is up (only it can inject there), otherwise the
 	// per-session worker. Exactly one owner at a time — no contention.
+	viewerID := m.From
 	peer.OnData = func(label string, data []byte, isString bool) {
 		switch label {
 		case "file":
@@ -285,6 +312,11 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 			// the transport and call SendSAS directly. Other commands still go to the
 			// worker below.
 			if label == "control" && isSASCommand(data) {
+				if !t.viewerMayControl(viewerID) {
+					log.Info().Str("from", viewerID).
+						Msg("transport: Ctrl+Alt+Del DROPPED — host granted view-only")
+					return
+				}
 				triggerSAS()
 				return
 			}
@@ -294,6 +326,18 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 			// of which desktop is up, so they must NOT go to the bridge (it would
 			// drop them) — this machine is elevated/secure often, which is why
 			// chat + image clipboard were failing.
+			// HOST-SIDE VIEW-ONLY ENFORCEMENT. The viewer-side gate is a courtesy
+			// (it just stops sending); this is the one that actually holds, because
+			// the host decides. Only real control attempts are dropped — clipboard,
+			// chat, file transfer and view-related commands still work, so
+			// view-only does not degrade into a half-dead session.
+			if isControlAttempt(data) && !t.viewerMayControl(viewerID) {
+				if n := t.inViewOnlyDropped.Add(1); n == 1 || n%256 == 0 {
+					log.Info().Uint64("n", n).Str("from", viewerID).
+						Msg("transport: input DROPPED — host granted view-only")
+				}
+				return
+			}
 			bridgeUp := t.bridge != nil && (t.bridge.SecureActive() || t.bridge.ElevatedActive())
 			if bridgeUp && label == "control" && workerOnlyMessage(data) {
 				bridgeUp = false
@@ -401,6 +445,53 @@ func workerOnlyMessage(data []byte) bool {
 		return true
 	}
 	return false
+}
+
+// isControlAttempt reports whether a control-channel payload would actually
+// CONTROL the host, as opposed to merely observing or exchanging data with it.
+//
+// Deliberately a denylist, not an allowlist: the four input kinds are defined in
+// exactly one place (input_event.dart) and are stable, whereas new non-control
+// message kinds get added regularly. An allowlist would silently break each new
+// feature for view-only sessions.
+//
+// Allowed while view-only: clipboard, chat, file transfer, monitor switch,
+// stream quality, keyframe requests — everything that lets a watcher be useful
+// without touching the machine. Malformed payloads pass: they cannot be decoded
+// as input downstream either, so they inject nothing.
+func isControlAttempt(data []byte) bool {
+	var m struct {
+		K string `json:"k"`
+		C string `json:"c"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	switch m.K {
+	case "mv", "btn", "whl", "key":
+		return true // mouse move / button / wheel / keystroke
+	case "cmd":
+		// Commands that change the machine's state. A watcher must not be able to
+		// lock, log out, reboot, blank the screen, or raise the secure desktop.
+		switch m.C {
+		case "lock", "logoff", "reboot", "privacy", "sas":
+			return true
+		}
+	}
+	return false
+}
+
+// viewerMayControl reports whether the HOST granted this viewer control.
+// Unknown viewers default to ALLOWED: the old host-side gate was removed
+// precisely because defaulting to deny silently killed all input whenever the
+// flag was unset, and that footgun must not come back. Every path that admits a
+// viewer records an explicit decision, so "unknown" only happens if that
+// bookkeeping is ever missed.
+func (t *Transport) viewerMayControl(id string) bool {
+	t.controlMu.Lock()
+	defer t.controlMu.Unlock()
+	allowed, ok := t.controlAllowed[id]
+	return !ok || allowed
 }
 
 // isSASCommand reports whether a payload is the viewer's Ctrl+Alt+Del request
@@ -561,9 +652,16 @@ func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 			var r struct {
 				ID    string `json:"id"`
 				Allow bool   `json:"allow"`
+				// Whether the host granted CONTROL or view-only. Absent (older
+				// worker) means control, preserving the previous behaviour.
+				Control *bool `json:"control"`
 			}
 			if json.Unmarshal(payload, &r) == nil {
-				t.deliverConsent(r.ID, r.Allow)
+				control := true
+				if r.Control != nil {
+					control = *r.Control
+				}
+				t.deliverConsent(r.ID, r.Allow, control)
 			}
 			continue
 		}
@@ -749,11 +847,30 @@ func (t *Transport) consentRequired() bool {
 	return false
 }
 
+// hostViewOnlyDefault reports whether this host grants VIEW-ONLY by default —
+// the host user's "View only mode" setting, mirrored to viewonly.txt by the app
+// exactly like consent.txt.
+//
+// This is the host's own wish about its own machine, so it is the default for
+// every incoming viewer. The consent prompt can still override it per
+// connection. Absent/"0" means full control, which preserves existing
+// behaviour for every host that has never touched the setting.
+func hostViewOnlyDefault() bool {
+	for _, p := range hostFlagPaths("viewonly.txt") {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		return strings.TrimSpace(string(data)) == "1"
+	}
+	return false
+}
+
 // askConsent asks the current worker to show an Accept/Deny dialog for viewer id
 // and blocks (up to 30 s) for the answer. Returns false on deny, timeout, or no
 // worker attached (e.g. lock screen / no interactive session — nobody to accept).
-func (t *Transport) askConsent(ctx context.Context, id string) bool {
-	ch := make(chan bool, 1)
+func (t *Transport) askConsent(ctx context.Context, id string) (allow bool, control bool) {
+	ch := make(chan consentAnswer, 1)
 	t.consentMu.Lock()
 	t.consentWaiters[id] = ch
 	t.consentMu.Unlock()
@@ -767,29 +884,36 @@ func (t *Transport) askConsent(ctx context.Context, id string) bool {
 	conn := t.worker
 	t.workerMu.Unlock()
 	if conn == nil {
-		return false // no interactive session to ask → deny
+		return false, false // no interactive session to ask → deny
 	}
 	if err := conn.WriteMessage(ipc.KindConsentRequest, []byte(id)); err != nil {
-		return false
+		return false, false
 	}
 	select {
-	case allow := <-ch:
-		return allow
+	case a := <-ch:
+		return a.allow, a.control
 	case <-time.After(30 * time.Second):
-		return false // no answer → deny
+		return false, false // no answer → deny
 	case <-ctx.Done():
-		return false
+		return false, false
 	}
 }
 
+// consentAnswer is the host user's decision: whether to admit the viewer at all,
+// and whether that viewer may CONTROL the machine or only watch it.
+type consentAnswer struct {
+	allow   bool
+	control bool
+}
+
 // deliverConsent routes a worker's Accept/Deny answer to the waiting askConsent.
-func (t *Transport) deliverConsent(id string, allow bool) {
+func (t *Transport) deliverConsent(id string, allow, control bool) {
 	t.consentMu.Lock()
 	ch := t.consentWaiters[id]
 	t.consentMu.Unlock()
 	if ch != nil {
 		select {
-		case ch <- allow:
+		case ch <- consentAnswer{allow: allow, control: control}:
 		default:
 		}
 	}

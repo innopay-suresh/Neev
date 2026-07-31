@@ -29,9 +29,10 @@ const (
 // the input desktop first (same reason the chat window / file picker do), or a
 // worker thread lands on a non-interactive desktop and nothing ever appears.
 //
-// Also returns whether the user ticked "Remember this decision", so the caller
-// can persist it and skip the prompt for this device next time.
-func showConsentDialog(viewerID string) (allow bool, remember bool) {
+// Also returns the ACCESS LEVEL the host granted (control vs view-only) and
+// whether the user ticked "Remember this decision", so the caller can persist it
+// and skip the prompt for this device next time.
+func showConsentDialog(viewerID string) (allow bool, control bool, remember bool) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	// Restore + close the desktop before unlocking, so this pooled thread isn't

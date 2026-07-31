@@ -179,6 +179,7 @@ func consentDispatch(hwnd, msg, wparam, lparam uintptr) uintptr {
 // consentResult carries the user's answer out of the window procedure.
 type consentResult struct {
 	allow    bool
+	control  bool // host granted CONTROL rather than view-only
 	remember bool
 	answered bool
 }
@@ -191,6 +192,7 @@ type consentWin struct {
 	// Hit rectangles, recomputed on every paint so they always match what is
 	// actually drawn (no second source of truth to drift).
 	rcAccept, rcDecline, rcRemember, rcCopy, rcClose cwRect
+	rcFullCtl, rcViewOnly                            cwRect
 	hotAccept, hotDecline                            bool
 	copied                                           bool
 }
@@ -199,8 +201,11 @@ func (c *consentWin) px(v int) int32 { return int32(float64(v) * c.scale) }
 
 // showConsentWindow displays the consent card and blocks until answered.
 // Returns allow + whether to remember the decision.
-func showConsentWindow(viewerID string) (allow bool, remember bool) {
+func showConsentWindow(viewerID string) (allow bool, control bool, remember bool) {
 	c := &consentWin{deviceID: prettyConsentID(viewerID), scale: 1}
+	// Default the access level to the host's own View-only setting, so the
+	// prompt opens on what this machine's owner already asked for.
+	c.res.control = !hostViewOnlyDefault()
 
 	// DPI: the worker is not per-monitor DPI aware, so use the desktop DC's
 	// logical pixel count. On a 150% display this keeps the card from rendering
@@ -237,8 +242,9 @@ func showConsentWindow(viewerID string) (allow bool, remember bool) {
 	})
 	className, _ := syscall.UTF16PtrFromString(consentClassName)
 
-	w := c.px(440)
-	h := c.px(384)
+	// Landscape card: information rail + artwork/access panel side by side.
+	w := c.px(800)
+	h := c.px(560)
 	sw, _, _ := procGetSystemMetricsCW.Call(cwSMCXScreen)
 	sh, _, _ := procGetSystemMetricsCW.Call(cwSMCYScreen)
 	x := (int32(sw) - w) / 2
@@ -256,7 +262,9 @@ func showConsentWindow(viewerID string) (allow bool, remember bool) {
 	if hwnd == 0 {
 		// Could not create the window: fall back to the stock box rather than
 		// silently auto-denying a legitimate connection.
-		return showConsentMessageBox(viewerID), false
+		// The stock fallback cannot offer an access selector, so fall back to the
+		// host's configured default rather than silently granting control.
+		return showConsentMessageBox(viewerID), !hostViewOnlyDefault(), false
 	}
 	c.hwnd = hwnd
 	// Route this window's messages to THIS prompt, and stop routing them when it
@@ -286,7 +294,7 @@ func showConsentWindow(viewerID string) (allow bool, remember bool) {
 		}
 	}
 	procDestroyWindowCW.Call(hwnd)
-	return c.res.allow, c.res.remember
+	return c.res.allow, c.res.control, c.res.remember
 }
 
 func ptInRect(r cwRect, x, y int32) bool {
@@ -330,6 +338,12 @@ func (c *consentWin) proc(hwnd, msg, wparam, lparam uintptr) uintptr {
 			c.answer(false)
 		case ptInRect(c.rcRemember, x, y):
 			c.res.remember = !c.res.remember
+			procInvalidateRectCW.Call(hwnd, 0, 0)
+		case ptInRect(c.rcFullCtl, x, y):
+			c.res.control = true
+			procInvalidateRectCW.Call(hwnd, 0, 0)
+		case ptInRect(c.rcViewOnly, x, y):
+			c.res.control = false
 			procInvalidateRectCW.Call(hwnd, 0, 0)
 		case ptInRect(c.rcCopy, x, y):
 			c.copyDeviceID()
@@ -463,18 +477,16 @@ func (c *consentWin) paint(hwnd uintptr) {
 	var rc cwRect
 	procGetClientRectCW.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
 
-	// Card background + a hairline frame (the window is a borderless popup).
 	bg, _, _ := procCreateSolidBrushCW.Call(cwColCard)
 	procFillRectCW.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)
 	procDeleteObjectCW.Call(bg)
 	c.roundRect(hdc, rc, c.px(2), cwColCard, cwColBorderStr, true)
 
-	pad := c.px(26)
-	fTitle := c.font(21, true, false)
-	fH1 := c.font(19, true, false)
+	fTitle := c.font(16, true, false)
+	fH1 := c.font(20, true, false)
 	fBody := c.font(12, false, false)
 	fLabel := c.font(11, true, false)
-	fID := c.font(20, true, true)
+	fID := c.font(24, true, true)
 	fBtn := c.font(13, true, false)
 	fSmall := c.font(11, false, false)
 	defer func() {
@@ -483,14 +495,21 @@ func (c *consentWin) paint(hwnd uintptr) {
 		}
 	}()
 
-	// ---- header: brand mark + wordmark + close ----
-	top := c.px(18)
+	pad := c.px(22)
+	// Two columns: a tinted information rail on the left, the access panel and
+	// artwork on the right — the approved landscape layout.
+	railW := c.px(250)
+	footerH := c.px(74)
+
+	// ---- header -------------------------------------------------------
+	top := c.px(16)
 	markSize := c.px(22)
 	mark := cwRect{pad, top, pad + markSize, top + markSize}
 	c.roundRect(hdc, mark, c.px(6), cwColAccent, 0, false)
-	c.text(hdc, "N", mark, c.font(13, true, false), cwColCard, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+	c.text(hdc, "N", mark, c.font(13, true, false), cwColCard,
+		cwDTCenter|cwDTVCenter|cwDTSingleLine)
 	c.text(hdc, "Neev Remote",
-		cwRect{pad + markSize + c.px(9), top - c.px(1), rc.Right - pad, top + markSize},
+		cwRect{pad + markSize + c.px(9), top, rc.Right - pad, top + markSize},
 		fTitle, cwColInk, cwDTLeft|cwDTVCenter|cwDTSingleLine)
 
 	closeSz := c.px(24)
@@ -499,86 +518,118 @@ func (c *consentWin) paint(hwnd uintptr) {
 	c.line(hdc, cx-k, cy-k, cx+k, cy+k, cwColInkSoft)
 	c.line(hdc, cx+k, cy-k, cx-k, cy+k, cwColInkSoft)
 
-	// ---- icon medallion + heading ----
-	medY := top + c.px(42)
-	medSz := c.px(84)
-	c.medallion(hdc, pad, medY, medSz)
+	railTop := top + markSize + c.px(14)
+	railBottom := rc.Bottom - footerH
 
-	textLeft := pad + medSz + c.px(22)
-	c.text(hdc, "Connection Request",
-		cwRect{textLeft, medY - c.px(2), rc.Right - pad, medY + c.px(28)},
+	// ---- left rail ----------------------------------------------------
+	rail := cwRect{pad, railTop, pad + railW, railBottom}
+	c.roundRect(hdc, rail, c.px(12), cwColTint, 0, false)
+
+	rx := rail.Left + c.px(18)
+	rw := rail.Right - c.px(18)
+
+	// Avatar medallion.
+	avSz := c.px(74)
+	c.avatarGlyph(hdc, rx, rail.Top+c.px(18), avSz)
+
+	ty := rail.Top + c.px(18) + avSz + c.px(16)
+	c.text(hdc, "Incoming Connection", cwRect{rx, ty, rw, ty + c.px(26)},
 		fH1, cwColInk, cwDTLeft|cwDTVCenter|cwDTSingleLine)
-	c.text(hdc, "A remote device is requesting to connect and control this computer.",
-		cwRect{textLeft, medY + c.px(28), rc.Right - pad, medY + c.px(84)},
+	c.text(hdc, "A remote device is requesting to connect to your computer.",
+		cwRect{rx, ty + c.px(28), rw, ty + c.px(76)},
 		fBody, cwColInkSoft, cwDTLeft|cwDTWordBreak)
 
-	// ---- device id ----
-	idY := medY + medSz + c.px(14)
-	c.text(hdc, "Device ID", cwRect{textLeft, idY, rc.Right - pad, idY + c.px(16)},
-		fLabel, cwColInk, cwDTLeft|cwDTVCenter|cwDTSingleLine)
-	idRow := cwRect{textLeft, idY + c.px(17), rc.Right - pad, idY + c.px(45)}
+	// Device id.
+	idy := ty + c.px(84)
+	c.text(hdc, "Remote Device ID", cwRect{rx, idy, rw, idy + c.px(16)},
+		fLabel, cwColInkSoft, cwDTLeft|cwDTVCenter|cwDTSingleLine)
+	idRow := cwRect{rx, idy + c.px(18), rw, idy + c.px(50)}
 	c.text(hdc, c.deviceID, idRow, fID, cwColAccent, cwDTLeft|cwDTVCenter|cwDTSingleLine)
-
-	// Copy button, parked to the right of the id.
-	copySz := c.px(22)
-	copyX := textLeft + c.px(148)
-	c.rcCopy = cwRect{copyX, idRow.Top + c.px(3), copyX + copySz, idRow.Top + c.px(3) + copySz}
+	copySz := c.px(24)
+	c.rcCopy = cwRect{rw - copySz, idRow.Top + c.px(4), rw, idRow.Top + c.px(4) + copySz}
 	c.copyGlyph(hdc, c.rcCopy)
 	if c.copied {
-		c.text(hdc, "Copied",
-			cwRect{c.rcCopy.Right + c.px(6), c.rcCopy.Top, rc.Right - pad, c.rcCopy.Bottom},
+		c.text(hdc, "Copied", cwRect{rx, idRow.Bottom, rw, idRow.Bottom + c.px(14)},
 			fSmall, cwColInkSoft, cwDTLeft|cwDTVCenter|cwDTSingleLine)
 	}
 
-	// ---- divider + security note ----
-	secY := idRow.Bottom + c.px(14)
-	c.line(hdc, pad, secY, rc.Right-pad, secY, cwColBorder)
-
-	noteY := secY + c.px(16)
-	c.shieldGlyph(hdc, pad+c.px(4), noteY+c.px(2), c.px(20))
-	noteLeft := pad + c.px(36)
-	c.text(hdc, "Only allow if you recognise this request.",
-		cwRect{noteLeft, noteY, rc.Right - pad, noteY + c.px(18)},
-		fLabel, cwColInk, cwDTLeft|cwDTVCenter|cwDTSingleLine)
-	c.text(hdc, "If you don't recognise this device, do not allow the connection.",
-		cwRect{noteLeft, noteY + c.px(19), rc.Right - pad, noteY + c.px(56)},
+	// Trust note, boxed.
+	nb := cwRect{rx - c.px(8), idRow.Bottom + c.px(14), rw + c.px(8), rail.Bottom - c.px(14)}
+	c.roundRect(hdc, nb, c.px(10), cwColCard, cwColBorder, true)
+	c.shieldGlyph(hdc, nb.Left+c.px(12), nb.Top+c.px(12), c.px(18))
+	nl := nb.Left + c.px(38)
+	c.text(hdc, "Allow only if you trust this device.",
+		cwRect{nl, nb.Top + c.px(10), nb.Right - c.px(10), nb.Top + c.px(44)},
+		fLabel, cwColInk, cwDTLeft|cwDTWordBreak)
+	c.text(hdc, "If you don't recognise this device, deny the request to keep your computer safe.",
+		cwRect{nl, nb.Top + c.px(46), nb.Right - c.px(10), nb.Bottom - c.px(8)},
 		fSmall, cwColInkSoft, cwDTLeft|cwDTWordBreak)
 
-	// ---- footer: remember + actions ----
-	footY := rc.Bottom - c.px(64)
-	c.line(hdc, pad, footY-c.px(12), rc.Right-pad, footY-c.px(12), cwColBorder)
+	// ---- right panel: artwork + access level ---------------------------
+	px0 := rail.Right + c.px(20)
+	panel := cwRect{px0, railTop, rc.Right - pad, railBottom}
+	c.connectionArt(hdc, panel)
+
+	// Access level. This is the HOST's decision and the whole point of the
+	// prompt: a viewer cannot escalate itself later.
+	title := "Full Control Access"
+	sub := "The remote user will be able to see your screen and control your computer."
+	if !c.res.control {
+		title = "View Only Access"
+		sub = "The remote user will be able to see your screen but NOT control it."
+	}
+	ay := panel.Bottom - c.px(112)
+	c.text(hdc, title, cwRect{panel.Left, ay, panel.Right, ay + c.px(26)},
+		fH1, cwColInk, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+	c.text(hdc, sub, cwRect{panel.Left + c.px(16), ay + c.px(28), panel.Right - c.px(16), ay + c.px(70)},
+		fSmall, cwColInkSoft, cwDTCenter|cwDTWordBreak)
+
+	// Segmented selector.
+	segW := c.px(150)
+	segH := c.px(30)
+	segY := panel.Bottom - c.px(36)
+	midX := (panel.Left + panel.Right) / 2
+	c.rcFullCtl = cwRect{midX - segW - c.px(4), segY, midX - c.px(4), segY + segH}
+	c.rcViewOnly = cwRect{midX + c.px(4), segY, midX + c.px(4) + segW, segY + segH}
+	c.segment(hdc, c.rcFullCtl, "Full control", c.res.control, fSmall)
+	c.segment(hdc, c.rcViewOnly, "View only", !c.res.control, fSmall)
+
+	// ---- footer --------------------------------------------------------
+	c.line(hdc, pad, rc.Bottom-footerH+c.px(6), rc.Right-pad, rc.Bottom-footerH+c.px(6), cwColBorder)
 
 	boxSz := c.px(16)
-	box := cwRect{pad, footY + c.px(10), pad + boxSz, footY + c.px(10) + boxSz}
+	fy := rc.Bottom - footerH + c.px(26)
+	box := cwRect{pad, fy, pad + boxSz, fy + boxSz}
 	fill := cwColCard
 	if c.res.remember {
 		fill = cwColAccent
 	}
 	c.roundRect(hdc, box, c.px(4), fill, cwColBorderStr, true)
 	if c.res.remember {
-		// Check mark.
 		c.line(hdc, box.Left+c.px(4), (box.Top+box.Bottom)/2, box.Left+c.px(7), box.Bottom-c.px(4), cwColCard)
 		c.line(hdc, box.Left+c.px(7), box.Bottom-c.px(4), box.Right-c.px(3), box.Top+c.px(4), cwColCard)
 	}
-	lblRect := cwRect{box.Right + c.px(9), box.Top - c.px(2), pad + c.px(190), box.Bottom + c.px(2)}
-	c.text(hdc, "Remember this decision", lblRect, fSmall, cwColInkSoft,
+	lbl := cwRect{box.Right + c.px(9), box.Top - c.px(3), pad + c.px(260), box.Bottom + c.px(2)}
+	c.text(hdc, "Remember my decision for this device", lbl, fSmall, cwColInk,
 		cwDTLeft|cwDTVCenter|cwDTSingleLine)
-	// The whole row toggles, not just the 16px box.
-	c.rcRemember = cwRect{box.Left, box.Top - c.px(4), lblRect.Right, box.Bottom + c.px(4)}
+	c.text(hdc, "You can change this later in settings.",
+		cwRect{box.Right + c.px(9), box.Bottom, pad + c.px(300), box.Bottom + c.px(16)},
+		fSmall, cwColInkSoft, cwDTLeft|cwDTVCenter|cwDTSingleLine)
+	c.rcRemember = cwRect{box.Left, box.Top - c.px(4), lbl.Right, box.Bottom + c.px(4)}
 
-	btnH := c.px(38)
-	btnY := footY + c.px(1)
-	accW := c.px(104)
-	decW := c.px(96)
+	btnH := c.px(40)
+	btnY := rc.Bottom - footerH + c.px(18)
+	accW := c.px(150)
+	decW := c.px(140)
 	c.rcAccept = cwRect{rc.Right - pad - accW, btnY, rc.Right - pad, btnY + btnH}
-	c.rcDecline = cwRect{c.rcAccept.Left - c.px(10) - decW, btnY, c.rcAccept.Left - c.px(10), btnY + btnH}
+	c.rcDecline = cwRect{c.rcAccept.Left - c.px(12) - decW, btnY, c.rcAccept.Left - c.px(12), btnY + btnH}
 
 	accFill := cwColAccent
 	if c.hotAccept {
 		accFill = cwColAccentDim
 	}
 	c.roundRect(hdc, c.rcAccept, c.px(9), accFill, 0, false)
-	c.text(hdc, "Accept", c.rcAccept, fBtn, cwColCard, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+	c.text(hdc, "Allow", c.rcAccept, fBtn, cwColCard, cwDTCenter|cwDTVCenter|cwDTSingleLine)
 
 	decFill := cwColCard
 	if c.hotDecline {
@@ -586,6 +637,109 @@ func (c *consentWin) paint(hwnd uintptr) {
 	}
 	c.roundRect(hdc, c.rcDecline, c.px(9), decFill, cwColBorderStr, true)
 	c.text(hdc, "Decline", c.rcDecline, fBtn, cwColInk, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+}
+
+// segment draws one option of the access-level selector.
+func (c *consentWin) segment(hdc uintptr, r cwRect, label string, on bool, f uintptr) {
+	fill, ink, border := cwColCard, cwColInkSoft, cwColBorderStr
+	if on {
+		fill, ink, border = cwColTint, cwColAccent, cwColAccent
+	}
+	c.roundRect(hdc, r, c.px(8), fill, border, true)
+	c.text(hdc, label, r, f, ink, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+}
+
+// avatarGlyph draws the person-in-a-ring mark on the information rail.
+func (c *consentWin) avatarGlyph(hdc uintptr, x, y, size int32) {
+	ring, _, _ := procCreatePenCW.Call(0, uintptr(c.px(1)), cwColAccent)
+	hollow, _, _ := procCreateSolidBrushCW.Call(cwColTint)
+	op, _, _ := procSelectObjectCW.Call(hdc, ring)
+	ob, _, _ := procSelectObjectCW.Call(hdc, hollow)
+	procEllipseCW.Call(hdc, uintptr(x), uintptr(y), uintptr(x+size), uintptr(y+size))
+	procSelectObjectCW.Call(hdc, op)
+	procSelectObjectCW.Call(hdc, ob)
+	procDeleteObjectCW.Call(ring)
+	procDeleteObjectCW.Call(hollow)
+
+	cx := x + size/2
+	hr := c.px(11)
+	hy := y + size/2 - c.px(6)
+	brush, _, _ := procCreateSolidBrushCW.Call(cwColAccent)
+	pen, _, _ := procCreatePenCW.Call(5, 0, 0)
+	ob2, _, _ := procSelectObjectCW.Call(hdc, brush)
+	op2, _, _ := procSelectObjectCW.Call(hdc, pen)
+	procEllipseCW.Call(hdc, uintptr(cx-hr), uintptr(hy-hr), uintptr(cx+hr), uintptr(hy+hr))
+	procSelectObjectCW.Call(hdc, ob2)
+	procSelectObjectCW.Call(hdc, op2)
+	procDeleteObjectCW.Call(brush)
+	procDeleteObjectCW.Call(pen)
+	c.roundRect(hdc, cwRect{cx - c.px(19), hy + c.px(8), cx + c.px(19), y + size - c.px(8)},
+		c.px(12), cwColAccent, 0, false)
+}
+
+// connectionArt draws the two-device link: this computer, the remote device, and
+// the connection between them. Vector geometry rather than a bitmap so it stays
+// sharp at any DPI and needs no asset pipeline in the worker.
+func (c *consentWin) connectionArt(hdc uintptr, r cwRect) {
+	w := r.Right - r.Left
+	cy := r.Top + c.px(96)
+
+	// Remote laptop (left, filled accent = the device asking).
+	lw, lh := c.px(120), c.px(76)
+	lx := r.Left + c.px(10)
+	c.deviceGlyph(hdc, lx, cy-lh/2, lw, lh, true)
+
+	// This computer (right, outlined = you).
+	rw2, rh2 := c.px(110), c.px(70)
+	rx2 := r.Right - rw2 - c.px(10)
+	c.deviceGlyph(hdc, rx2, cy-rh2/2-c.px(14), rw2, rh2, false)
+
+	// Link with a node in the middle.
+	midY := cy
+	c.line(hdc, lx+lw+c.px(6), midY, rx2-c.px(6), midY, cwColBorderStr)
+	nodeR := c.px(16)
+	nx := r.Left + w/2
+	brush, _, _ := procCreateSolidBrushCW.Call(cwColTint)
+	pen, _, _ := procCreatePenCW.Call(0, uintptr(c.px(1)), cwColAccent)
+	ob, _, _ := procSelectObjectCW.Call(hdc, brush)
+	op, _, _ := procSelectObjectCW.Call(hdc, pen)
+	procEllipseCW.Call(hdc, uintptr(nx-nodeR), uintptr(midY-nodeR),
+		uintptr(nx+nodeR), uintptr(midY+nodeR))
+	procSelectObjectCW.Call(hdc, ob)
+	procSelectObjectCW.Call(hdc, op)
+	procDeleteObjectCW.Call(brush)
+	procDeleteObjectCW.Call(pen)
+	// A small lock in the node: the link is encrypted.
+	c.roundRect(hdc, cwRect{nx - c.px(5), midY - c.px(1), nx + c.px(5), midY + c.px(7)},
+		c.px(2), cwColAccent, 0, false)
+	c.line(hdc, nx-c.px(3), midY-c.px(2), nx-c.px(3), midY-c.px(6), cwColAccent)
+	c.line(hdc, nx-c.px(3), midY-c.px(6), nx+c.px(3), midY-c.px(6), cwColAccent)
+	c.line(hdc, nx+c.px(3), midY-c.px(6), nx+c.px(3), midY-c.px(2), cwColAccent)
+}
+
+// deviceGlyph draws a laptop: screen + base. filled=accent body, else outlined.
+func (c *consentWin) deviceGlyph(hdc uintptr, x, y, w, h int32, filled bool) {
+	screenH := h - c.px(10)
+	if filled {
+		c.roundRect(hdc, cwRect{x, y, x + w, y + screenH}, c.px(7), cwColAccent, 0, false)
+		// Inset "content" lines so it reads as a screen, not a slab.
+		for i := int32(0); i < 3; i++ {
+			ly := y + c.px(14) + i*c.px(12)
+			c.line(hdc, x+c.px(12), ly, x+w-c.px(14), ly, cwColTint)
+		}
+	} else {
+		c.roundRect(hdc, cwRect{x, y, x + w, y + screenH}, c.px(7), cwColCard, cwColBorderStr, true)
+		for i := int32(0); i < 3; i++ {
+			ly := y + c.px(14) + i*c.px(12)
+			c.line(hdc, x+c.px(12), ly, x+w-c.px(14), ly, cwColBorder)
+		}
+	}
+	baseFill := cwColAccent
+	if !filled {
+		baseFill = cwColBorderStr
+	}
+	c.roundRect(hdc, cwRect{x - c.px(6), y + screenH + c.px(2), x + w + c.px(6), y + screenH + c.px(8)},
+		c.px(3), baseFill, 0, false)
 }
 
 // medallion draws the tinted circle with a monitor-and-person glyph.

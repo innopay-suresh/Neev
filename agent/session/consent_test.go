@@ -55,17 +55,83 @@ func TestConsentDecisionRoundTrip(t *testing.T) {
 	}
 
 	// A remembered DECLINE must persist, not just an accept.
-	saveConsentDecision("ctrl-111222333", false)
+	saveConsentDecision("ctrl-111222333", false, false)
 	consentMu.Lock()
 	consentCache = nil // force a re-read from disk
 	consentMu.Unlock()
 
-	allow, ok := rememberedConsent("111222333") // different form, same device
+	d, ok := rememberedConsent("111222333") // different form, same device
 	if !ok {
 		t.Fatal("the decision should have been remembered")
 	}
-	if allow {
+	if d.Allow {
 		t.Error("a remembered Decline must stay a decline")
+	}
+}
+
+// A remembered VIEW-ONLY grant must stay view-only. Remembering that a device
+// was admitted but silently upgrading it to full control would hand a watcher
+// the keyboard on its next connection.
+func TestRememberedGrantKeepsAccessLevel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("LOCALAPPDATA", dir)
+	t.Setenv("APPDATA", dir)
+	t.Setenv("XDG_DATA_HOME", dir)
+	consentMu.Lock()
+	consentCache = nil
+	consentMu.Unlock()
+	t.Cleanup(func() {
+		consentMu.Lock()
+		consentCache = nil
+		consentMu.Unlock()
+	})
+
+	saveConsentDecision("ctrl-444555666", true, false) // allowed, VIEW ONLY
+	consentMu.Lock()
+	consentCache = nil
+	consentMu.Unlock()
+
+	d, ok := rememberedConsent("444555666")
+	if !ok || !d.Allow {
+		t.Fatal("the device should still be admitted")
+	}
+	if d.Control {
+		t.Error("a remembered view-only grant must NOT become full control")
+	}
+}
+
+// isControlAttempt decides what host-side view-only actually blocks.
+func TestIsControlAttempt(t *testing.T) {
+	blocked := []string{
+		`{"k":"mv","x":0.5,"y":0.5}`,
+		`{"k":"btn","b":0,"d":true}`,
+		`{"k":"whl","dx":0,"dy":3}`,
+		`{"k":"key","u":4,"d":true}`,
+		`{"k":"cmd","c":"lock"}`,
+		`{"k":"cmd","c":"reboot"}`,
+		`{"k":"cmd","c":"logoff"}`,
+		`{"k":"cmd","c":"privacy","on":true}`,
+		`{"k":"cmd","c":"sas"}`,
+	}
+	for _, p := range blocked {
+		if !isControlAttempt([]byte(p)) {
+			t.Errorf("%s should be treated as control", p)
+		}
+	}
+	// A watcher must still be useful: these keep working while view-only.
+	allowed := []string{
+		`{"k":"clip","t":"hello"}`,
+		`{"k":"chat","t":"hi"}`,
+		`{"k":"ft","t":"offer"}`,
+		`{"k":"setmon","id":"1"}`,
+		`{"k":"mons"}`,
+		`not json at all`,
+	}
+	for _, p := range allowed {
+		if isControlAttempt([]byte(p)) {
+			t.Errorf("%s must NOT be blocked by view-only", p)
+		}
 	}
 }
 

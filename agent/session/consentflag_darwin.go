@@ -24,11 +24,14 @@ import (
 // reads the CONSOLE user's copy (root can read any user's file). The
 // system-wide path is still checked first so an admin or MDM can force the
 // setting on for every account.
-func consentFlagPaths() []string {
-	paths := []string{filepath.Join(dataDir(), "consent.txt")}
+func consentFlagPaths() []string { return hostFlagPaths("consent.txt") }
+
+// hostFlagPaths lists every location a host setting flag may live.
+func hostFlagPaths(name string) []string {
+	paths := []string{filepath.Join(dataDir(), name)}
 	if home := consoleUserHome(); home != "" {
 		paths = append(paths,
-			filepath.Join(home, "Library", "Application Support", "NeevRemote", "consent.txt"))
+			filepath.Join(home, "Library", "Application Support", "NeevRemote", name))
 	}
 	return paths
 }

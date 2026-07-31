@@ -213,21 +213,23 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					// don't ask again. Both directions -- a remembered Decline
 					// auto-declines just as a remembered Accept auto-accepts.
 					if remembered, ok := rememberedConsent(id); ok {
-						reply, _ := json.Marshal(
-							map[string]interface{}{"id": id, "allow": remembered})
+						// A remembered decision also remembers the ACCESS LEVEL granted.
+						reply, _ := json.Marshal(map[string]interface{}{
+							"id": id, "allow": remembered.Allow, "control": remembered.Control})
 						_ = ic.WriteMessage(ipc.KindConsentReply, reply)
-						log.Info().Str("from", id).Bool("allow", remembered).
+						log.Info().Str("from", id).Bool("allow", remembered.Allow).
+						Bool("control", remembered.Control).
 							Msg("worker: consent auto-answered from a remembered decision")
 						return
 					}
-					allow, remember := showConsentDialog(id)
-					reply, _ := json.Marshal(
-						map[string]interface{}{"id": id, "allow": allow})
+					allow, control, remember := showConsentDialog(id)
+					reply, _ := json.Marshal(map[string]interface{}{
+						"id": id, "allow": allow, "control": control})
 					_ = ic.WriteMessage(ipc.KindConsentReply, reply)
 					if remember {
-						saveConsentDecision(id, allow)
+						saveConsentDecision(id, allow, control)
 					}
-					log.Info().Str("from", id).Bool("allow", allow).
+					log.Info().Str("from", id).Bool("allow", allow).Bool("control", control).
 						Bool("remember", remember).Msg("worker: consent answered")
 				}(vid)
 			}
