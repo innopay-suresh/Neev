@@ -457,6 +457,38 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-31 — CRITICAL: the r106 native consent prompt worked only ONCE per
+  worker, then denied every connection (r108).** Reported from the field as
+  "connects only 1 time; closing and reopening the app doesn't help" — the
+  viewer sat on "Negotiating display quality" forever. Restarting the viewer
+  could never help: the wedge was in the HOST worker process. Two independent
+  cross-prompt state leaks, both mine, both shipped in r106/r107:
+  (1) The window class was registered PER PROMPT with a fresh
+  `syscall.NewCallback` closed over that `consentWin`. The second
+  `RegisterClassW` fails with ERROR_CLASS_ALREADY_EXISTS (the code comment
+  asserting this "is fine" was wrong), so the class kept the FIRST callback and
+  every later window was driven by the first prompt's state — Accept set
+  `answered` on a struct nobody was watching, the loop never exited,
+  `showConsentDialog` never returned, and the transport denied on its 30s
+  timeout. Also leaked one callback per prompt against a small process-wide cap.
+  (2) `answer()` and WM_DESTROY called `PostQuitMessage`; WM_QUIT lands on the
+  THREAD queue, and `showConsentDialog` locks/unlocks its OS thread, so a pooled
+  thread could carry a stale WM_QUIT into the next prompt, whose `GetMessage`
+  returns 0 immediately and denies. Fixes: register the class exactly once
+  (`sync.Once`) behind one stable window procedure that resolves the prompt by
+  hwnd, and never post WM_QUIT (every answer arrives from a dispatched message,
+  so the loop exits on its own). Only reachable with "Ask before allowing
+  connections" ON.
+  **LD-28 (new): a process-wide Win32 window class is registered ONCE, behind a
+  stable window procedure that resolves per-window state by hwnd. Never close a
+  wndproc over one dialog's state, and never PostQuitMessage from a dialog that
+  runs on a pooled/locked OS thread.**
+  Two reporting lessons recorded: view-only does NOT touch the WebRTC/peer setup
+  and cannot stop the remote stream, so that correlation was incidental; and the
+  connect screen's four stage checkmarks are a COSMETIC 420ms timer that holds
+  on the last stage until the stream arrives — they indicate nothing about real
+  progress and are a Data Honesty violation still to be fixed.
+
 - **2026-07-31 — macOS consent prompt implemented; a Mac daemon host no longer
   auto-accepts every connection (r107). Pending hardware validation.** Found
   while answering "will the popup work on Mac too?" — it would not have, and
