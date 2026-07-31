@@ -3,6 +3,7 @@
 package session
 
 import (
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -149,6 +150,32 @@ var (
 	cwColBorderStr = rgb(0xD0, 0xC6, 0xAC)
 )
 
+const consentClassName = "NeevConsentWindow"
+
+// The window class is process-wide and can only be registered once, so its
+// window procedure must be a single stable callback that routes each message to
+// the right prompt. Prompts are modal and serial in practice, but keying by
+// hwnd keeps that from being a correctness assumption.
+var (
+	consentClassOnce sync.Once
+	consentWinsMu    sync.Mutex
+	consentWins      = map[uintptr]*consentWin{}
+)
+
+// consentDispatch is the one registered window procedure. Messages that arrive
+// before the hwnd is registered (WM_NCCREATE/WM_CREATE, sent inside
+// CreateWindowEx) simply fall through to the default handler.
+func consentDispatch(hwnd, msg, wparam, lparam uintptr) uintptr {
+	consentWinsMu.Lock()
+	c := consentWins[hwnd]
+	consentWinsMu.Unlock()
+	if c == nil {
+		r, _, _ := procDefWindowProcCW.Call(hwnd, msg, wparam, lparam)
+		return r
+	}
+	return c.proc(hwnd, msg, wparam, lparam)
+}
+
 // consentResult carries the user's answer out of the window procedure.
 type consentResult struct {
 	allow    bool
@@ -185,21 +212,30 @@ func showConsentWindow(viewerID string) (allow bool, remember bool) {
 		procReleaseDCCW.Call(0, dc)
 	}
 
-	className, _ := syscall.UTF16PtrFromString("NeevConsentWindow")
-	wndProc := syscall.NewCallback(func(hwnd, msg, wparam, lparam uintptr) uintptr {
-		return c.proc(hwnd, msg, wparam, lparam)
+	// Register the class exactly ONCE, with a dispatcher that finds the window's
+	// state by hwnd.
+	//
+	// This used to build a fresh syscall.NewCallback per prompt, closed over THIS
+	// consentWin, and re-register the class each time. The second prompt's
+	// RegisterClassW fails with ERROR_CLASS_ALREADY_EXISTS, so the class kept the
+	// FIRST callback — every later window was driven by the first prompt's state.
+	// Accept then set `answered` on a struct nobody was watching, this function's
+	// message loop never exited, showConsentDialog never returned, and the
+	// transport denied the connection on its 30s timeout. Symptom: the host
+	// accepted exactly ONE connection per worker lifetime and refused every one
+	// after it, which no amount of restarting the VIEWER could clear.
+	// (It also leaked a callback per prompt against a small process-wide cap.)
+	consentClassOnce.Do(func() {
+		className, _ := syscall.UTF16PtrFromString(consentClassName)
+		cursor, _, _ := procLoadCursorCW.Call(0, cwIDCArrow)
+		bg, _, _ := procCreateSolidBrushCW.Call(cwColCard)
+		wc := cwWndClass{
+			WndProc: syscall.NewCallback(consentDispatch),
+			Cursor:  cursor, Background: bg, ClassName: className,
+		}
+		procRegisterClassCW.Call(uintptr(unsafe.Pointer(&wc)))
 	})
-	cursor, _, _ := procLoadCursorCW.Call(0, cwIDCArrow)
-	bg, _, _ := procCreateSolidBrushCW.Call(cwColCard)
-	wc := cwWndClass{
-		WndProc:    wndProc,
-		Cursor:     cursor,
-		Background: bg,
-		ClassName:  className,
-	}
-	// A repeat connection re-registers the same class; that returns 0 with
-	// ERROR_CLASS_ALREADY_EXISTS, which is fine — CreateWindowEx still works.
-	procRegisterClassCW.Call(uintptr(unsafe.Pointer(&wc)))
+	className, _ := syscall.UTF16PtrFromString(consentClassName)
 
 	w := c.px(440)
 	h := c.px(384)
@@ -223,6 +259,18 @@ func showConsentWindow(viewerID string) (allow bool, remember bool) {
 		return showConsentMessageBox(viewerID), false
 	}
 	c.hwnd = hwnd
+	// Route this window's messages to THIS prompt, and stop routing them when it
+	// closes so a stale entry can never drive a later window.
+	consentWinsMu.Lock()
+	consentWins[hwnd] = c
+	consentWinsMu.Unlock()
+	defer func() {
+		consentWinsMu.Lock()
+		delete(consentWins, hwnd)
+		consentWinsMu.Unlock()
+	}()
+	// The window is created before this point, so the first paint happens now.
+	procInvalidateRectCW.Call(hwnd, 0, 1)
 	procSetForegroundWinCW.Call(hwnd)
 
 	var msg cwMsg
@@ -245,10 +293,16 @@ func ptInRect(r cwRect, x, y int32) bool {
 	return x >= r.Left && x < r.Right && y >= r.Top && y < r.Bottom
 }
 
+// answer records the choice. It deliberately does NOT PostQuitMessage: WM_QUIT
+// goes on the THREAD's queue, and showConsentDialog locks/unlocks its OS thread
+// so the Go runtime can hand that same thread to a later prompt. A leftover
+// WM_QUIT would make the next prompt's GetMessage return 0 immediately, exiting
+// its loop unanswered and denying the connection. Every answer arrives from a
+// dispatched message, so the loop notices `answered` right after
+// DispatchMessage returns and exits on its own.
 func (c *consentWin) answer(allow bool) {
 	c.res.allow = allow
 	c.res.answered = true
-	procPostQuitMessageCW.Call(0)
 }
 
 func (c *consentWin) proc(hwnd, msg, wparam, lparam uintptr) uintptr {
@@ -298,7 +352,10 @@ func (c *consentWin) proc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		c.answer(false)
 		return 0
 	case cwWMDestroy:
-		procPostQuitMessageCW.Call(0)
+		// Same reason as answer(): posting WM_QUIT here would outlive this prompt
+		// on a pooled thread. If the window is going away unanswered, treat it as
+		// a refusal so the loop exits.
+		c.res.answered = true
 		return 0
 	}
 	r, _, _ := procDefWindowProcCW.Call(hwnd, msg, wparam, lparam)
