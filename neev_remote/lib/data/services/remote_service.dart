@@ -281,7 +281,39 @@ class RemoteService extends ChangeNotifier {
   void setViewOnly(bool value) {
     if (viewerViewOnly == value) return;
     viewerViewOnly = value;
+    _applyViewOnlyToKeyboardHook();
     notifyListeners();
+  }
+
+  /// The PERSISTED view-only setting ("View Only" in the session-mode selector),
+  /// mirrored here from settingsProvider. The widget layer already ORs the two,
+  /// but the OS keyboard hook and the shortcut buttons never go through the
+  /// widget, so the service needs to see it too.
+  bool settingsViewOnly = false;
+  set viewOnlySetting(bool value) {
+    if (settingsViewOnly == value) return;
+    settingsViewOnly = value;
+    _applyViewOnlyToKeyboardHook();
+  }
+
+  /// Effective view-only: either source disables sending input.
+  bool get inputBlocked => settingsViewOnly || viewerViewOnly;
+
+  /// Stop CAPTURING keys while view-only, not merely stop forwarding them. The
+  /// hook is a low-level OS hook that swallows the keystroke locally, so leaving
+  /// it armed in view-only would eat the user's own typing on their own machine
+  /// while sending nothing.
+  void _applyViewOnlyToKeyboardHook() {
+    if (inputBlocked) {
+      _keyHook.setCapture(false);
+      // Turning view-only ON mid-session while a key is physically held would
+      // strand that key down on the host forever, because the key-UP is now
+      // blocked. releaseHeldViewerKeys() deliberately writes past the gate for
+      // exactly this reason — a stuck Ctrl/Alt is worse than a late key-up.
+      releaseHeldViewerKeys();
+    } else if (keyboardCapture) {
+      _keyHook.setCapture(true);
+    }
   }
 
   // The peer sent an import request — open a picker here and send the choice.
@@ -1089,6 +1121,24 @@ class RemoteService extends ChangeNotifier {
   /// doesn't lag); buttons, wheel and keys stay on the reliable channel so they
   /// are never lost or reordered.
   void sendViewerInput(InputEvent event) {
+    // VIEW-ONLY ENFORCEMENT. This is the one place every input path funnels
+    // through, so it is the only place the gate actually holds. The widget-level
+    // gate (RemoteViewWidget only wires its pointer/Focus listeners when
+    // !viewOnly) covers the mouse, but two producers never touch the widget and
+    // so bypassed it entirely: the OS-level keyboard hook (Windows AND macOS),
+    // which forwarded every keystroke, and sendKeyCombo() from the shortcuts
+    // menu (Ctrl+Alt+Del, Win+R, Alt+Tab). The host deliberately does not gate
+    // input (see the note in the isHost branch below), so anything sent from
+    // here is executed on the remote machine — which is why "View Only" still
+    // allowed typing and shortcuts on every platform pair.
+    if (inputBlocked) {
+      final now = _inputClock.elapsedMilliseconds;
+      if (now - _lastViewOnlyDropLogMs > 1000) {
+        _lastViewOnlyDropLogMs = now;
+        DiagLog.log('viewer', 'input ${event.kind} blocked — view-only is on');
+      }
+      return;
+    }
     // Track which keys the host currently believes are held so we can force a
     // release if our window loses focus (see [releaseHeldViewerKeys]). Both
     // input paths — the video's Focus handler and the Windows keyboard hook —
@@ -1124,6 +1174,7 @@ class RemoteService extends ChangeNotifier {
   }
 
   int _lastInputDropLogMs = -10000;
+  int _lastViewOnlyDropLogMs = -10000;
 
   // Keys the host currently believes are pressed (by HID usage). Used to release
   // a modifier whose key-up was swallowed by a focus change.
@@ -1409,7 +1460,9 @@ class RemoteService extends ChangeNotifier {
   bool get keyboardCaptureSupported => KeyboardHook.supported;
   void setKeyboardCapture(bool on) {
     keyboardCapture = on;
-    _keyHook.setCapture(on);
+    // Never arm the hook while view-only: it swallows the key locally and would
+    // send nothing, so the user would lose their own typing for no benefit.
+    _keyHook.setCapture(on && !inputBlocked);
     notifyListeners();
   }
 
@@ -1417,7 +1470,7 @@ class RemoteService extends ChangeNotifier {
   /// text field needs the keyboard (chat, transmit-login dialog), WITHOUT
   /// changing the user's keyboardCapture preference. Restores it on release.
   void pauseKeyboardCapture(bool pause) {
-    _keyHook.setCapture(pause ? false : keyboardCapture);
+    _keyHook.setCapture(pause ? false : (keyboardCapture && !inputBlocked));
   }
 
   /// Viewer: ask the host to stream a different monitor.

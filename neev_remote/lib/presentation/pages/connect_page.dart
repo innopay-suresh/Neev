@@ -141,6 +141,10 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     // a file the transport reads, so the Accept/Deny gate works there too.
     service.syncConsentFlag(_s.askOnConnect);
     service.defaultPermControl = _s.defaultAllowControl;
+    // The persisted "View Only" mode. The widget gate reads the provider
+    // directly, but the keyboard hook and shortcut buttons live in the service
+    // and never see it — mirror it so view-only actually blocks them.
+    service.viewOnlySetting = _s.viewOnly;
     service.defaultPermClipboard = _s.defaultAllowClipboard;
     service.defaultPermFiles = _s.defaultAllowFiles;
     service.lockOnSessionEnd = _s.lockOnSessionEnd;
