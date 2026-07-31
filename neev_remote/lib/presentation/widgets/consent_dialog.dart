@@ -253,14 +253,14 @@ class _ConsentDialogState extends State<ConsentDialog> {
         padding: const EdgeInsets.symmetric(vertical: 9),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: on ? AppColors.primarySoft : Colors.transparent,
+          color: on ? AppColors.primary : Colors.transparent,
           border: Border.all(
               color: on ? AppColors.primary : AppColors.borderStrong),
           borderRadius: BorderRadius.circular(AppRadii.md),
         ),
         child: Text(label,
             style: AppTypography.caption.copyWith(
-                color: on ? AppColors.primary : AppColors.textSecondary,
+                color: on ? Colors.white : AppColors.textSecondary,
                 fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
       ),
     );
@@ -347,7 +347,13 @@ class _ConsentDialogState extends State<ConsentDialog> {
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(AppRadii.md)),
             ),
-            child: const Text('Decline'),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.close_rounded, size: 16, color: AppColors.error),
+              const SizedBox(width: 6),
+              Text('Decline',
+                  style: TextStyle(
+                      color: AppColors.error, fontWeight: FontWeight.w600)),
+            ]),
           ),
           const SizedBox(width: AppSpacing.sm),
           FilledButton(
@@ -359,7 +365,11 @@ class _ConsentDialogState extends State<ConsentDialog> {
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(AppRadii.md)),
             ),
-            child: const Text('Accept'),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.verified_user_outlined, size: 16),
+              SizedBox(width: 6),
+              Text('Allow'),
+            ]),
           ),
         ],
       ),

@@ -148,6 +148,7 @@ var (
 	cwColTint      = rgb(0xFC, 0xE5, 0xD9)
 	cwColBorder    = rgb(0xDE, 0xD6, 0xC8)
 	cwColBorderStr = rgb(0xD0, 0xC6, 0xAC)
+	cwColDanger    = rgb(0xD8, 0x49, 0x3F) // Decline mark (DESIGN.md error hue)
 )
 
 const consentClassName = "NeevConsentWindow"
@@ -539,8 +540,11 @@ func (c *consentWin) paint(hwnd uintptr) {
 		cwRect{rx, ty + c.px(28), rw, ty + c.px(76)},
 		fBody, cwColInkSoft, cwDTLeft|cwDTWordBreak)
 
+	// Hairline between the description and the identity block.
+	c.line(hdc, rx, ty+c.px(78), rw, ty+c.px(78), cwColBorderStr)
+
 	// Device id.
-	idy := ty + c.px(84)
+	idy := ty + c.px(88)
 	c.text(hdc, "Remote Device ID", cwRect{rx, idy, rw, idy + c.px(16)},
 		fLabel, cwColInkSoft, cwDTLeft|cwDTVCenter|cwDTSingleLine)
 	idRow := cwRect{rx, idy + c.px(18), rw, idy + c.px(50)}
@@ -554,7 +558,8 @@ func (c *consentWin) paint(hwnd uintptr) {
 	}
 
 	// Trust note, boxed.
-	nb := cwRect{rx - c.px(8), idRow.Bottom + c.px(14), rw + c.px(8), rail.Bottom - c.px(14)}
+	nbTop := idRow.Bottom + c.px(16)
+	nb := cwRect{rx - c.px(8), nbTop, rw + c.px(8), nbTop + c.px(104)}
 	c.roundRect(hdc, nb, c.px(10), cwColCard, cwColBorder, true)
 	c.shieldGlyph(hdc, nb.Left+c.px(12), nb.Top+c.px(12), c.px(18))
 	nl := nb.Left + c.px(38)
@@ -629,123 +634,67 @@ func (c *consentWin) paint(hwnd uintptr) {
 		accFill = cwColAccentDim
 	}
 	c.roundRect(hdc, c.rcAccept, c.px(9), accFill, 0, false)
-	c.text(hdc, "Allow", c.rcAccept, fBtn, cwColCard, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+	// Shield + label, centred as a pair.
+	ic := c.px(15)
+	ay2 := (c.rcAccept.Top+c.rcAccept.Bottom)/2 - ic/2
+	c.shieldGlyphIn(hdc, c.rcAccept.Left+c.px(34), ay2, ic, cwColCard)
+	c.text(hdc, "Allow",
+		cwRect{c.rcAccept.Left + c.px(24), c.rcAccept.Top, c.rcAccept.Right, c.rcAccept.Bottom},
+		fBtn, cwColCard, cwDTCenter|cwDTVCenter|cwDTSingleLine)
 
 	decFill := cwColCard
 	if c.hotDecline {
 		decFill = cwColTint
 	}
 	c.roundRect(hdc, c.rcDecline, c.px(9), decFill, cwColBorderStr, true)
-	c.text(hdc, "Decline", c.rcDecline, fBtn, cwColInk, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+	dc2 := c.px(11)
+	dy2 := (c.rcDecline.Top+c.rcDecline.Bottom)/2 - dc2/2
+	c.crossGlyph(hdc, c.rcDecline.Left+c.px(30), dy2, dc2, cwColDanger)
+	c.text(hdc, "Decline",
+		cwRect{c.rcDecline.Left + c.px(26), c.rcDecline.Top, c.rcDecline.Right, c.rcDecline.Bottom},
+		fBtn, cwColDanger, cwDTCenter|cwDTVCenter|cwDTSingleLine)
 }
 
 // segment draws one option of the access-level selector.
+// segment draws one option of the access-level selector. The selected state is
+// deliberately strong (filled + accent border + accent ink): a barely-visible
+// selection on a security prompt means the user cannot tell what they are
+// granting.
 func (c *consentWin) segment(hdc uintptr, r cwRect, label string, on bool, f uintptr) {
-	fill, ink, border := cwColCard, cwColInkSoft, cwColBorderStr
 	if on {
-		fill, ink, border = cwColTint, cwColAccent, cwColAccent
+		c.roundRect(hdc, r, c.px(8), cwColAccent, cwColAccent, true)
+		c.text(hdc, label, r, f, cwColCard, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+		return
 	}
-	c.roundRect(hdc, r, c.px(8), fill, border, true)
-	c.text(hdc, label, r, f, ink, cwDTCenter|cwDTVCenter|cwDTSingleLine)
+	c.roundRect(hdc, r, c.px(8), cwColCard, cwColBorderStr, true)
+	c.text(hdc, label, r, f, cwColInkSoft, cwDTCenter|cwDTVCenter|cwDTSingleLine)
 }
 
-// avatarGlyph draws the person-in-a-ring mark on the information rail.
+// avatarGlyph draws the person mark inside a ringed medallion.
 func (c *consentWin) avatarGlyph(hdc uintptr, x, y, size int32) {
-	ring, _, _ := procCreatePenCW.Call(0, uintptr(c.px(1)), cwColAccent)
-	hollow, _, _ := procCreateSolidBrushCW.Call(cwColTint)
-	op, _, _ := procSelectObjectCW.Call(hdc, ring)
-	ob, _, _ := procSelectObjectCW.Call(hdc, hollow)
-	procEllipseCW.Call(hdc, uintptr(x), uintptr(y), uintptr(x+size), uintptr(y+size))
-	procSelectObjectCW.Call(hdc, op)
-	procSelectObjectCW.Call(hdc, ob)
-	procDeleteObjectCW.Call(ring)
-	procDeleteObjectCW.Call(hollow)
+	// Outer dotted orbit, then the ring.
+	c.ellipse(hdc, x, y, size, cwColCard, cwColBorder, true)
+	inset := c.px(8)
+	c.ellipse(hdc, x+inset, y+inset, size-2*inset, cwColTint, cwColAccent, true)
 
 	cx := x + size/2
-	hr := c.px(11)
-	hy := y + size/2 - c.px(6)
-	brush, _, _ := procCreateSolidBrushCW.Call(cwColAccent)
-	pen, _, _ := procCreatePenCW.Call(5, 0, 0)
-	ob2, _, _ := procSelectObjectCW.Call(hdc, brush)
-	op2, _, _ := procSelectObjectCW.Call(hdc, pen)
-	procEllipseCW.Call(hdc, uintptr(cx-hr), uintptr(hy-hr), uintptr(cx+hr), uintptr(hy+hr))
-	procSelectObjectCW.Call(hdc, ob2)
-	procSelectObjectCW.Call(hdc, op2)
-	procDeleteObjectCW.Call(brush)
-	procDeleteObjectCW.Call(pen)
-	c.roundRect(hdc, cwRect{cx - c.px(19), hy + c.px(8), cx + c.px(19), y + size - c.px(8)},
-		c.px(12), cwColAccent, 0, false)
+	hr := c.px(10)
+	hy := y + size/2 - c.px(5)
+	c.ellipse(hdc, cx-hr, hy-hr, hr*2, cwColAccent, 0, false)
+	// Shoulders: a rounded cap under the head.
+	c.roundRect(hdc, cwRect{cx - c.px(17), hy + c.px(7), cx + c.px(17), y + size - inset - c.px(3)},
+		c.px(11), cwColAccent, 0, false)
 }
 
-// connectionArt draws the two-device link: this computer, the remote device, and
-// the connection between them. Vector geometry rather than a bitmap so it stays
-// sharp at any DPI and needs no asset pipeline in the worker.
-func (c *consentWin) connectionArt(hdc uintptr, r cwRect) {
-	w := r.Right - r.Left
-	cy := r.Top + c.px(96)
-
-	// Remote laptop (left, filled accent = the device asking).
-	lw, lh := c.px(120), c.px(76)
-	lx := r.Left + c.px(10)
-	c.deviceGlyph(hdc, lx, cy-lh/2, lw, lh, true)
-
-	// This computer (right, outlined = you).
-	rw2, rh2 := c.px(110), c.px(70)
-	rx2 := r.Right - rw2 - c.px(10)
-	c.deviceGlyph(hdc, rx2, cy-rh2/2-c.px(14), rw2, rh2, false)
-
-	// Link with a node in the middle.
-	midY := cy
-	c.line(hdc, lx+lw+c.px(6), midY, rx2-c.px(6), midY, cwColBorderStr)
-	nodeR := c.px(16)
-	nx := r.Left + w/2
-	brush, _, _ := procCreateSolidBrushCW.Call(cwColTint)
-	pen, _, _ := procCreatePenCW.Call(0, uintptr(c.px(1)), cwColAccent)
-	ob, _, _ := procSelectObjectCW.Call(hdc, brush)
-	op, _, _ := procSelectObjectCW.Call(hdc, pen)
-	procEllipseCW.Call(hdc, uintptr(nx-nodeR), uintptr(midY-nodeR),
-		uintptr(nx+nodeR), uintptr(midY+nodeR))
-	procSelectObjectCW.Call(hdc, ob)
-	procSelectObjectCW.Call(hdc, op)
-	procDeleteObjectCW.Call(brush)
-	procDeleteObjectCW.Call(pen)
-	// A small lock in the node: the link is encrypted.
-	c.roundRect(hdc, cwRect{nx - c.px(5), midY - c.px(1), nx + c.px(5), midY + c.px(7)},
-		c.px(2), cwColAccent, 0, false)
-	c.line(hdc, nx-c.px(3), midY-c.px(2), nx-c.px(3), midY-c.px(6), cwColAccent)
-	c.line(hdc, nx-c.px(3), midY-c.px(6), nx+c.px(3), midY-c.px(6), cwColAccent)
-	c.line(hdc, nx+c.px(3), midY-c.px(6), nx+c.px(3), midY-c.px(2), cwColAccent)
-}
-
-// deviceGlyph draws a laptop: screen + base. filled=accent body, else outlined.
-func (c *consentWin) deviceGlyph(hdc uintptr, x, y, w, h int32, filled bool) {
-	screenH := h - c.px(10)
-	if filled {
-		c.roundRect(hdc, cwRect{x, y, x + w, y + screenH}, c.px(7), cwColAccent, 0, false)
-		// Inset "content" lines so it reads as a screen, not a slab.
-		for i := int32(0); i < 3; i++ {
-			ly := y + c.px(14) + i*c.px(12)
-			c.line(hdc, x+c.px(12), ly, x+w-c.px(14), ly, cwColTint)
-		}
+// ellipse fills a circle of [size] at x,y, optionally outlined.
+func (c *consentWin) ellipse(hdc uintptr, x, y, size int32, fill, border uintptr, outlined bool) {
+	brush, _, _ := procCreateSolidBrushCW.Call(fill)
+	var pen uintptr
+	if outlined {
+		pen, _, _ = procCreatePenCW.Call(0, uintptr(c.px(1)), border)
 	} else {
-		c.roundRect(hdc, cwRect{x, y, x + w, y + screenH}, c.px(7), cwColCard, cwColBorderStr, true)
-		for i := int32(0); i < 3; i++ {
-			ly := y + c.px(14) + i*c.px(12)
-			c.line(hdc, x+c.px(12), ly, x+w-c.px(14), ly, cwColBorder)
-		}
+		pen, _, _ = procCreatePenCW.Call(5 /*PS_NULL*/, 0, 0)
 	}
-	baseFill := cwColAccent
-	if !filled {
-		baseFill = cwColBorderStr
-	}
-	c.roundRect(hdc, cwRect{x - c.px(6), y + screenH + c.px(2), x + w + c.px(6), y + screenH + c.px(8)},
-		c.px(3), baseFill, 0, false)
-}
-
-// medallion draws the tinted circle with a monitor-and-person glyph.
-func (c *consentWin) medallion(hdc uintptr, x, y, size int32) {
-	brush, _, _ := procCreateSolidBrushCW.Call(cwColTint)
-	pen, _, _ := procCreatePenCW.Call(5 /*PS_NULL*/, 0, 0)
 	ob, _, _ := procSelectObjectCW.Call(hdc, brush)
 	op, _, _ := procSelectObjectCW.Call(hdc, pen)
 	procEllipseCW.Call(hdc, uintptr(x), uintptr(y), uintptr(x+size), uintptr(y+size))
@@ -753,49 +702,241 @@ func (c *consentWin) medallion(hdc uintptr, x, y, size int32) {
 	procSelectObjectCW.Call(hdc, op)
 	procDeleteObjectCW.Call(brush)
 	procDeleteObjectCW.Call(pen)
-
-	// Rounded monitor body.
-	mw, mh := c.px(40), c.px(30)
-	mx, my := x+(size-mw)/2, y+(size-mh)/2-c.px(2)
-	c.roundRect(hdc, cwRect{mx, my, mx + mw, my + mh}, c.px(6), cwColAccent, 0, false)
-	// Stand.
-	sw2, sh2 := c.px(16), c.px(4)
-	c.roundRect(hdc, cwRect{mx + (mw-sw2)/2, my + mh, mx + (mw-sw2)/2 + sw2, my + mh + sh2},
-		c.px(2), cwColAccent, 0, false)
-	// Person: head + shoulders, knocked out of the monitor in the tint colour.
-	hr := c.px(5)
-	hx, hy := mx+mw/2, my+c.px(11)
-	brush2, _, _ := procCreateSolidBrushCW.Call(cwColTint)
-	pen2, _, _ := procCreatePenCW.Call(5, 0, 0)
-	ob2, _, _ := procSelectObjectCW.Call(hdc, brush2)
-	op2, _, _ := procSelectObjectCW.Call(hdc, pen2)
-	procEllipseCW.Call(hdc, uintptr(hx-hr), uintptr(hy-hr), uintptr(hx+hr), uintptr(hy+hr))
-	procSelectObjectCW.Call(hdc, ob2)
-	procSelectObjectCW.Call(hdc, op2)
-	procDeleteObjectCW.Call(brush2)
-	procDeleteObjectCW.Call(pen2)
-	c.roundRect(hdc, cwRect{hx - c.px(9), hy + c.px(4), hx + c.px(9), my + mh - c.px(4)},
-		c.px(5), cwColTint, 0, false)
 }
 
-// shieldGlyph draws the small security shield next to the warning line.
-func (c *consentWin) shieldGlyph(hdc uintptr, x, y, size int32) {
-	pts := []cwPoint{
-		{x + size/2, y},
-		{x + size, y + size/4},
-		{x + size, y + size/2},
-		{x + size/2, y + size},
-		{x, y + size/2},
-		{x, y + size/4},
+// poly fills a polygon.
+func (c *consentWin) poly(hdc uintptr, pts []cwPoint, fill, border uintptr, outlined bool) {
+	brush, _, _ := procCreateSolidBrushCW.Call(fill)
+	var pen uintptr
+	if outlined {
+		pen, _, _ = procCreatePenCW.Call(0, uintptr(c.px(1)), border)
+	} else {
+		pen, _, _ = procCreatePenCW.Call(5, 0, 0)
 	}
-	brush, _, _ := procCreateSolidBrushCW.Call(cwColTint)
-	pen, _, _ := procCreatePenCW.Call(0, uintptr(c.px(1)), cwColAccent)
 	ob, _, _ := procSelectObjectCW.Call(hdc, brush)
 	op, _, _ := procSelectObjectCW.Call(hdc, pen)
 	procPolygonCW.Call(hdc, uintptr(unsafe.Pointer(&pts[0])), uintptr(len(pts)))
 	procSelectObjectCW.Call(hdc, ob)
 	procSelectObjectCW.Call(hdc, op)
 	procDeleteObjectCW.Call(brush)
+	procDeleteObjectCW.Call(pen)
+}
+
+// iso projects floor coordinates (u,v) to screen space. A true isometric
+// projection, so the two machines read as objects in a space rather than as
+// flat rectangles — the thing the first version got wrong.
+func iso(ox, oy int32, u, v, k float64) cwPoint {
+	return cwPoint{
+		X: ox + int32((u-v)*0.866*k),
+		Y: oy + int32((u+v)*0.5*k),
+	}
+}
+
+// isoLaptop draws a laptop in isometric projection: a keyboard deck on the
+// floor plane and a screen standing along its far edge. [accent] fills the
+// screen with the brand colour (the device asking); otherwise it is outlined
+// (this computer).
+func (c *consentWin) isoLaptop(hdc uintptr, ox, oy int32, k float64, accent bool) {
+	du, dv := 62.0, 44.0
+	sh := int32(40 * k * c.scale) // screen height in screen-space
+
+	p0 := iso(ox, oy, 0, 0, k*c.scale)
+	p1 := iso(ox, oy, du, 0, k*c.scale)
+	p2 := iso(ox, oy, du, dv, k*c.scale)
+	p3 := iso(ox, oy, 0, dv, k*c.scale)
+
+	// Deck (keyboard side), always light so the screen reads as the bright face.
+	c.poly(hdc, []cwPoint{p0, p1, p2, p3}, cwColCard, cwColBorderStr, true)
+	// Keys: short strokes along the deck.
+	for i := 1; i <= 4; i++ {
+		f := float64(i) / 5.0
+		a := iso(ox, oy, du*0.12, dv*f, k*c.scale)
+		b := iso(ox, oy, du*0.88, dv*f, k*c.scale)
+		c.line(hdc, a.X, a.Y, b.X, b.Y, cwColBorder)
+	}
+	// Trackpad.
+	t0 := iso(ox, oy, du*0.30, dv*0.80, k*c.scale)
+	t1 := iso(ox, oy, du*0.70, dv*0.80, k*c.scale)
+	t2 := iso(ox, oy, du*0.70, dv*0.95, k*c.scale)
+	t3 := iso(ox, oy, du*0.30, dv*0.95, k*c.scale)
+	c.poly(hdc, []cwPoint{t0, t1, t2, t3}, cwColCard, cwColBorderStr, true)
+
+	// Screen standing on the far edge p0-p1, tilted back by a small offset.
+	tilt := int32(6 * k * c.scale)
+	s0 := p0
+	s1 := p1
+	s2 := cwPoint{p1.X + tilt, p1.Y - sh}
+	s3 := cwPoint{p0.X + tilt, p0.Y - sh}
+	screenFill, screenLine := cwColCard, cwColBorderStr
+	if accent {
+		screenFill, screenLine = cwColAccent, cwColAccent
+	}
+	c.poly(hdc, []cwPoint{s0, s1, s2, s3}, screenFill, screenLine, true)
+
+	// Content lines on the screen, following its slope.
+	lineCol := cwColBorder
+	if accent {
+		lineCol = cwColTint
+	}
+	for i := 1; i <= 3; i++ {
+		f := float64(i) / 4.0
+		ax := s0.X + int32(float64(s3.X-s0.X)*f) + c.px(7)
+		ay := s0.Y + int32(float64(s3.Y-s0.Y)*f)
+		bx := s1.X + int32(float64(s2.X-s1.X)*f) - c.px(7)
+		by := s1.Y + int32(float64(s2.Y-s1.Y)*f)
+		c.line(hdc, ax, ay, bx, by, lineCol)
+	}
+}
+
+// connectionArt draws the two machines and the encrypted link between them.
+//
+// Vector geometry, not a bitmap: it stays sharp at any DPI and needs no asset
+// pipeline inside the worker. It cannot reproduce a rendered 3D illustration
+// with glow and gradients — GDI has no such primitives — but it does carry the
+// same composition: a remote device on the left, this computer on the right,
+// and a traced connection meeting at a secured node.
+func (c *consentWin) connectionArt(hdc uintptr, r cwRect) {
+	w := r.Right - r.Left
+	// Faint isometric floor grid, so the devices sit in a space.
+	c.isoGrid(hdc, r)
+
+	baseY := r.Top + c.px(150)
+	// Remote device (left, accent) sits lower; this computer (right) sits higher.
+	c.isoLaptop(hdc, r.Left+c.px(70), baseY, 0.72, true)
+	c.isoLaptop(hdc, r.Right-c.px(150), r.Top+c.px(96), 0.60, false)
+
+	// Link: two routed traces meeting at the node.
+	nx := r.Left + w/2 + c.px(6)
+	ny := r.Top + c.px(112)
+	c.trace(hdc, r.Left+c.px(150), baseY-c.px(6), nx, ny, true)
+	c.trace(hdc, nx, ny, r.Right-c.px(140), r.Top+c.px(70), false)
+
+	// Node: concentric rings + spokes, with a lock at the centre.
+	nodeR := c.px(30)
+	c.ellipse(hdc, nx-nodeR, ny-nodeR, nodeR*2, cwColTint, cwColTint, true)
+	inner := c.px(20)
+	c.ellipse(hdc, nx-inner, ny-inner, inner*2, cwColCard, cwColAccent, true)
+	for i := 0; i < 8; i++ {
+		ang := float64(i) * 0.785
+		dx := int32(float64(nodeR) * 0.95 * cosApprox(ang))
+		dy := int32(float64(nodeR) * 0.95 * sinApprox(ang))
+		ix := int32(float64(inner) * 1.05 * cosApprox(ang))
+		iy := int32(float64(inner) * 1.05 * sinApprox(ang))
+		c.line(hdc, nx+ix, ny+iy, nx+dx, ny+dy, cwColAccent)
+		c.ellipse(hdc, nx+dx-c.px(2), ny+dy-c.px(2), c.px(4), cwColAccent, 0, false)
+	}
+	c.lockGlyph(hdc, nx, ny, c.px(11))
+}
+
+// isoGrid lays a faint floor grid under the artwork.
+func (c *consentWin) isoGrid(hdc uintptr, r cwRect) {
+	ox := r.Left + (r.Right-r.Left)/2
+	oy := r.Top + c.px(120)
+	k := 1.0 * c.scale
+	span := 150.0
+	for i := -4; i <= 4; i++ {
+		u := float64(i) * 38
+		a := iso(ox, oy, u, -span, k)
+		b := iso(ox, oy, u, span, k)
+		c.line(hdc, a.X, a.Y, b.X, b.Y, cwColTint)
+		a2 := iso(ox, oy, -span, u, k)
+		b2 := iso(ox, oy, span, u, k)
+		c.line(hdc, a2.X, a2.Y, b2.X, b2.Y, cwColTint)
+	}
+}
+
+// trace draws one routed connection: an L-shaped path with data squares along
+// it, the way a circuit diagram reads.
+func (c *consentWin) trace(hdc uintptr, x1, y1, x2, y2 int32, fromLeft bool) {
+	midX := (x1 + x2) / 2
+	c.line(hdc, x1, y1, midX, y1, cwColAccent)
+	c.line(hdc, midX, y1, midX, y2, cwColAccent)
+	c.line(hdc, midX, y2, x2, y2, cwColAccent)
+	// Data squares.
+	sq := c.px(4)
+	pts := []cwPoint{
+		{X: (x1 + midX) / 2, Y: y1},
+		{X: midX, Y: (y1 + y2) / 2},
+		{X: (midX + x2) / 2, Y: y2},
+	}
+	for _, p := range pts {
+		c.roundRect(hdc, cwRect{p.X - sq, p.Y - sq, p.X + sq, p.Y + sq}, c.px(1),
+			cwColAccent, 0, false)
+	}
+}
+
+// lockGlyph draws a padlock centred on x,y — the link is encrypted.
+func (c *consentWin) lockGlyph(hdc uintptr, x, y, size int32) {
+	bw := size
+	bh := size * 3 / 4
+	body := cwRect{x - bw/2, y - bh/4, x + bw/2, y - bh/4 + bh}
+	// Shackle.
+	sr := bw / 3
+	pen, _, _ := procCreatePenCW.Call(0, uintptr(c.px(2)), cwColAccent)
+	op, _, _ := procSelectObjectCW.Call(hdc, pen)
+	procMoveToExCW.Call(hdc, uintptr(x-sr), uintptr(body.Top), 0)
+	procLineToCW.Call(hdc, uintptr(x-sr), uintptr(body.Top-sr))
+	procLineToCW.Call(hdc, uintptr(x+sr), uintptr(body.Top-sr))
+	procLineToCW.Call(hdc, uintptr(x+sr), uintptr(body.Top))
+	procSelectObjectCW.Call(hdc, op)
+	procDeleteObjectCW.Call(pen)
+	c.roundRect(hdc, body, c.px(2), cwColAccent, 0, false)
+}
+
+// Cheap trig: the agent avoids math imports in this file, and eight fixed
+// angles do not justify one. Values are cos/sin at 45° steps.
+func cosApprox(a float64) float64 {
+	tbl := []float64{1, 0.707, 0, -0.707, -1, -0.707, 0, 0.707}
+	return tbl[int(a/0.785+0.5)%8]
+}
+func sinApprox(a float64) float64 {
+	tbl := []float64{0, 0.707, 1, 0.707, 0, -0.707, -1, -0.707}
+	return tbl[int(a/0.785+0.5)%8]
+}
+
+// shieldGlyph draws a filled shield — the security mark next to the trust note.
+func (c *consentWin) shieldGlyph(hdc uintptr, x, y, size int32) {
+	w := size
+	h := size * 6 / 5
+	pts := []cwPoint{
+		{X: x + w/2, Y: y},
+		{X: x + w, Y: y + h/5},
+		{X: x + w, Y: y + h/2},
+		{X: x + w/2, Y: y + h},
+		{X: x, Y: y + h/2},
+		{X: x, Y: y + h/5},
+	}
+	c.poly(hdc, pts, cwColAccent, cwColAccent, true)
+	// Check mark knocked out in the card colour.
+	c.line(hdc, x+w*30/100, y+h*48/100, x+w*45/100, y+h*63/100, cwColCard)
+	c.line(hdc, x+w*45/100, y+h*63/100, x+w*72/100, y+h*33/100, cwColCard)
+}
+
+// shieldGlyphIn draws the shield in an arbitrary colour (white on the filled
+// Allow button, where the accent-on-accent version would be invisible).
+func (c *consentWin) shieldGlyphIn(hdc uintptr, x, y, size int32, col uintptr) {
+	w := size
+	h := size * 6 / 5
+	pts := []cwPoint{
+		{X: x + w/2, Y: y},
+		{X: x + w, Y: y + h/5},
+		{X: x + w, Y: y + h/2},
+		{X: x + w/2, Y: y + h},
+		{X: x, Y: y + h/2},
+		{X: x, Y: y + h/5},
+	}
+	c.poly(hdc, pts, col, col, true)
+}
+
+// crossGlyph draws the ✕ on the Decline button.
+func (c *consentWin) crossGlyph(hdc uintptr, x, y, size int32, col uintptr) {
+	pen, _, _ := procCreatePenCW.Call(0, uintptr(c.px(2)), col)
+	op, _, _ := procSelectObjectCW.Call(hdc, pen)
+	procMoveToExCW.Call(hdc, uintptr(x), uintptr(y), 0)
+	procLineToCW.Call(hdc, uintptr(x+size), uintptr(y+size))
+	procMoveToExCW.Call(hdc, uintptr(x+size), uintptr(y), 0)
+	procLineToCW.Call(hdc, uintptr(x), uintptr(y+size))
+	procSelectObjectCW.Call(hdc, op)
 	procDeleteObjectCW.Call(pen)
 }
 
