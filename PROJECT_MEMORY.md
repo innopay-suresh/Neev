@@ -457,6 +457,39 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-31 — macOS consent prompt implemented; a Mac daemon host no longer
+  auto-accepts every connection (r107). Pending hardware validation.** Found
+  while answering "will the popup work on Mac too?" — it would not have, and
+  worse, NO prompt appeared at all. macOS ships the same two-process Go
+  architecture (`com.neev.transport.plist` root LaunchDaemon +
+  `com.neev.worker.plist` LaunchAgent), but two things were Windows-only:
+  (1) `showConsentDialog` was a `!windows` stub returning **true**, and
+  (2) `writeConsentFlag` began `if (!Platform.isWindows) return;`, so
+  `consent.txt` was never written, `consentRequired()` returned false, and the
+  transport auto-accepted — the "Ask before allowing connections" toggle had NO
+  effect on a Mac daemon host.
+  Fixes: `consent_darwin.go` shows a real NSAlert **with a "Remember this
+  decision" checkbox**, hosted by `osascript -l JavaScript` through the ObjC
+  bridge. In-process AppKit is not an option — the agent has no NSApplication
+  and no main-thread run loop (`privacy_darwin.go` runs its CFRunLoop on a
+  private pthread) and the call arrives on an arbitrary goroutine. The device id
+  is passed as argv, never interpolated, so nothing from the wire is executable.
+  The flag now travels via the console user's
+  `~/Library/Application Support/NeevRemote/consent.txt`, read by the root
+  transport through `/dev/console` ownership (`consentflag_darwin.go`); the
+  machine-wide path is still checked FIRST so MDM can force it on. The
+  non-Windows/non-darwin stub now returns **false** (deny) — returning true
+  would auto-accept everything the moment the flag became readable.
+  **Also fixes a real bug in the r106 Windows work:** the consent store used
+  `dataDir()`, which the daemon creates root/SYSTEM-owned, but the capture
+  worker runs as the logged-in USER on both platforms — so saving a remembered
+  decision failed with "permission denied" and was silently lost. Proven on
+  macOS in a test. Added `userDataDir()` (LOCALAPPDATA / ~/Library/Application
+  Support / XDG) and moved the store there, which also scopes a security
+  decision to the user who made it. Same class as the r104 hostlog fallback.
+  Verified by running the real JXA script on macOS: AppKit construction and
+  argv both work and it returns exactly the JSON the Go side parses. 4 Go tests.
+
 - **2026-07-31 — Consent prompt redesigned on BOTH hosts + "Remember this
   decision" wired; view-only actually enforced (r106). Pending hardware
   validation.** Two separate pieces of work.

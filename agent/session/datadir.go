@@ -40,3 +40,46 @@ func dataDir() string {
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
 }
+
+// userDataDir returns a directory the CURRENT USER can always write, for state
+// that belongs to that user rather than the machine.
+//
+// dataDir() is deliberately machine-wide and is created root/SYSTEM-owned by
+// the daemon, so a capture worker — which runs as the logged-in user on both
+// Windows (per-session) and macOS (Aqua LaunchAgent) — cannot write into it.
+// Writing user state there fails with "permission denied" and is silently lost;
+// hostlog.go already hit this and had to fall back to a per-user path.
+//
+//	Windows: %LOCALAPPDATA%\NeevRemote
+//	macOS:   ~/Library/Application Support/NeevRemote
+//	Linux:   $XDG_DATA_HOME/NeevRemote or ~/.local/share/NeevRemote
+func userDataDir() string {
+	var base string
+	switch runtime.GOOS {
+	case "windows":
+		base = os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			base = os.Getenv("APPDATA")
+		}
+	case "darwin":
+		if home, err := os.UserHomeDir(); err == nil {
+			base = filepath.Join(home, "Library", "Application Support")
+		}
+	default:
+		base = os.Getenv("XDG_DATA_HOME")
+		if base == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				base = filepath.Join(home, ".local", "share")
+			}
+		}
+	}
+	if base != "" {
+		dir := filepath.Join(base, "NeevRemote")
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			return dir
+		}
+	}
+	dir := filepath.Join(os.TempDir(), "NeevRemote")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}

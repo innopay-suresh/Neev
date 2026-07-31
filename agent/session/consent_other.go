@@ -1,8 +1,10 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package session
 
-// Consent Accept/Deny dialog is Windows-only in TransportMode for now. Off
-// Windows the flag file (consent.txt) is never written, so consentRequired() is
-// false and this is never called; return true so an accidental call can't block.
-func showConsentDialog(viewerID string) (allow bool, remember bool) { return true, false }
+// Consent Accept/Deny prompts exist on Windows (consent_windows.go) and macOS
+// (consent_darwin.go). On any other platform there is no host UI to show one,
+// so deny rather than accept: "ask before allowing connections" with nobody
+// able to answer means NOT allowed. This used to return true, which would have
+// silently auto-accepted every connection the moment the flag was readable.
+func showConsentDialog(viewerID string) (allow bool, remember bool) { return false, false }

@@ -739,11 +739,14 @@ func loadMachineCreds() (id, password string) {
 // on. The Flutter app writes <dataDir>/consent.txt ("1"/"0") when the user
 // toggles the setting; absent/"0" means auto-accept (the default, unchanged).
 func (t *Transport) consentRequired() bool {
-	data, err := os.ReadFile(filepath.Join(dataDir(), "consent.txt"))
-	if err != nil {
-		return false
+	for _, p := range consentFlagPaths() {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		return strings.TrimSpace(string(data)) == "1"
 	}
-	return strings.TrimSpace(string(data)) == "1"
+	return false
 }
 
 // askConsent asks the current worker to show an Accept/Deny dialog for viewer id

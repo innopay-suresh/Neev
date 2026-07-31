@@ -17,16 +17,21 @@ import (
 // Decline auto-declines it, and neither shows the prompt again. The password
 // check is unaffected — this only skips the human Accept/Deny step.
 //
-// Stored next to the worker log (C:\ProgramData\NeevRemote on Windows) so the
-// decision survives a user switch and a restart, and so the SYSTEM service and
-// the per-session worker read the same file.
+// Stored in the USER's own data dir, not the machine-wide one: the capture
+// worker that reads and writes this runs as the logged-in user on both Windows
+// (per-session) and macOS (Aqua LaunchAgent), while dataDir() is created
+// root/SYSTEM-owned by the daemon. Writing there fails with "permission denied"
+// and the remembered decision is silently lost — verified on macOS, where
+// /Library/Application Support/NeevRemote is root-owned. It also scopes the
+// decision to the user who actually made it, which is the correct blast radius
+// for a security choice.
 var (
 	consentMu    sync.Mutex
 	consentCache map[string]bool
 )
 
 func consentStorePath() string {
-	return filepath.Join(dataDir(), "consent-decisions.json")
+	return filepath.Join(userDataDir(), "consent-decisions.json")
 }
 
 // normConsentID strips the internal "ctrl-" prefix and keeps only digits, so a
