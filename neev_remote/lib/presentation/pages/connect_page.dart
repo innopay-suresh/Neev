@@ -12,8 +12,10 @@ import '../../core/theme/app_theme.dart';
 import '../../data/services/discovery_service.dart';
 import '../../data/services/host_mode.dart';
 import '../../data/services/audit_log.dart';
+import '../../data/services/consent_store.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
+import '../widgets/consent_dialog.dart';
 import '../widgets/file_transfer_panel.dart';
 import '../widgets/remote_view_widget.dart';
 import '../widgets/shortcuts_menu.dart';
@@ -321,32 +323,19 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     if (ref.read(settingsProvider).soundOnConnect) {
       SystemSound.play(SystemSoundType.alert);
     }
-    final accepted = await showDialog<bool>(
+    final choice = await showDialog<ConsentChoice>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Row(children: [
-          Icon(Icons.shield_outlined, color: AppColors.primary),
-          const SizedBox(width: 10),
-          Text('Incoming connection', style: AppTypography.title),
-        ]),
-        content: Text(
-            'Someone wants to connect to this computer. They will be able to '
-            'see and control the screen. Accept?',
-            style: AppTypography.caption),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Dismiss')),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.check, size: 18),
-            label: const Text('Accept'),
-          ),
-        ],
-      ),
+      builder: (ctx) => ConsentDialog(deviceId: req.controllerId),
     );
-    if (accepted == true) {
+    // A null choice means the route was popped without an answer — treat it as
+    // a refusal. Accepting on anything other than an explicit Accept would be
+    // the wrong default for a security prompt.
+    final accepted = choice?.accepted ?? false;
+    if (choice?.remember == true) {
+      await ConsentStore.remember(req.controllerId, accepted);
+    }
+    if (accepted) {
       await service.acceptConnection();
     } else {
       service.rejectConnection();

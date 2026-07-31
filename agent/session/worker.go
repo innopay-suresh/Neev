@@ -209,12 +209,26 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 				// blocks, so run it off the reader goroutine and reply when answered.
 				vid := string(payload)
 				go func(id string) {
-					allow := showConsentDialog(id)
+					// "Remember this decision" from an earlier prompt: apply it and
+					// don't ask again. Both directions -- a remembered Decline
+					// auto-declines just as a remembered Accept auto-accepts.
+					if remembered, ok := rememberedConsent(id); ok {
+						reply, _ := json.Marshal(
+							map[string]interface{}{"id": id, "allow": remembered})
+						_ = ic.WriteMessage(ipc.KindConsentReply, reply)
+						log.Info().Str("from", id).Bool("allow", remembered).
+							Msg("worker: consent auto-answered from a remembered decision")
+						return
+					}
+					allow, remember := showConsentDialog(id)
 					reply, _ := json.Marshal(
 						map[string]interface{}{"id": id, "allow": allow})
 					_ = ic.WriteMessage(ipc.KindConsentReply, reply)
+					if remember {
+						saveConsentDecision(id, allow)
+					}
 					log.Info().Str("from", id).Bool("allow", allow).
-						Msg("worker: consent answered")
+						Bool("remember", remember).Msg("worker: consent answered")
 				}(vid)
 			}
 		}

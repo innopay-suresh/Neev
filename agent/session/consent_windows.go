@@ -23,12 +23,15 @@ const (
 	idYes           = 6
 )
 
-// showConsentDialog shows a modal Accept/Deny box to the logged-in user on the
-// interactive desktop and returns true only if they click Yes (Accept). Blocks
-// until answered (the transport applies its own timeout → deny). Bind the thread
-// to the input desktop first (same reason the chat window / file picker do), or a
-// worker thread lands on a non-interactive desktop and the box never appears.
-func showConsentDialog(viewerID string) bool {
+// showConsentDialog shows a modal Accept/Deny prompt to the logged-in user on
+// the interactive desktop and returns true only if they accept. Blocks until
+// answered (the transport applies its own timeout → deny). Bind the thread to
+// the input desktop first (same reason the chat window / file picker do), or a
+// worker thread lands on a non-interactive desktop and nothing ever appears.
+//
+// Also returns whether the user ticked "Remember this decision", so the caller
+// can persist it and skip the prompt for this device next time.
+func showConsentDialog(viewerID string) (allow bool, remember bool) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	// Restore + close the desktop before unlocking, so this pooled thread isn't
@@ -37,6 +40,13 @@ func showConsentDialog(viewerID string) bool {
 	// desktop (the reported "clipboard stopped working" while consent is on).
 	restore := bindInputDesktopSaved()
 	defer restore()
+	return showConsentWindow(viewerID)
+}
+
+// showConsentMessageBox is the stock-dialog fallback, used only when the custom
+// window cannot be created. Keeping it means a windowing failure degrades to a
+// plain prompt instead of silently denying a legitimate connection.
+func showConsentMessageBox(viewerID string) bool {
 	text, _ := syscall.UTF16PtrFromString(
 		"A remote device is requesting to connect and control this computer.\n\n"+
 			"Device ID:  "+prettyConsentID(viewerID)+"\n\n"+

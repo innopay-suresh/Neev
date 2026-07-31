@@ -457,6 +457,36 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-31 — Consent prompt redesigned on BOTH hosts + "Remember this
+  decision" wired; view-only actually enforced (r106). Pending hardware
+  validation.** Two separate pieces of work.
+  (a) VIEW-ONLY was enforced only in `RemoteViewWidget`, which simply doesn't
+  wire its pointer/Focus listeners when viewOnly is set. That covers the mouse,
+  but the OS keyboard hook (`KeyboardHook.supported` is true on Windows AND
+  macOS — why all three pairs broke) and `sendKeyCombo()` from the shortcuts
+  menu call `sendViewerInput` directly and never saw the flag; the host does not
+  gate input at all, so everything sent was injected. The gate now lives in
+  `sendViewerInput`, the documented single funnel. The hook is DISARMED under
+  view-only rather than ignored (it swallows keys locally), and held keys are
+  released when view-only turns on mid-session. NOT a redesign regression: the
+  mode selector was correctly wired the whole time. 5 tests in
+  `test/view_only_test.dart`.
+  (b) CONSENT PROMPT: the box users actually see on a TransportMode host was a
+  stock `MessageBoxW` — its text is verbatim the copy in the approved mockup,
+  which is how that was identified. `MessageBoxW` can't render the design, so
+  `consentwin_windows.go` now hand-draws the card (GDI owner-draw, DPI-scaled,
+  self-hit-tested buttons), with the MessageBox kept as a fallback so a
+  windowing failure degrades to a plain prompt instead of denying a legitimate
+  connection. `consent_dialog.dart` mirrors it for macOS/attended hosts. Closing
+  or dismissing the prompt is always a refusal, never an accept.
+  "Remember this decision" is fully wired in both directions — a remembered
+  Decline auto-declines — with separate stores per host mode
+  (`consent-decisions.json`, SharedPreferences), written atomically via
+  temp+rename. `ForgetConsentDecisions()` / `ConsentStore.forgetAll()` exist so
+  a remembered Decline is undoable; **neither is surfaced in Settings yet — that
+  is the known gap.** A render test caught a 178px footer overflow before it
+  ever shipped.
+
 - **2026-07-30 — Four evidence-based fixes from worker.log: silent zero-byte
   transfers, the ignored desktop bind, unsupervised clipagent, and hung
   clipboard pulls (r105). Implements LD-24..LD-27. Pending hardware

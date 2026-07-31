@@ -16,6 +16,7 @@ import '../../core/diag_log.dart';
 import 'auth_service.dart';
 import 'clip_agent_bridge.dart';
 import 'clipboard_writer.dart';
+import 'consent_store.dart';
 import 'discovery_model.dart';
 import 'file_store.dart';
 import 'file_transfer_service.dart';
@@ -828,6 +829,23 @@ class RemoteService extends ChangeNotifier {
             'promptOnConnect=$promptOnConnect');
         // Attended: ask the host user first (AnyDesk-style). Unattended access
         // (promptOnConnect=false) accepts immediately with full permissions.
+        // "Remember this decision" from an earlier prompt: apply it without
+        // asking again. Checked before promptOnConnect so a remembered Decline
+        // is honoured too, not just a remembered Accept.
+        final remembered = await ConsentStore.decisionFor(controllerId);
+        if (promptOnConnect && remembered != null) {
+          DiagLog.log('host',
+              'consent auto-answered from a remembered decision allow=$remembered');
+          if (remembered) {
+            permControl = defaultPermControl;
+            permClipboard = defaultPermClipboard;
+            permFiles = defaultPermFiles;
+            await _startHostOffer(controllerId);
+          } else {
+            _hostSignaling?.sendBye(controllerId);
+          }
+          break;
+        }
         if (promptOnConnect) {
           // NOTE: the service-host runs HEADLESS as SYSTEM — a consent dialog
           // here is invisible and can never be accepted, so an incoming connect
