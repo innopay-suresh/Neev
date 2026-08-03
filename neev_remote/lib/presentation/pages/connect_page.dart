@@ -573,18 +573,7 @@ class _Sidebar extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
             child: Row(children: [
-              Container(
-                width: 27,
-                height: 27,
-                decoration: BoxDecoration(
-                  color: AppColors.inkBand,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                alignment: Alignment.center,
-                child: Text('N',
-                    style: AppTypography.cardTitle
-                        .copyWith(color: AppColors.primary, fontSize: 12.5)),
-              ),
+              const BrandMark(size: 27),
               const SizedBox(width: 9),
               BrandWordmark(
                   style: AppTypography.cardTitle.copyWith(fontSize: 13.5)),
@@ -1579,17 +1568,8 @@ class _TopBar extends ConsumerWidget {
             child: Container(
               width: 34,
               height: 34,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                    colors: [AppColors.primary, AppColors.primaryDark]),
-                borderRadius: BorderRadius.circular(10),
-              ),
               alignment: Alignment.center,
-              child: const Text('N',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 14)),
+              child: const BrandMark(size: 34),
             ),
           ),
         ],

@@ -122,20 +122,7 @@ class _ConsentDialogState extends State<ConsentDialog> {
           AppSpacing.xl, AppSpacing.lg, AppSpacing.md, AppSpacing.md),
       child: Row(
         children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: AppColors.primary,
-              borderRadius: BorderRadius.circular(AppRadii.sm),
-            ),
-            alignment: Alignment.center,
-            child: Text('N',
-                style: AppTypography.title.copyWith(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700)),
-          ),
+          const BrandMark(size: 26),
           const SizedBox(width: AppSpacing.sm),
           BrandWordmark(style: AppTypography.title.copyWith(fontSize: 17)),
           const Spacer(),

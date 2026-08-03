@@ -839,28 +839,10 @@ class _CommandNavRailState extends State<CommandNavRail> {
               padding: const EdgeInsets.fromLTRB(20, 20, 18, 16),
               child: Row(children: [
                 Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [AppColors.primary, AppColors.primaryDark],
-                    ),
-                    borderRadius: BorderRadius.circular(11),
-                    boxShadow: [
-                      BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.35),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4)),
-                    ],
-                  ),
+                  width: 38,
+                  height: 38,
                   alignment: Alignment.center,
-                  child: const Text('N',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 17)),
+                  child: const BrandMark(size: 38),
                 ),
                 const SizedBox(width: 11),
                 Expanded(

@@ -527,6 +527,27 @@ class BrandColors {
   static const Color remote = Color(0xFFF05A28);
 }
 
+/// The brand mark (the logo image itself).
+///
+/// The UI used to draw a coloured square containing the letter "N". That was a
+/// placeholder, and because it was drawn rather than an image asset it survived
+/// the rebrand — the app icon changed while every in-app mark still said "N".
+class BrandMark extends StatelessWidget {
+  const BrandMark({super.key, this.size = 28});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/brand/logo.png',
+      width: size,
+      height: size,
+      filterQuality: FilterQuality.medium,
+    );
+  }
+}
+
 /// The "NeevRemote" wordmark, two-tone.
 ///
 /// A widget rather than a copied TextSpan at each call site: the name appears in
