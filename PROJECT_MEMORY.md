@@ -474,9 +474,16 @@ hardware-confirmed intact.
   broken and runs the Flutter host instead — regardless of the ServiceHost flag,
   because unreachable is the worst outcome. Logged loudly, never silent.
   **LD-34 (new): a capability the product depends on must not be an installer
-  checkbox that can be missed, ESPECIALLY when nothing in the app can turn it on
-  afterwards. Force it on and make the failure path recoverable, rather than
-  asking the user to get it right once.**
+  checkbox that is OFF by default, especially when nothing in the app can turn
+  it on afterwards — getting it wrong once meant reinstalling. Default it on and
+  make the failure path recoverable, rather than relying on the user to choose
+  correctly.**
+  The fallback is deliberately TEMPORARY: `transport.Run()` exits immediately if
+  `ipc.Listen(47930)` fails, which is exactly what an upgrade does while the old
+  transport still holds the port, so a permanent fallback would have downgraded
+  healthy machines until reboot. Threshold 5 fast failures, retried after a
+  5-minute cool-off. A relay outage cannot trigger it at all — the signaling
+  client reconnects with backoff and its error is logged, not returned.
 
 - **2026-08-03 — Consent card flicker fixed at the root; stale prompt withdrawn;
   new logo applied (r114–r115).**
