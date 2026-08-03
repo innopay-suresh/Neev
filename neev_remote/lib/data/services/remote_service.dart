@@ -837,13 +837,17 @@ class RemoteService extends ChangeNotifier {
         // is honoured too, not just a remembered Accept.
         final remembered = await ConsentStore.decisionFor(controllerId);
         if (promptOnConnect && remembered != null) {
-          DiagLog.log('host',
-              'consent auto-answered from a remembered decision allow=$remembered');
-          if (remembered) {
-            permControl = defaultPermControl;
+          DiagLog.log(
+              'host',
+              'consent auto-answered from a remembered decision '
+                  'allow=${remembered.allow} control=${remembered.control}');
+          if (remembered.allow) {
             permClipboard = defaultPermClipboard;
             permFiles = defaultPermFiles;
-            hostGrantsControl = defaultPermControl;
+            // Honour the level that was REMEMBERED, not the generic default: a
+            // remembered view-only grant must not quietly become full control.
+            permControl = remembered.control && _hostAllowsControl;
+            hostGrantsControl = permControl;
             await _startHostOffer(controllerId);
           } else {
             _hostSignaling?.sendBye(controllerId);
@@ -859,11 +863,15 @@ class RemoteService extends ChangeNotifier {
           _pendingConsent = ConsentRequest(controllerId);
           notifyListeners();
         } else {
-          // Silent accept (unattended / never-ask) uses the default permissions.
-          permControl = defaultPermControl;
+          // Silent accept (unattended / never-ask) uses the default
+          // permissions — but the host's own "View only mode" still wins. It
+          // used to be ignored here, so a host set to view-only WITH the prompt
+          // turned off handed over full control anyway: the same bug the prompt
+          // path was fixed for.
           permClipboard = defaultPermClipboard;
           permFiles = defaultPermFiles;
-          hostGrantsControl = defaultPermControl;
+          permControl = _hostAllowsControl;
+          hostGrantsControl = permControl;
           await _startHostOffer(controllerId);
         }
         break;
@@ -1198,6 +1206,10 @@ class RemoteService extends ChangeNotifier {
 
   int _lastInputDropLogMs = -10000;
   int _lastViewOnlyHostDropMs = -10000;
+
+  /// The host's standing position on control: the "allow control" default AND
+  /// the host's own "View only mode". Either one off means no control.
+  bool get _hostAllowsControl => defaultPermControl && !settingsViewOnly;
 
   /// HOST side: whether viewers connected to THIS machine may control it.
   /// Mirrored from the host's own "View only mode" setting. The host is the

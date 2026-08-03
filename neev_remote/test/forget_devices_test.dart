@@ -14,7 +14,7 @@ void main() {
     await ConsentStore.remember('ctrl-926941775', false);
 
     // Same device, different wire form — must still match.
-    expect(await ConsentStore.decisionFor('926 941 775'), isFalse,
+    expect((await ConsentStore.decisionFor('926 941 775'))!.allow, isFalse,
         reason: 'a remembered Decline must be found again');
     expect(await ConsentStore.count(), 1);
 
@@ -26,5 +26,13 @@ void main() {
 
   test('an unknown device has no remembered decision', () async {
     expect(await ConsentStore.decisionFor('111222333'), isNull);
+  });
+
+  test('a remembered VIEW-ONLY grant stays view-only', () async {
+    await ConsentStore.remember('ctrl-444555666', true, control: false);
+    final d = await ConsentStore.decisionFor('444 555 666');
+    expect(d!.allow, isTrue, reason: 'the device is still admitted');
+    expect(d.control, isFalse,
+        reason: 'remembering the admission must not upgrade the access level');
   });
 }

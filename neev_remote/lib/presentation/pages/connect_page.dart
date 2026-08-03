@@ -342,7 +342,8 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     // the wrong default for a security prompt.
     final accepted = choice?.accepted ?? false;
     if (choice?.remember == true) {
-      await ConsentStore.remember(req.controllerId, accepted);
+      await ConsentStore.remember(req.controllerId, accepted,
+          control: choice?.control ?? true);
     }
     if (accepted) {
       // The host's choice is authoritative for this session: a view-only grant
