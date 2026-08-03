@@ -45,28 +45,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
-; Multi-user / unattended access: the SYSTEM service launches + follows the host
-; into whichever session is active (across user-switching / logoff) so the
-; machine is reachable with its machine-wide id + password no matter which
-; account is active. DEFAULT ON — without it the host stays stuck in the first
-; user's session and won't follow user-switching / logon of another account.
-Name: "allusersstart"; Description: "Keep reachable for every user (follow user-switching / lock screen)"; GroupDescription: "Unattended access:"
-; Seamless user-switch: run the SYSTEM-service transport (session 0, survives
-; switches) + a per-session capture+input worker instead of the per-session
-; Flutter host, so a user-profile switch hands the viewer the new profile's
-; screen + control with NO disconnect.
-;
-; DEFAULT ON. It was opt-in and unchecked while unvalidated, but this is the
-; path that carries unattended access, the host consent prompt, host-side
-; view-only enforcement and the session bar. A user who skipped the checkbox
-; silently got a lesser product and had no way to enable it afterwards short of
-; reinstalling — the flag lives in HKLM and there is no in-app toggle.
-;
-; Safe to default on because the service now falls back: if the transport
-; cannot stay up (3 fast failures) the helper gives up on seamless and runs the
-; Flutter host instead, so a broken transport can never leave the machine
-; unreachable. See neev_helper.cpp (transportBroken).
-Name: "seamless"; Description: "Seamless user-switch (recommended — no disconnect when switching users)"; GroupDescription: "Unattended access:"
+; NOTE: unattended access (ServiceHost + TransportMode) is no longer a choice.
+; It was two checkboxes, and a user who missed them silently got a lesser
+; product with no way to fix it short of reinstalling — the flags live in HKLM
+; and nothing in the app can write them. They are now always installed; see
+; [Registry] below.
 
 [Files]
 ; Packages the entire release folder produced by `flutter build windows`.
@@ -91,17 +74,22 @@ Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Neev Remote
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
-; ServiceHost mode (opt-in via the "allusersstart" task): the helper SERVICE
+; ServiceHost mode (ALWAYS ON): the helper SERVICE
 ; launches + follows the host into the active session, so there is exactly ONE
 ; service-owned host (no duplicate from a per-user Run key). The service reads
 ; this flag live. Removed on uninstall.
-Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "ServiceHost"; ValueData: "1"; Flags: uninsdeletevalue; Tasks: allusersstart
-; TransportMode (opt-in via the "seamless" task): the service runs the Go
-; transport (session 0) + per-session capture+input worker for a zero-disconnect
-; user-profile switch. The service reads this live. Written 1 when chosen, and
-; forced 0 when NOT chosen so unticking it on re-install actually turns it off.
-Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "TransportMode"; ValueData: "1"; Flags: uninsdeletevalue; Tasks: seamless
-Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "TransportMode"; ValueData: "0"; Flags: uninsdeletevalue; Tasks: not seamless
+Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "ServiceHost"; ValueData: "1"; Flags: uninsdeletevalue
+; TransportMode (ALWAYS ON): the service runs the Go transport (session 0) +
+; per-session capture+input worker for a zero-disconnect user-profile switch.
+; This is the path that carries unattended access, the host consent prompt,
+; host-side view-only enforcement and the session bar — the product is
+; incomplete without it, so it is not optional.
+;
+; Safe to force on because the service falls back on its own: three fast
+; transport failures and the helper runs the Flutter host instead, so a
+; transport that cannot start can never leave the machine unreachable.
+; See neev_helper.cpp (transportBroken).
+Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "TransportMode"; ValueData: "1"; Flags: uninsdeletevalue
 #if RelayURL != ""
 ; Relay URL for the Go transport (seamless mode), matching the app's baked URL.
 Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: string; ValueName: "RelayURL"; ValueData: "{#RelayURL}"; Flags: uninsdeletevalue

@@ -457,6 +457,27 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-08-03 — Unattended access is no longer optional; seamless transport has
+  a crash-loop fallback (r120).** The installer offered "Seamless user-switch
+  (experimental)" UNCHECKED, plus a second unattended-access checkbox. A user who
+  skipped them silently got a lesser product — that path carries unattended
+  access, the host consent prompt, host-side view-only enforcement and the
+  session bar — and could not fix it afterwards: the flags live in
+  `HKLM\SOFTWARE\NeevRemote` and nothing in the app can write them, so the only
+  remedy was reinstalling. Both checkboxes are removed and both flags are now
+  written unconditionally; only the desktop-shortcut choice remains.
+  **This was only safe once the service could give up.** The helper previously
+  relaunched the transport forever with no alternative, so a `neev-host.exe`
+  that could never start left the machine unreachable with a log full of
+  relaunch lines. It now counts a transport exiting within 15s of launch (or
+  failing to launch at all) as a fast failure, and after three marks seamless
+  broken and runs the Flutter host instead — regardless of the ServiceHost flag,
+  because unreachable is the worst outcome. Logged loudly, never silent.
+  **LD-34 (new): a capability the product depends on must not be an installer
+  checkbox that can be missed, ESPECIALLY when nothing in the app can turn it on
+  afterwards. Force it on and make the failure path recoverable, rather than
+  asking the user to get it right once.**
+
 - **2026-08-03 — Consent card flicker fixed at the root; stale prompt withdrawn;
   new logo applied (r114–r115).**
   **(a) FLICKER.** Removing the map animation was necessary but NOT sufficient —
