@@ -49,8 +49,6 @@ var (
 	procCloseClipboardCW   = modUser32CW.NewProc("CloseClipboard")
 	procEmptyClipboardCW   = modUser32CW.NewProc("EmptyClipboard")
 	procSetClipboardDataCW = modUser32CW.NewProc("SetClipboardData")
-	procSetTimerCW         = modUser32CW.NewProc("SetTimer")
-	procKillTimerCW        = modUser32CW.NewProc("KillTimer")
 	procPostMessageCW      = modUser32CW.NewProc("PostMessageW")
 
 	procCreateSolidBrushCW = modGdi32CW.NewProc("CreateSolidBrush")
@@ -68,6 +66,10 @@ var (
 	procGetDeviceCapsCW    = modGdi32CW.NewProc("GetDeviceCaps")
 	procPolygonCW          = modGdi32CW.NewProc("Polygon")
 	procGetStockObjectCW   = modGdi32CW.NewProc("GetStockObject")
+	procCreateCompatDCCW   = modGdi32CW.NewProc("CreateCompatibleDC")
+	procCreateCompatBmpCW  = modGdi32CW.NewProc("CreateCompatibleBitmap")
+	procBitBltCW           = modGdi32CW.NewProc("BitBlt")
+	procDeleteDCCW         = modGdi32CW.NewProc("DeleteDC")
 
 	modKernel32CW      = syscall.NewLazyDLL("kernel32.dll")
 	procGlobalAllocCW  = modKernel32CW.NewProc("GlobalAlloc")
@@ -88,8 +90,6 @@ const (
 	cwWMLButtonDown = 0x0201
 	cwWMLButtonUp   = 0x0202
 	cwWMKeyDown     = 0x0100
-	cwWMTimer       = 0x0113
-	cwAnimTimerID   = 1
 	cwVKEscape      = 0x1B
 	cwVKReturn      = 0x0D
 	cwIDCArrow      = 32512
@@ -105,6 +105,8 @@ const (
 	cwLogPixelsX    = 88
 	cwCFUnicodeText = 13
 	cwGMemMoveable  = 0x0002
+	cwWMEraseBkgnd  = 0x0014
+	cwSrcCopy       = 0x00CC0020
 )
 
 type cwRect struct{ Left, Top, Right, Bottom int32 }
@@ -345,6 +347,11 @@ func (c *consentWin) proc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case cwWMPaint:
 		c.paint(hwnd)
 		return 0
+	case cwWMEraseBkgnd:
+		// Claim the erase. Letting the system blank the window first and then
+		// repainting over it is exactly the flash a user sees; paint() covers
+		// every pixel via the back buffer.
+		return 1
 	case cwWMMouseMove:
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
 		ha := ptInRect(c.rcAccept, x, y)
@@ -498,11 +505,45 @@ func (c *consentWin) line(hdc uintptr, x1, y1, x2, y2 int32, col uintptr) {
 
 func (c *consentWin) paint(hwnd uintptr) {
 	var ps cwPaintStruct
-	hdc, _, _ := procBeginPaintCW.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+	screen, _, _ := procBeginPaintCW.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 	defer procEndPaintCW.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 
 	var rc cwRect
 	procGetClientRectCW.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+
+	// DOUBLE BUFFER. Everything below draws into an off-screen bitmap which is
+	// blitted to the screen in one operation. Drawing straight to the window
+	// meant each repaint rebuilt the card in place — background, map polygons,
+	// text — and the intermediate states were visible as flicker. That happens
+	// on every hover of the Accept/Decline buttons, so it was unavoidable while
+	// deciding. If the buffer can't be created, fall back to direct drawing:
+	// a flickering prompt still beats no prompt.
+	hdc := screen
+	memDC, _, _ := procCreateCompatDCCW.Call(screen)
+	var memBmp, oldBmp uintptr
+	if memDC != 0 {
+		memBmp, _, _ = procCreateCompatBmpCW.Call(screen,
+			uintptr(rc.Right), uintptr(rc.Bottom))
+		if memBmp != 0 {
+			oldBmp, _, _ = procSelectObjectCW.Call(memDC, memBmp)
+			hdc = memDC
+		}
+	}
+	defer func() {
+		if hdc == memDC {
+			procBitBltCW.Call(screen, 0, 0, uintptr(rc.Right), uintptr(rc.Bottom),
+				memDC, 0, 0, cwSrcCopy)
+		}
+		if oldBmp != 0 {
+			procSelectObjectCW.Call(memDC, oldBmp)
+		}
+		if memBmp != 0 {
+			procDeleteObjectCW.Call(memBmp)
+		}
+		if memDC != 0 {
+			procDeleteDCCW.Call(memDC)
+		}
+	}()
 
 	bg, _, _ := procCreateSolidBrushCW.Call(cwColCard)
 	procFillRectCW.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)

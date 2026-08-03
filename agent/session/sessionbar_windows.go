@@ -55,6 +55,10 @@ var (
 	procRoundRectSB        = modGdi32SB.NewProc("RoundRect")
 	procEllipseSB          = modGdi32SB.NewProc("Ellipse")
 	procGetDeviceCapsSB    = modGdi32SB.NewProc("GetDeviceCaps")
+	procCreateCompatDCSB   = modGdi32SB.NewProc("CreateCompatibleDC")
+	procCreateCompatBmpSB  = modGdi32SB.NewProc("CreateCompatibleBitmap")
+	procBitBltSB           = modGdi32SB.NewProc("BitBlt")
+	procDeleteDCSB         = modGdi32SB.NewProc("DeleteDC")
 )
 
 const (
@@ -178,6 +182,8 @@ func sessionBarProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case cwWMPaint:
 		b.paint(hwnd)
 		return 0
+	case cwWMEraseBkgnd:
+		return 1 // painted in full via the back buffer; no system erase flash
 	case cwWMMouseMove:
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
 		if h := ptInRect(b.rcHangUp, x, y); h != b.hot {
@@ -211,11 +217,41 @@ func sessionBarProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 
 func (b *sessionBar) paint(hwnd uintptr) {
 	var ps cwPaintStruct
-	hdc, _, _ := procBeginPaintSB.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+	screen, _, _ := procBeginPaintSB.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 	defer procEndPaintSB.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 
 	var rc cwRect
 	procGetClientRectSB.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+
+	// Double buffered for the same reason as the consent card: this repaints on
+	// every hover of the Disconnect button, and it sits on top of whatever the
+	// user is doing, so an in-place redraw is very visible.
+	hdc := screen
+	memDC, _, _ := procCreateCompatDCSB.Call(screen)
+	var memBmp, oldBmp uintptr
+	if memDC != 0 {
+		memBmp, _, _ = procCreateCompatBmpSB.Call(screen,
+			uintptr(rc.Right), uintptr(rc.Bottom))
+		if memBmp != 0 {
+			oldBmp, _, _ = procSelectObjectSB.Call(memDC, memBmp)
+			hdc = memDC
+		}
+	}
+	defer func() {
+		if hdc == memDC {
+			procBitBltSB.Call(screen, 0, 0, uintptr(rc.Right), uintptr(rc.Bottom),
+				memDC, 0, 0, cwSrcCopy)
+		}
+		if oldBmp != 0 {
+			procSelectObjectSB.Call(memDC, oldBmp)
+		}
+		if memBmp != 0 {
+			procDeleteObjectSB.Call(memBmp)
+		}
+		if memDC != 0 {
+			procDeleteDCSB.Call(memDC)
+		}
+	}()
 
 	bg, _, _ := procCreateSolidBrushSB.Call(cwColCard)
 	procFillRectSB.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)
