@@ -201,7 +201,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
         appBar: AppBar(
           backgroundColor: AppColors.surface,
           elevation: 0,
-          title: Text('Neev Remote', style: AppTypography.heading2),
+          title: BrandWordmark(style: AppTypography.heading2),
         ),
         body: Center(
           child: SingleChildScrollView(
@@ -586,7 +586,7 @@ class _Sidebar extends StatelessWidget {
                         .copyWith(color: AppColors.primary, fontSize: 12.5)),
               ),
               const SizedBox(width: 9),
-              Text('Neev Remote',
+              BrandWordmark(
                   style: AppTypography.cardTitle.copyWith(fontSize: 13.5)),
             ]),
           ),

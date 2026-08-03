@@ -51,25 +51,26 @@ var (
 	procSetClipboardDataCW = modUser32CW.NewProc("SetClipboardData")
 	procPostMessageCW      = modUser32CW.NewProc("PostMessageW")
 
-	procCreateSolidBrushCW = modGdi32CW.NewProc("CreateSolidBrush")
-	procCreatePenCW        = modGdi32CW.NewProc("CreatePen")
-	procSelectObjectCW     = modGdi32CW.NewProc("SelectObject")
-	procDeleteObjectCW     = modGdi32CW.NewProc("DeleteObject")
-	procCreateFontCW       = modGdi32CW.NewProc("CreateFontW")
-	procSetTextColorCW     = modGdi32CW.NewProc("SetTextColor")
-	procSetBkModeCW        = modGdi32CW.NewProc("SetBkMode")
-	procRoundRectCW        = modGdi32CW.NewProc("RoundRect")
-	procEllipseCW          = modGdi32CW.NewProc("Ellipse")
-	procRectangleCW        = modGdi32CW.NewProc("Rectangle")
-	procMoveToExCW         = modGdi32CW.NewProc("MoveToEx")
-	procLineToCW           = modGdi32CW.NewProc("LineTo")
-	procGetDeviceCapsCW    = modGdi32CW.NewProc("GetDeviceCaps")
-	procPolygonCW          = modGdi32CW.NewProc("Polygon")
-	procGetStockObjectCW   = modGdi32CW.NewProc("GetStockObject")
-	procCreateCompatDCCW   = modGdi32CW.NewProc("CreateCompatibleDC")
-	procCreateCompatBmpCW  = modGdi32CW.NewProc("CreateCompatibleBitmap")
-	procBitBltCW           = modGdi32CW.NewProc("BitBlt")
-	procDeleteDCCW         = modGdi32CW.NewProc("DeleteDC")
+	procCreateSolidBrushCW     = modGdi32CW.NewProc("CreateSolidBrush")
+	procCreatePenCW            = modGdi32CW.NewProc("CreatePen")
+	procSelectObjectCW         = modGdi32CW.NewProc("SelectObject")
+	procDeleteObjectCW         = modGdi32CW.NewProc("DeleteObject")
+	procCreateFontCW           = modGdi32CW.NewProc("CreateFontW")
+	procSetTextColorCW         = modGdi32CW.NewProc("SetTextColor")
+	procSetBkModeCW            = modGdi32CW.NewProc("SetBkMode")
+	procRoundRectCW            = modGdi32CW.NewProc("RoundRect")
+	procEllipseCW              = modGdi32CW.NewProc("Ellipse")
+	procRectangleCW            = modGdi32CW.NewProc("Rectangle")
+	procMoveToExCW             = modGdi32CW.NewProc("MoveToEx")
+	procLineToCW               = modGdi32CW.NewProc("LineTo")
+	procGetDeviceCapsCW        = modGdi32CW.NewProc("GetDeviceCaps")
+	procPolygonCW              = modGdi32CW.NewProc("Polygon")
+	procGetStockObjectCW       = modGdi32CW.NewProc("GetStockObject")
+	procGetTextExtentPoint32CW = modGdi32CW.NewProc("GetTextExtentPoint32W")
+	procCreateCompatDCCW       = modGdi32CW.NewProc("CreateCompatibleDC")
+	procCreateCompatBmpCW      = modGdi32CW.NewProc("CreateCompatibleBitmap")
+	procBitBltCW               = modGdi32CW.NewProc("BitBlt")
+	procDeleteDCCW             = modGdi32CW.NewProc("DeleteDC")
 
 	modKernel32CW      = syscall.NewLazyDLL("kernel32.dll")
 	procGlobalAllocCW  = modKernel32CW.NewProc("GlobalAlloc")
@@ -157,6 +158,9 @@ var (
 	cwColBorder    = rgb(0xDE, 0xD6, 0xC8)
 	cwColBorderStr = rgb(0xD0, 0xC6, 0xAC)
 	cwColDanger    = rgb(0xD8, 0x49, 0x3F) // Decline mark (DESIGN.md error hue)
+	// Wordmark green, sampled from the logo itself so the name and the icon
+	// agree. "Neev" is green, "Remote" is the product accent.
+	cwColBrandGreen = rgb(0x2E, 0x54, 0x11)
 )
 
 const consentClassName = "NeevConsentWindow"
@@ -473,6 +477,18 @@ func (c *consentWin) text(hdc uintptr, s string, r cwRect, f uintptr, col uintpt
 	procSelectObjectCW.Call(hdc, old)
 }
 
+// textWidth measures a run in the given font, so two-tone text can be laid out
+// without guessing where the first half ends.
+func (c *consentWin) textWidth(hdc uintptr, s string, f uintptr) int32 {
+	old, _, _ := procSelectObjectCW.Call(hdc, f)
+	u16, _ := syscall.UTF16FromString(s)
+	var sz struct{ CX, CY int32 }
+	procGetTextExtentPoint32CW.Call(hdc, uintptr(unsafe.Pointer(&u16[0])),
+		uintptr(len(u16)-1), uintptr(unsafe.Pointer(&sz)))
+	procSelectObjectCW.Call(hdc, old)
+	return sz.CX
+}
+
 // roundRect draws a filled rounded rectangle, optionally with a border.
 func (c *consentWin) roundRect(hdc uintptr, r cwRect, radius int32, fill uintptr, border uintptr, hasBorder bool) {
 	brush, _, _ := procCreateSolidBrushCW.Call(fill)
@@ -576,9 +592,16 @@ func (c *consentWin) paint(hwnd uintptr) {
 	c.roundRect(hdc, mark, c.px(6), cwColAccent, 0, false)
 	c.text(hdc, "N", mark, c.font(13, true, false), cwColCard,
 		cwDTCenter|cwDTVCenter|cwDTSingleLine)
-	c.text(hdc, "Neev Remote",
-		cwRect{pad + markSize + c.px(9), top, rc.Right - pad, top + markSize},
-		fTitle, cwColInk, cwDTLeft|cwDTVCenter|cwDTSingleLine)
+	// Two-tone wordmark. Drawn as two runs because GDI has no rich text: measure
+	// "Neev" so "Remote" starts exactly where it ends, with no gap or overlap.
+	wmX := pad + markSize + c.px(9)
+	wmRect := cwRect{wmX, top, rc.Right - pad, top + markSize}
+	c.text(hdc, "Neev", wmRect, fTitle, cwColBrandGreen,
+		cwDTLeft|cwDTVCenter|cwDTSingleLine)
+	neevW := c.textWidth(hdc, "Neev", fTitle)
+	c.text(hdc, "Remote",
+		cwRect{wmX + neevW, top, rc.Right - pad, top + markSize},
+		fTitle, cwColAccent, cwDTLeft|cwDTVCenter|cwDTSingleLine)
 
 	closeSz := c.px(24)
 	c.rcClose = cwRect{rc.Right - pad - closeSz, top, rc.Right - pad, top + closeSz}

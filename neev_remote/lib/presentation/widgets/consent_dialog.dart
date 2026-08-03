@@ -137,8 +137,7 @@ class _ConsentDialogState extends State<ConsentDialog> {
                     fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: AppSpacing.sm),
-          Text('Neev Remote',
-              style: AppTypography.title.copyWith(fontSize: 17)),
+          BrandWordmark(style: AppTypography.title.copyWith(fontSize: 17)),
           const Spacer(),
           IconButton(
             // Closing the prompt is a refusal, never an accept.

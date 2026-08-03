@@ -44,8 +44,18 @@
 .logoText {
   font-size: 15px;
   font-weight: 700;
-  color: var(--text-primary);
   letter-spacing: -0.3px;
+}
+
+/* Two-tone wordmark: "Neev" carries the logo's green, "Remote" the brand
+   orange. Kept as two spans rather than an image so it stays crisp at any zoom
+   and inherits the surrounding type. */
+.brandNeev {
+  color: #2E5411;
+}
+
+.brandRemote {
+  color: #F05A28;
 }
 
 /* ── Navigation ───────────────────────────────────────────────── */

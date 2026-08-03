@@ -44,7 +44,10 @@ export function Sidebar() {
           <img src="/favicon.png" alt="Neev Remote" style={{ width: '22px', height: '22px', display: 'block' }} />
         </div>
         {!collapsed && (
-          <span className={styles.logoText}>Neev Remote</span>
+          <span className={styles.logoText}>
+            <span className={styles.brandNeev}>Neev</span>
+            <span className={styles.brandRemote}>Remote</span>
+          </span>
         )}
       </div>
 

@@ -867,11 +867,9 @@ class _CommandNavRailState extends State<CommandNavRail> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Neev Remote',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              AppTypography.sectionTitle.copyWith(fontSize: 15)),
+                      BrandWordmark(
+                          style: AppTypography.sectionTitle
+                              .copyWith(fontSize: 15)),
                       Text('Global Remote Access',
                           style: AppTypography.meta.copyWith(fontSize: 10)),
                     ],

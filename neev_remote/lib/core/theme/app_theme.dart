@@ -518,3 +518,37 @@ ThemeData lightTheme() {
     ),
   );
 }
+
+/// Brand wordmark colours. "Neev" carries the logo's green, "Remote" the
+/// product accent, so the name reads the same everywhere it appears.
+class BrandColors {
+  /// Sampled from the logo mark itself, so the wordmark and the icon agree.
+  static const Color neev = Color(0xFF2E5411);
+  static const Color remote = Color(0xFFF05A28);
+}
+
+/// The "NeevRemote" wordmark, two-tone.
+///
+/// A widget rather than a copied TextSpan at each call site: the name appears in
+/// the window title bar, the home header and the consent card, and those had
+/// already drifted apart in size and weight once.
+class BrandWordmark extends StatelessWidget {
+  const BrandWordmark({super.key, this.style});
+
+  /// Base style; only the colours are overridden per half.
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final base = style ?? AppTypography.title;
+    return RichText(
+      text: TextSpan(
+        style: base,
+        children: [
+          TextSpan(text: 'Neev', style: TextStyle(color: BrandColors.neev)),
+          TextSpan(text: 'Remote', style: TextStyle(color: BrandColors.remote)),
+        ],
+      ),
+    );
+  }
+}

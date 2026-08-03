@@ -11,7 +11,10 @@ export function NavBar({ logsCount = 0, onToggleLogs, logsOpen = false }) {
     <nav className={styles.nav}>
       <div className={styles.brand}>
         <img src="/favicon.png" alt="Neev Remote" className={styles.brandImage} />
-        <span className={styles.brandName}>Neev Remote</span>
+        <span className={styles.brandName}>
+          <span style={{ color: '#2E5411' }}>Neev</span>
+          <span style={{ color: '#F05A28' }}>Remote</span>
+        </span>
         <span className={styles.brandBadge}>Web</span>
       </div>
 
