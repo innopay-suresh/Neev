@@ -457,6 +457,33 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-08-01 — Privacy becomes a LEASE; End button moved to the page that
+  actually renders; laptop artwork corrected (r112).** All three reported as
+  "still broken" after r111.
+  **(a) THE END BUTTON WAS MY REGRESSION.** It was added to
+  `CommandActivityPanel`, which **nothing instantiates** — dead code from the
+  redesign, so it could never appear. Moved to a live-session banner at the top
+  of `HomeCommandCenter` (the rendered page), showing who is watching and
+  whether they hold control or view-only. `RemoteService` now notifies on viewer
+  CONNECT as well as removal, or the banner would not appear until something
+  else rebuilt the page. **Lesson: verify a widget is actually instantiated
+  before adding a control to it — the analyzer reports these as
+  `unused_element`, and several other redesign leftovers are still listed.**
+  **(b) PRIVACY IS NO LONGER A LATCH.** The r111 fix cleared privacy when the
+  transport reported zero viewers. That wiring is correct but depends on
+  NOTICING a disconnect, and every disconnect signal can fail: a crashed or
+  network-dropped viewer sends no bye, an unclean teardown never reaches
+  dropPeer, a lost IPC message takes the session-state notice with it. Now the
+  viewer re-asserts privacy every 4s and the host restores itself 12s after
+  those stop — for any reason. **LD-32 (new): any state that can lock a user out
+  of their own machine must EXPIRE on its own, never depend on observing a
+  disconnect. Session-end teardown stays as the fast path, never as the
+  guarantee.**
+  **(c) ARTWORK.** The accent laptop read as a leaning slab: bezel and display
+  were both accent-filled so no edge defined the screen plane, over a
+  tint-on-white deck that was nearly invisible. Both machines now share one
+  construction and differ only in display fill; bezel inset 0.055 -> 0.13.
+
 - **2026-07-31 — Access model reworked end to end: host authority, AnyDesk-style
   unattended access, host-side disconnect, privacy lock-out fix (r109–r111).
   Pending hardware validation.**
