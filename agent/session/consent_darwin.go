@@ -6,10 +6,31 @@ import (
 	"encoding/json"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
+
+// Live prompts by viewer id, so one can be withdrawn when the request goes
+// away. Without this the alert stayed on screen asking the host to decide
+// something that no longer existed.
+var (
+	consentCmdMu sync.Mutex
+	consentCmds  = map[string]*exec.Cmd{}
+)
+
+// cancelConsentPrompt closes the prompt for a viewer that is no longer asking.
+// Killing osascript makes cmd.Output() return an error, which showConsentDialog
+// already treats as a denial.
+func cancelConsentPrompt(viewerID string) {
+	consentCmdMu.Lock()
+	cmd := consentCmds[viewerID]
+	consentCmdMu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+}
 
 // macOS consent prompt.
 //
@@ -94,6 +115,15 @@ func showConsentDialog(viewerID string) (allow bool, control bool, remember bool
 	}
 	cmd := exec.Command("osascript", "-l", "JavaScript", "-e", consentAlertJS,
 		prettyConsentID(viewerID), viewOnlyDefault)
+	consentCmdMu.Lock()
+	consentCmds[viewerID] = cmd
+	consentCmdMu.Unlock()
+	defer func() {
+		consentCmdMu.Lock()
+		delete(consentCmds, viewerID)
+		consentCmdMu.Unlock()
+	}()
+
 	done := make(chan struct{})
 	var out []byte
 	var err error

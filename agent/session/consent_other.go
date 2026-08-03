@@ -10,3 +10,6 @@ package session
 func showConsentDialog(viewerID string) (allow, control, remember bool) {
 	return false, false, false
 }
+
+// cancelConsentPrompt is a no-op where no prompt is ever shown.
+func cancelConsentPrompt(viewerID string) {}

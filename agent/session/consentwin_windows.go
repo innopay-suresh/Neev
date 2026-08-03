@@ -51,6 +51,7 @@ var (
 	procSetClipboardDataCW = modUser32CW.NewProc("SetClipboardData")
 	procSetTimerCW         = modUser32CW.NewProc("SetTimer")
 	procKillTimerCW        = modUser32CW.NewProc("KillTimer")
+	procPostMessageCW      = modUser32CW.NewProc("PostMessageW")
 
 	procCreateSolidBrushCW = modGdi32CW.NewProc("CreateSolidBrush")
 	procCreatePenCW        = modGdi32CW.NewProc("CreatePen")
@@ -166,7 +167,22 @@ var (
 	consentClassOnce sync.Once
 	consentWinsMu    sync.Mutex
 	consentWins      = map[uintptr]*consentWin{}
+	// viewer id -> live prompt window, so a request that goes away can take its
+	// dialog with it.
+	consentByViewer = map[string]uintptr{}
 )
+
+// cancelConsentPrompt withdraws the prompt for a viewer that is no longer
+// asking. Posting WM_CLOSE runs the normal refusal path on the window's own
+// thread — safe from any goroutine, and it cannot race the user answering.
+func cancelConsentPrompt(viewerID string) {
+	consentWinsMu.Lock()
+	hwnd := consentByViewer[viewerID]
+	consentWinsMu.Unlock()
+	if hwnd != 0 {
+		procPostMessageCW.Call(hwnd, cwWMClose, 0, 0)
+	}
+}
 
 // consentDispatch is the one registered window procedure. Messages that arrive
 // before the hwnd is registered (WM_NCCREATE/WM_CREATE, sent inside
@@ -201,8 +217,6 @@ type consentWin struct {
 	rcFullCtl, rcViewOnly                            cwRect
 	hotAccept, hotDecline                            bool
 	copied                                           bool
-	// Animation phase in [0,1): advances the packets along the connection arc.
-	phase float64
 }
 
 func (c *consentWin) px(v int) int32 { return int32(float64(v) * c.scale) }
@@ -211,6 +225,7 @@ func (c *consentWin) px(v int) int32 { return int32(float64(v) * c.scale) }
 // Returns allow + whether to remember the decision.
 func showConsentWindow(viewerID string) (allow bool, control bool, remember bool) {
 	c := &consentWin{deviceID: prettyConsentID(viewerID), scale: 1}
+	rawViewerID := viewerID
 	// Default the access level to the host's own View-only setting, so the
 	// prompt opens on what this machine's owner already asked for.
 	c.res.control = !hostViewOnlyDefault()
@@ -281,17 +296,17 @@ func showConsentWindow(viewerID string) (allow bool, control bool, remember bool
 	// closes so a stale entry can never drive a later window.
 	consentWinsMu.Lock()
 	consentWins[hwnd] = c
+	consentByViewer[rawViewerID] = hwnd
 	consentWinsMu.Unlock()
 	defer func() {
 		consentWinsMu.Lock()
 		delete(consentWins, hwnd)
+		delete(consentByViewer, rawViewerID)
 		consentWinsMu.Unlock()
 	}()
 	// The window is created before this point, so the first paint happens now.
 	procInvalidateRectCW.Call(hwnd, 0, 1)
 	procSetForegroundWinCW.Call(hwnd)
-	// ~30 fps for the packet animation; killed with the window below.
-	procSetTimerCW.Call(hwnd, cwAnimTimerID, 33, 0)
 
 	var msg cwMsg
 	for {
@@ -305,7 +320,6 @@ func showConsentWindow(viewerID string) (allow bool, control bool, remember bool
 			break
 		}
 	}
-	procKillTimerCW.Call(hwnd, cwAnimTimerID)
 	procDestroyWindowCW.Call(hwnd)
 	return c.res.allow, c.res.control, c.res.remember
 }
@@ -330,15 +344,6 @@ func (c *consentWin) proc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	switch msg {
 	case cwWMPaint:
 		c.paint(hwnd)
-		return 0
-	case cwWMTimer:
-		// Advance the connection animation and repaint. A consent prompt that
-		// shows a LIVE link reads as a live request; a frozen diagram does not.
-		c.phase += 0.02
-		for c.phase >= 1 {
-			c.phase -= 1
-		}
-		procInvalidateRectCW.Call(hwnd, 0, 0)
 		return 0
 	case cwWMMouseMove:
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
@@ -837,9 +842,13 @@ func absInt32(v int32) int32 {
 	return v
 }
 
-// connectionArc draws the arc plus the packets travelling along it. The window
-// retimes a repaint (see the WM_TIMER handler), so the packets actually move —
-// the prompt shows a live connection, not a frozen diagram.
+// connectionArc draws the arc and the nodes sitting along it.
+//
+// Deliberately STATIC. An earlier version animated the nodes on a ~30fps
+// WM_TIMER, but each tick invalidated the whole card and GDI repainted it
+// without double buffering, so the entire prompt flickered. A consent dialog is
+// something you read and answer, not something that should be moving while you
+// decide.
 func (c *consentWin) connectionArc(hdc uintptr, a, b cwPoint) {
 	const steps = 48
 	prev := a
@@ -848,12 +857,9 @@ func (c *consentWin) connectionArc(hdc uintptr, a, b cwPoint) {
 		c.line(hdc, prev.X, prev.Y, p.X, p.Y, cwColAccent)
 		prev = p
 	}
-	// Three packets, evenly spaced, advancing with the animation phase.
-	for i := 0; i < 3; i++ {
-		t := c.phase + float64(i)/3.0
-		for t > 1 {
-			t -= 1
-		}
+	// Nodes marking the route, evenly spaced along the arc.
+	for i := 1; i <= 3; i++ {
+		t := float64(i) / 4.0
 		p := arcPoint(a, b, t)
 		rr := c.px(4)
 		c.ellipse(hdc, p.X-rr, p.Y-rr, rr*2, cwColAccent, 0, false)

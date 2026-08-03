@@ -948,6 +948,14 @@ class RemoteService extends ChangeNotifier {
         }
         break;
       case SignalingMessageType.bye:
+        // If this viewer's consent prompt is still open, withdraw it. It used
+        // to stay up after the viewer cancelled, asking the host to decide
+        // about a request that no longer existed.
+        if (_pendingConsent?.controllerId == msg.from) {
+          DiagLog.log('host',
+              'viewer left while its consent prompt was open — withdrawing');
+          _pendingConsent = null;
+        }
         final peer = _hostPeers.remove(msg.from);
         _onHostPeerGone();
         await peer?.close();

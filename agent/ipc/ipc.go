@@ -96,6 +96,13 @@ const (
 	// worker can show/hide the host's session indicator. payload = viewer count
 	// as decimal text ("0" = nobody connected).
 	KindSessionState byte = 0x0D
+
+	// Transport -> worker: withdraw a consent prompt that is still on screen.
+	// The viewer cancelled, disconnected, or the request timed out, so the
+	// question is moot — leaving the dialog up asks the host to decide something
+	// that no longer exists, and it sat there until dismissed by hand.
+	// payload = viewer id.
+	KindConsentCancel byte = 0x0E
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.
@@ -118,6 +125,7 @@ var ErrConnClosed = fmt.Errorf("ipc: connection closed")
 //   - BULK file data is a bounded queue, so a producer blocks on enqueue when
 //     the peer is behind — that is real backpressure to the file sender and it
 //     never touches the hi lane.
+//
 // One reader per direction, so ReadMessage stays lock-free.
 type Conn struct {
 	net.Conn

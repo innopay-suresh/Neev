@@ -344,14 +344,32 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     if (ref.read(settingsProvider).soundOnConnect) {
       SystemSound.play(SystemSoundType.alert);
     }
-    final choice = await showDialog<ConsentChoice>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => ConsentDialog(
-        deviceId: req.controllerId,
-        defaultControl: !ref.read(settingsProvider).viewOnly,
-      ),
-    );
+    // Close the prompt if the request goes away while it is open (the viewer
+    // cancelled or disconnected). Without this the dialog sat there until
+    // dismissed by hand, asking about a viewer that had already left.
+    var open = true;
+    void withdrawIfGone() {
+      if (open && service.pendingConsent == null && mounted) {
+        open = false;
+        Navigator.of(context, rootNavigator: true).maybePop();
+      }
+    }
+
+    service.addListener(withdrawIfGone);
+    final ConsentChoice? choice;
+    try {
+      choice = await showDialog<ConsentChoice>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => ConsentDialog(
+          deviceId: req.controllerId,
+          defaultControl: !ref.read(settingsProvider).viewOnly,
+        ),
+      );
+    } finally {
+      open = false;
+      service.removeListener(withdrawIfGone);
+    }
     // A null choice means the route was popped without an answer — treat it as
     // a refusal. Accepting on anything other than an explicit Accept would be
     // the wrong default for a security prompt.

@@ -234,6 +234,13 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 						log.Info().Msg("worker: host ended the session from the session bar")
 					})
 				}
+			case ipc.KindConsentCancel:
+				// The viewer stopped asking (cancelled, disconnected, timed out).
+				// Withdraw the prompt instead of leaving the host staring at a
+				// question about a request that no longer exists.
+				id := string(payload)
+				cancelConsentPrompt(id)
+				log.Info().Str("from", id).Msg("worker: consent prompt withdrawn — viewer is gone")
 			case ipc.KindConsentRequest:
 				// Ask the logged-in user to Accept/Deny this viewer. The modal
 				// blocks, so run it off the reader goroutine and reply when answered.

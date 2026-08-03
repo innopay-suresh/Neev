@@ -231,7 +231,21 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 			_ = p.peer.HandleCandidate(m.Payload)
 		}
 	})
-	t.sigClient.On(network.MsgBye, func(m network.Message) { t.dropPeer(m.From) })
+	t.sigClient.On(network.MsgBye, func(m network.Message) {
+		// If a consent prompt is still up for this viewer, withdraw it now
+		// instead of leaving the host to answer a question about someone who
+		// has already left.
+		t.consentMu.Lock()
+		_, pending := t.consentWaiters[m.From]
+		t.consentMu.Unlock()
+		if pending {
+			t.deliverConsent(m.From, false, false)
+			t.cancelConsent(m.From)
+			log.Info().Str("from", m.From).
+				Msg("transport: viewer left while its consent prompt was open — withdrawn")
+		}
+		t.dropPeer(m.From)
+	})
 	return nil
 }
 
@@ -970,10 +984,17 @@ func (t *Transport) askConsent(ctx context.Context, id string) (allow bool, cont
 	t.consentMu.Lock()
 	t.consentWaiters[id] = ch
 	t.consentMu.Unlock()
+	answered := false
 	defer func() {
 		t.consentMu.Lock()
 		delete(t.consentWaiters, id)
 		t.consentMu.Unlock()
+		// Stopped waiting without the user answering — cancelled, timed out or
+		// shutting down. Take the dialog down with the request; it used to stay
+		// up until dismissed by hand, asking about a viewer that had gone.
+		if !answered {
+			t.cancelConsent(id)
+		}
 	}()
 
 	t.workerMu.Lock()
@@ -987,6 +1008,7 @@ func (t *Transport) askConsent(ctx context.Context, id string) (allow bool, cont
 	}
 	select {
 	case a := <-ch:
+		answered = true
 		return a.allow, a.control
 	case <-time.After(30 * time.Second):
 		return false, false // no answer → deny
@@ -1026,6 +1048,19 @@ func (t *Transport) dropAllPeers() int {
 		t.dropPeer(id)
 	}
 	return len(ids)
+}
+
+// cancelConsent tells the worker to withdraw a consent prompt still on screen
+// for this viewer. Safe to call when no prompt is up — the worker just finds
+// nothing to close.
+func (t *Transport) cancelConsent(id string) {
+	t.workerMu.Lock()
+	conn := t.worker
+	t.workerMu.Unlock()
+	if conn == nil {
+		return
+	}
+	_ = conn.WriteMessage(ipc.KindConsentCancel, []byte(id))
 }
 
 // deliverConsent routes a worker's Accept/Deny answer to the waiting askConsent.
