@@ -457,6 +457,61 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-07-31 — Access model reworked end to end: host authority, AnyDesk-style
+  unattended access, host-side disconnect, privacy lock-out fix (r109–r111).
+  Pending hardware validation.**
+  **(a) VIEW-ONLY WAS BACKWARDS.** Reported: enabling view-only on the HOST did
+  nothing while enabling it on the VIEWER worked. View-only was enforced only in
+  RemoteViewWidget (viewer side), so it was an honour system; `permControl`
+  existed on the host, was assigned in three places and READ IN NONE. The host is
+  now authoritative and drops control attempts where input is consumed
+  (`transport.go` for SYSTEM/root, `remote_service.dart` for the Flutter host).
+  Blocked: mouse/keys/wheel + lock/logoff/reboot/privacy/SAS. Still allowed:
+  clipboard, chat, file transfer, monitor switch — a watcher stays useful.
+  Two later holes closed in the same class: the UNATTENDED path and the
+  REMEMBERED-decision path both took control from `defaultPermControl` and
+  ignored the host's view-only setting entirely.
+  **(b) UNATTENDED ACCESS NOW MATCHES ANYDESK.** The relay already verified each
+  connection against the session password OR the unattended password, then threw
+  that distinction away — so `askOnConnect=false` admitted ANYONE holding the
+  session password unprompted. The relay now stamps `auth: unattended|session`;
+  unattended logins skip the prompt (that password IS the authorisation), session
+  logins are still prompted. Interactive Access is three-state
+  (always / when-open / never); "never" leaves the unattended password as the only
+  door. Separate permission profiles per mode, with clipboard and files now
+  enforced (previously only control was). An older relay omits the field and falls
+  back to "session" — the side that prompts.
+  **(c) THE HOST COULD NEVER HANG UP.** Only the viewer had a disconnect control.
+  Added `KindEndSession` + `KindSessionState`, a native always-on-top
+  "Remote session active / Disconnect" bar on Windows (topmost, non-activating;
+  closing it only hides it — dismissing an indicator must not disconnect anyone),
+  and `endHostSession()` + a button on the Flutter host. **Gap: no native
+  indicator on the macOS daemon host** (its worker has no window infrastructure).
+  **(d) PRIVACY MODE LOCKED USERS OUT OF THEIR OWN MACHINE.** Reported: privacy ON
+  + disconnect left the host blanked with local input blocked, recoverable only by
+  reconnecting to turn it off. Privacy was only ever toggled by an explicit viewer
+  command and nothing cleared it when a session ended. Now torn down on every path
+  (zero-viewer signal, worker start AND defer-on-exit, every Flutter peer-removal
+  route). **The start-side clear matters most on macOS: the gamma table PERSISTS
+  after the process dies, so a crash with privacy on blacked the display until
+  someone reset it manually.** `PrivacyMode` was fire-and-forget and now tracks
+  state; a failed DISABLE stays marked ON so teardown retries.
+  **(e) CONSENT CARD.** Redrawn to the approved landscape design, then corrected:
+  800x560 -> 700x452, and the "laptops" that rendered as stray lines were a
+  PROJECTION bug — an isometric rhombus spans both axes but scale came from `du`
+  alone, so a 132px-wide laptop was drawn 230px wide with ~98px clipped off-panel.
+  **LD-29 (new): the HOST is the sole authority on access level. Viewer-side
+  view-only is a courtesy; enforcement belongs where input is consumed. Any new
+  path that admits a viewer MUST record an explicit grant — and unknown viewers
+  default to ALLOWED, never denied, so an unset flag can never silently kill
+  working features (the footgun that got the original host gate deleted).**
+  **LD-30 (new): whether a connection is prompted depends on HOW it
+  authenticated, never on a global switch. The unattended password is the
+  authorisation; the session password is a request.**
+  **LD-31 (new): privacy mode is SESSION state, not machine state. It must be
+  cleared on every path a session can end, including worker start (a previous
+  crash) — on macOS the gamma blanking survives process death.**
+
 - **2026-07-31 — CRITICAL: the r106 native consent prompt worked only ONCE per
   worker, then denied every connection (r108).** Reported from the field as
   "connects only 1 time; closing and reopening the app doesn't help" — the
