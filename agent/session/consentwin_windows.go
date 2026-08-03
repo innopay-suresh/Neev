@@ -244,8 +244,10 @@ func showConsentWindow(viewerID string) (allow bool, control bool, remember bool
 	className, _ := syscall.UTF16PtrFromString(consentClassName)
 
 	// Landscape card: information rail + artwork/access panel side by side.
-	w := c.px(800)
-	h := c.px(560)
+	// Sized down from 800x560 — the first cut was larger than a consent prompt
+	// needs to be and dominated the screen it interrupts.
+	w := c.px(700)
+	h := c.px(452)
 	sw, _, _ := procGetSystemMetricsCW.Call(cwSMCXScreen)
 	sh, _, _ := procGetSystemMetricsCW.Call(cwSMCYScreen)
 	x := (int32(sw) - w) / 2
@@ -496,14 +498,14 @@ func (c *consentWin) paint(hwnd uintptr) {
 		}
 	}()
 
-	pad := c.px(22)
+	pad := c.px(18)
 	// Two columns: a tinted information rail on the left, the access panel and
 	// artwork on the right — the approved landscape layout.
-	railW := c.px(250)
-	footerH := c.px(74)
+	railW := c.px(228)
+	footerH := c.px(66)
 
 	// ---- header -------------------------------------------------------
-	top := c.px(16)
+	top := c.px(13)
 	markSize := c.px(22)
 	mark := cwRect{pad, top, pad + markSize, top + markSize}
 	c.roundRect(hdc, mark, c.px(6), cwColAccent, 0, false)
@@ -519,7 +521,7 @@ func (c *consentWin) paint(hwnd uintptr) {
 	c.line(hdc, cx-k, cy-k, cx+k, cy+k, cwColInkSoft)
 	c.line(hdc, cx+k, cy-k, cx-k, cy+k, cwColInkSoft)
 
-	railTop := top + markSize + c.px(14)
+	railTop := top + markSize + c.px(11)
 	railBottom := rc.Bottom - footerH
 
 	// ---- left rail ----------------------------------------------------
@@ -530,10 +532,10 @@ func (c *consentWin) paint(hwnd uintptr) {
 	rw := rail.Right - c.px(18)
 
 	// Avatar medallion.
-	avSz := c.px(74)
-	c.avatarGlyph(hdc, rx, rail.Top+c.px(18), avSz)
+	avSz := c.px(58)
+	c.avatarGlyph(hdc, rx, rail.Top+c.px(14), avSz)
 
-	ty := rail.Top + c.px(18) + avSz + c.px(16)
+	ty := rail.Top + c.px(14) + avSz + c.px(12)
 	c.text(hdc, "Incoming Connection", cwRect{rx, ty, rw, ty + c.px(26)},
 		fH1, cwColInk, cwDTLeft|cwDTVCenter|cwDTSingleLine)
 	c.text(hdc, "A remote device is requesting to connect to your computer.",
@@ -558,8 +560,8 @@ func (c *consentWin) paint(hwnd uintptr) {
 	}
 
 	// Trust note, boxed.
-	nbTop := idRow.Bottom + c.px(16)
-	nb := cwRect{rx - c.px(8), nbTop, rw + c.px(8), nbTop + c.px(104)}
+	nbTop := idRow.Bottom + c.px(12)
+	nb := cwRect{rx - c.px(6), nbTop, rw + c.px(6), nbTop + c.px(92)}
 	c.roundRect(hdc, nb, c.px(10), cwColCard, cwColBorder, true)
 	c.shieldGlyph(hdc, nb.Left+c.px(12), nb.Top+c.px(12), c.px(18))
 	nl := nb.Left + c.px(38)
@@ -571,7 +573,7 @@ func (c *consentWin) paint(hwnd uintptr) {
 		fSmall, cwColInkSoft, cwDTLeft|cwDTWordBreak)
 
 	// ---- right panel: artwork + access level ---------------------------
-	px0 := rail.Right + c.px(20)
+	px0 := rail.Right + c.px(16)
 	panel := cwRect{px0, railTop, rc.Right - pad, railBottom}
 	c.connectionArt(hdc, panel)
 
@@ -583,14 +585,14 @@ func (c *consentWin) paint(hwnd uintptr) {
 		title = "View Only Access"
 		sub = "The remote user will be able to see your screen but NOT control it."
 	}
-	ay := panel.Bottom - c.px(112)
+	ay := panel.Bottom - c.px(104)
 	c.text(hdc, title, cwRect{panel.Left, ay, panel.Right, ay + c.px(26)},
 		fH1, cwColInk, cwDTCenter|cwDTVCenter|cwDTSingleLine)
 	c.text(hdc, sub, cwRect{panel.Left + c.px(16), ay + c.px(28), panel.Right - c.px(16), ay + c.px(70)},
 		fSmall, cwColInkSoft, cwDTCenter|cwDTWordBreak)
 
 	// Segmented selector.
-	segW := c.px(150)
+	segW := c.px(132)
 	segH := c.px(30)
 	segY := panel.Bottom - c.px(36)
 	midX := (panel.Left + panel.Right) / 2
@@ -624,8 +626,8 @@ func (c *consentWin) paint(hwnd uintptr) {
 
 	btnH := c.px(40)
 	btnY := rc.Bottom - footerH + c.px(18)
-	accW := c.px(150)
-	decW := c.px(140)
+	accW := c.px(132)
+	decW := c.px(124)
 	c.rcAccept = cwRect{rc.Right - pad - accW, btnY, rc.Right - pad, btnY + btnH}
 	c.rcDecline = cwRect{c.rcAccept.Left - c.px(12) - decW, btnY, c.rcAccept.Left - c.px(12), btnY + btnH}
 
@@ -733,58 +735,105 @@ func iso(ox, oy int32, u, v, k float64) cwPoint {
 }
 
 // isoLaptop draws a laptop in isometric projection: a keyboard deck on the
-// floor plane and a screen standing along its far edge. [accent] fills the
-// screen with the brand colour (the device asking); otherwise it is outlined
-// (this computer).
-func (c *consentWin) isoLaptop(hdc uintptr, ox, oy int32, k float64, accent bool) {
-	du, dv := 62.0, 44.0
-	sh := int32(40 * k * c.scale) // screen height in screen-space
+// floor plane and a screen standing along its far edge with a bezel.
+//
+// The first version drew this at k=0.72, which made a laptop about 38px wide —
+// the deck collapsed to a sliver and the whole thing read as a few stray lines
+// rather than a machine. Scale is now set by the caller in real pixels, and the
+// deck is filled (not outlined) so it holds its shape.
+func (c *consentWin) isoLaptop(hdc uintptr, left, top int32, width int32, accent bool) {
+	// Size from the FULL footprint, not one axis. An isometric rhombus spans
+	// both u and v, so scaling by du alone made each laptop ~230px wide when 132
+	// was asked for, with ~98px hanging off the left edge — clipped away, which
+	// is why only stray edges were visible instead of a machine.
+	du, dv := 62.0, 46.0
+	k := float64(width) / ((du + dv) * 0.866)
+	sh := int32(46 * k) // screen height
 
-	p0 := iso(ox, oy, 0, 0, k*c.scale)
-	p1 := iso(ox, oy, du, 0, k*c.scale)
-	p2 := iso(ox, oy, du, dv, k*c.scale)
-	p3 := iso(ox, oy, 0, dv, k*c.scale)
+	// Place the origin so the caller's (left, top) is the bounding box corner:
+	// the deck reaches dv*cos30 to the LEFT of the origin, and the screen rises
+	// sh ABOVE it.
+	ox := left + int32(dv*0.866*k)
+	oy := top + sh
 
-	// Deck (keyboard side), always light so the screen reads as the bright face.
-	c.poly(hdc, []cwPoint{p0, p1, p2, p3}, cwColCard, cwColBorderStr, true)
-	// Keys: short strokes along the deck.
-	for i := 1; i <= 4; i++ {
-		f := float64(i) / 5.0
-		a := iso(ox, oy, du*0.12, dv*f, k*c.scale)
-		b := iso(ox, oy, du*0.88, dv*f, k*c.scale)
+	p0 := iso(ox, oy, 0, 0, k)
+	p1 := iso(ox, oy, du, 0, k)
+	p2 := iso(ox, oy, du, dv, k)
+	p3 := iso(ox, oy, 0, dv, k)
+
+	deckFill := cwColCard
+	if accent {
+		deckFill = cwColTint
+	}
+	// Base slab first, so the deck sits on something with thickness.
+	lip := int32(5 * k)
+	c.poly(hdc, []cwPoint{
+		{p0.X, p0.Y + lip}, {p1.X, p1.Y + lip},
+		{p2.X, p2.Y + lip}, {p3.X, p3.Y + lip},
+	}, cwColBorderStr, cwColBorderStr, true)
+	c.poly(hdc, []cwPoint{p0, p1, p2, p3}, deckFill, cwColBorderStr, true)
+
+	// Keyboard block + trackpad, in the deck's own perspective.
+	kb0 := iso(ox, oy, du*0.10, dv*0.16, k)
+	kb1 := iso(ox, oy, du*0.90, dv*0.16, k)
+	kb2 := iso(ox, oy, du*0.90, dv*0.60, k)
+	kb3 := iso(ox, oy, du*0.10, dv*0.60, k)
+	c.poly(hdc, []cwPoint{kb0, kb1, kb2, kb3}, cwColCard, cwColBorder, true)
+	for i := 1; i <= 3; i++ {
+		f := 0.16 + (0.44 * float64(i) / 4.0)
+		a := iso(ox, oy, du*0.13, dv*f, k)
+		b := iso(ox, oy, du*0.87, dv*f, k)
 		c.line(hdc, a.X, a.Y, b.X, b.Y, cwColBorder)
 	}
-	// Trackpad.
-	t0 := iso(ox, oy, du*0.30, dv*0.80, k*c.scale)
-	t1 := iso(ox, oy, du*0.70, dv*0.80, k*c.scale)
-	t2 := iso(ox, oy, du*0.70, dv*0.95, k*c.scale)
-	t3 := iso(ox, oy, du*0.30, dv*0.95, k*c.scale)
+	t0 := iso(ox, oy, du*0.34, dv*0.70, k)
+	t1 := iso(ox, oy, du*0.66, dv*0.70, k)
+	t2 := iso(ox, oy, du*0.66, dv*0.92, k)
+	t3 := iso(ox, oy, du*0.34, dv*0.92, k)
 	c.poly(hdc, []cwPoint{t0, t1, t2, t3}, cwColCard, cwColBorderStr, true)
 
-	// Screen standing on the far edge p0-p1, tilted back by a small offset.
-	tilt := int32(6 * k * c.scale)
-	s0 := p0
-	s1 := p1
-	s2 := cwPoint{p1.X + tilt, p1.Y - sh}
-	s3 := cwPoint{p0.X + tilt, p0.Y - sh}
-	screenFill, screenLine := cwColCard, cwColBorderStr
+	// Screen: bezel quad standing on the far edge, tilted back slightly.
+	tilt := int32(7 * k)
+	b0, b1 := p0, p1
+	b2 := cwPoint{p1.X + tilt, p1.Y - sh}
+	b3 := cwPoint{p0.X + tilt, p0.Y - sh}
+	bezel := cwColBorderStr
 	if accent {
-		screenFill, screenLine = cwColAccent, cwColAccent
+		bezel = cwColAccentDim
 	}
-	c.poly(hdc, []cwPoint{s0, s1, s2, s3}, screenFill, screenLine, true)
+	c.poly(hdc, []cwPoint{b0, b1, b2, b3}, bezel, bezel, true)
 
-	// Content lines on the screen, following its slope.
+	// Inner display, inset from the bezel so the two read as separate parts.
+	in := 0.055
+	i0 := lerpPt(b0, b2, in)
+	i1 := lerpPt(b1, b3, in)
+	i2 := lerpPt(b2, b0, in)
+	i3 := lerpPt(b3, b1, in)
+	screenFill := cwColCard
 	lineCol := cwColBorder
 	if accent {
+		screenFill = cwColAccent
 		lineCol = cwColTint
 	}
+	c.poly(hdc, []cwPoint{i0, i1, i2, i3}, screenFill, screenFill, true)
+
+	// Content lines across the display, following its slope.
 	for i := 1; i <= 3; i++ {
 		f := float64(i) / 4.0
-		ax := s0.X + int32(float64(s3.X-s0.X)*f) + c.px(7)
-		ay := s0.Y + int32(float64(s3.Y-s0.Y)*f)
-		bx := s1.X + int32(float64(s2.X-s1.X)*f) - c.px(7)
-		by := s1.Y + int32(float64(s2.Y-s1.Y)*f)
+		ax := i0.X + int32(float64(i3.X-i0.X)*f) + int32(6*k)
+		ay := i0.Y + int32(float64(i3.Y-i0.Y)*f)
+		bx := i1.X + int32(float64(i2.X-i1.X)*f) - int32(6*k)
+		by := i1.Y + int32(float64(i2.Y-i1.Y)*f)
 		c.line(hdc, ax, ay, bx, by, lineCol)
+	}
+	// Hinge: the seam where the screen meets the deck.
+	c.line(hdc, b0.X, b0.Y, b1.X, b1.Y, bezel)
+}
+
+// lerpPt walks t of the way from a to b.
+func lerpPt(a, b cwPoint, t float64) cwPoint {
+	return cwPoint{
+		X: a.X + int32(float64(b.X-a.X)*t),
+		Y: a.Y + int32(float64(b.Y-a.Y)*t),
 	}
 }
 
@@ -800,21 +849,23 @@ func (c *consentWin) connectionArt(hdc uintptr, r cwRect) {
 	// Faint isometric floor grid, so the devices sit in a space.
 	c.isoGrid(hdc, r)
 
-	baseY := r.Top + c.px(150)
-	// Remote device (left, accent) sits lower; this computer (right) sits higher.
-	c.isoLaptop(hdc, r.Left+c.px(70), baseY, 0.72, true)
-	c.isoLaptop(hdc, r.Right-c.px(150), r.Top+c.px(96), 0.60, false)
+	nx := r.Left + w/2 + c.px(2)
+	ny := r.Top + c.px(104)
+
+	baseY := r.Top + c.px(78)
+	// Remote device (left, accent) sits lower and larger; this computer (right)
+	// sits higher and slightly smaller, which reads as depth.
+	c.isoLaptop(hdc, r.Left+c.px(16), baseY, c.px(132), true)
+	c.isoLaptop(hdc, r.Right-c.px(124), r.Top+c.px(30), c.px(112), false)
 
 	// Link: two routed traces meeting at the node.
-	nx := r.Left + w/2 + c.px(6)
-	ny := r.Top + c.px(112)
-	c.trace(hdc, r.Left+c.px(150), baseY-c.px(6), nx, ny, true)
-	c.trace(hdc, nx, ny, r.Right-c.px(140), r.Top+c.px(70), false)
+	c.trace(hdc, r.Left+c.px(146), baseY+c.px(70), nx, ny, true)
+	c.trace(hdc, nx, ny, r.Right-c.px(116), r.Top+c.px(86), false)
 
 	// Node: concentric rings + spokes, with a lock at the centre.
-	nodeR := c.px(30)
+	nodeR := c.px(26)
 	c.ellipse(hdc, nx-nodeR, ny-nodeR, nodeR*2, cwColTint, cwColTint, true)
-	inner := c.px(20)
+	inner := c.px(17)
 	c.ellipse(hdc, nx-inner, ny-inner, inner*2, cwColCard, cwColAccent, true)
 	for i := 0; i < 8; i++ {
 		ang := float64(i) * 0.785
@@ -825,7 +876,7 @@ func (c *consentWin) connectionArt(hdc uintptr, r cwRect) {
 		c.line(hdc, nx+ix, ny+iy, nx+dx, ny+dy, cwColAccent)
 		c.ellipse(hdc, nx+dx-c.px(2), ny+dy-c.px(2), c.px(4), cwColAccent, 0, false)
 	}
-	c.lockGlyph(hdc, nx, ny, c.px(11))
+	c.lockGlyph(hdc, nx, ny, c.px(10))
 }
 
 // isoGrid lays a faint floor grid under the artwork.
