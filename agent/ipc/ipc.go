@@ -83,8 +83,19 @@ const (
 	KindConsentRequest byte = 0x0A
 
 	// Worker -> transport: the user's Accept/Deny answer. payload =
-	// {"id":<viewer id>,"allow":bool} JSON.
+	// {"id":<viewer id>,"allow":bool,"control":bool} JSON.
 	KindConsentReply byte = 0x0B
+
+	// Worker -> transport: the HOST user wants to end the session now. Until
+	// this existed, only the viewer could hang up: the person whose screen was
+	// being watched had no way to stop it, which is the wrong way round for a
+	// remote-access tool. payload = viewer id to drop, or empty for ALL viewers.
+	KindEndSession byte = 0x0C
+
+	// Transport -> worker: a viewer connected or the last one left, so the
+	// worker can show/hide the host's session indicator. payload = viewer count
+	// as decimal text ("0" = nobody connected).
+	KindSessionState byte = 0x0D
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

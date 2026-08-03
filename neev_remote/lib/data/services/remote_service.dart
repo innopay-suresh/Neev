@@ -465,6 +465,25 @@ class RemoteService extends ChangeNotifier {
   String? get hostError => _hostError;
   int get connectedViewers => _hostPeers.length;
 
+  /// HOST: end the session(s) this machine is serving.
+  ///
+  /// Until this existed only the VIEWER could hang up — the person whose screen
+  /// was being watched had no way to stop it, which is backwards for a
+  /// remote-access tool. Each viewer is sent a bye first so it shows a clean
+  /// "session ended" instead of appearing to freeze.
+  Future<void> endHostSession({String? viewerId}) async {
+    final ids = viewerId != null
+        ? [viewerId]
+        : _hostPeers.keys.toList(growable: false);
+    if (ids.isEmpty) return;
+    for (final id in ids) {
+      _hostSignaling?.sendBye(id);
+      _hostPeers.remove(id)?.close();
+    }
+    DiagLog.log('host', 'host ended the session (viewers=${ids.length})');
+    notifyListeners();
+  }
+
   // ---- Viewer state ----
   SignalingService? _viewerSignaling;
   WebRTCService? _viewerPeer;

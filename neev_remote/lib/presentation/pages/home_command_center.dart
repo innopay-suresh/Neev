@@ -2467,6 +2467,29 @@ class CommandActivityPanel extends StatelessWidget {
                     title: '$viewers viewer${viewers == 1 ? '' : 's'} connected',
                     sub: 'Sharing your screen · encrypted',
                   ),
+                  const SizedBox(height: 8),
+                  // The HOST's hang-up. Only the viewer could end a session
+                  // before, so the person being watched had no way out.
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => service.endHostSession(),
+                      icon: Icon(Icons.call_end_rounded,
+                          size: 16, color: AppColors.error),
+                      label: Text(
+                        viewers == 1 ? 'End session' : 'Disconnect all viewers',
+                        style: TextStyle(
+                            color: AppColors.error,
+                            fontWeight: FontWeight.w600),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: AppColors.error.withValues(alpha: 0.5)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppRadii.md)),
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                 ],
                 for (final t in xfers) ...[

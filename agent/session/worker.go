@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -204,6 +205,19 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 				case <-runCtx.Done():
 					return
 				}
+			case ipc.KindSessionState:
+				// Show the host's "Remote session active / Disconnect" bar while at
+				// least one viewer is connected. The host had no way to end a session
+				// it did not start; this is that control.
+				if strings.TrimSpace(string(payload)) == "0" {
+					hideHostSessionBar()
+				} else {
+					showHostSessionBar(func() {
+						// Empty payload = drop every viewer.
+						_ = ic.WriteMessage(ipc.KindEndSession, nil)
+						log.Info().Msg("worker: host ended the session from the session bar")
+					})
+				}
 			case ipc.KindConsentRequest:
 				// Ask the logged-in user to Accept/Deny this viewer. The modal
 				// blocks, so run it off the reader goroutine and reply when answered.
@@ -218,7 +232,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 							"id": id, "allow": remembered.Allow, "control": remembered.Control})
 						_ = ic.WriteMessage(ipc.KindConsentReply, reply)
 						log.Info().Str("from", id).Bool("allow", remembered.Allow).
-						Bool("control", remembered.Control).
+							Bool("control", remembered.Control).
 							Msg("worker: consent auto-answered from a remembered decision")
 						return
 					}

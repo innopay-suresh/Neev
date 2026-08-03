@@ -280,6 +280,7 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		log.Info().Str("from", m.From).Bool("control", control).
 			Msg("transport: interactive login auto-accepted (prompt disabled)")
 	}
+	defer t.announceSessionState()
 	prof.Control = control
 	t.controlMu.Lock()
 	t.controlAllowed[m.From] = control
@@ -658,6 +659,22 @@ func (t *Transport) getPeer(id string) *peerSession {
 	return t.peers[id]
 }
 
+// announceSessionState tells the worker how many viewers are connected so it
+// can show or hide the host's "Remote session active / Disconnect" bar. Without
+// this the host has no indication a session is live and no way to end it.
+func (t *Transport) announceSessionState() {
+	t.mu.Lock()
+	n := len(t.peers)
+	t.mu.Unlock()
+	t.workerMu.Lock()
+	conn := t.worker
+	t.workerMu.Unlock()
+	if conn == nil {
+		return
+	}
+	_ = conn.WriteMessage(ipc.KindSessionState, []byte(strconv.Itoa(n)))
+}
+
 func (t *Transport) dropPeer(id string) {
 	t.mu.Lock()
 	ps, ok := t.peers[id]
@@ -667,6 +684,9 @@ func (t *Transport) dropPeer(id string) {
 	t.mu.Unlock()
 	if ok && ps.peer != nil {
 		ps.peer.Close()
+	}
+	if ok {
+		t.announceSessionState()
 	}
 }
 
@@ -709,6 +729,21 @@ func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 			continue
 		}
 		// Consent answer (worker's Accept/Deny dialog) → unblock askConsent.
+		if kind == ipc.KindEndSession {
+			// The HOST user hung up. Drop the named viewer, or every viewer when
+			// no id is given, and tell each one so the viewer shows a clean
+			// "session ended" rather than a silent freeze.
+			id := strings.TrimSpace(string(payload))
+			if id == "" {
+				n := t.dropAllPeers()
+				log.Info().Int("viewers", n).Msg("transport: host ended the session")
+			} else {
+				t.sendBye(id)
+				t.dropPeer(id)
+				log.Info().Str("viewer", id).Msg("transport: host disconnected a viewer")
+			}
+			continue
+		}
 		if kind == ipc.KindConsentReply {
 			var r struct {
 				ID    string `json:"id"`
@@ -965,6 +1000,32 @@ func (t *Transport) askConsent(ctx context.Context, id string) (allow bool, cont
 type consentAnswer struct {
 	allow   bool
 	control bool
+}
+
+// sendBye tells a viewer the session is over, so it can show a clean ended
+// state instead of appearing to freeze until its own timeout.
+func (t *Transport) sendBye(id string) {
+	if t.sigClient == nil {
+		return
+	}
+	_ = t.sigClient.Send(network.Message{Type: network.MsgBye, To: id})
+}
+
+// dropAllPeers ends every live viewer session and reports how many were
+// dropped. Each viewer is sent a bye first so it can show "the host ended the
+// session" instead of appearing to freeze.
+func (t *Transport) dropAllPeers() int {
+	t.mu.Lock()
+	ids := make([]string, 0, len(t.peers))
+	for id := range t.peers {
+		ids = append(ids, id)
+	}
+	t.mu.Unlock()
+	for _, id := range ids {
+		t.sendBye(id)
+		t.dropPeer(id)
+	}
+	return len(ids)
 }
 
 // deliverConsent routes a worker's Accept/Deny answer to the waiting askConsent.
