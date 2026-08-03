@@ -565,6 +565,7 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   int transportFastFails = 0;
   ULONGLONG transportStartedAt = 0;
   bool transportBroken = false;
+  ULONGLONG transportBrokenAt = 0;
   HANDLE transport = nullptr;  // TransportMode: session-0 persistent transport
   HANDLE worker = nullptr;     // TransportMode: per-session capture worker
   DWORD workerSession = 0xFFFFFFFF;
@@ -645,6 +646,18 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
     // Transport = ONE persistent process in session 0 (survives switches).
     // Worker = per active session (swapped on switch), streams to the transport.
     // When on, the Flutter service-host below is NOT launched (they'd conflict).
+    // The fallback is TEMPORARY, not a life sentence. Several fast failures are
+    // not always a broken build: an upgrade or service restart can leave the old
+    // transport holding IPC port 47930 for a moment, and the new one exits
+    // immediately because it cannot listen. Falling back permanently on that
+    // would quietly downgrade a perfectly good machine until someone rebooted.
+    // So retry seamless after a cool-off; if it really is broken, we simply fall
+    // back again and the machine keeps working in the meantime.
+    if (transportBroken && GetTickCount64() - transportBrokenAt > 300000) {
+      transportBroken = false;
+      transportFastFails = 0;
+      Log(L"svc", L"retrying seamless transport after fallback cool-off");
+    }
     // Effective mode: seamless unless its transport has proven it cannot run.
     bool useTransport = transportMode && !transportBroken;
     if (useTransport) {
@@ -663,11 +676,16 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
           CloseHandle(transport);
           transport = nullptr;
         }
-        if (transportFastFails >= 3) {
+        if (transportFastFails >= 5) {
           // Give up on seamless rather than loop forever with nothing hosting.
+          // Five, not three: a couple of fast failures around a restart are
+          // normal, and the cost of falling back unnecessarily is a worse
+          // product for five minutes.
           transportBroken = true;
-          Log(L"svc", L"transport failed to stay up 3x — FALLING BACK to the "
-                      L"Flutter host so this machine stays reachable");
+          transportBrokenAt = GetTickCount64();
+          Log(L"svc", L"transport failed to stay up 5x — FALLING BACK to the "
+                      L"Flutter host so this machine stays reachable; will retry "
+                      L"seamless in 5 minutes");
           continue; // re-evaluate this loop with useTransport=false
         }
         transport = LaunchTransportSession0();
