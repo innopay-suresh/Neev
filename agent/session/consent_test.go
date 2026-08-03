@@ -150,3 +150,39 @@ func TestConsentFlagPathsIncludesDataDir(t *testing.T) {
 		t.Errorf("unexpected error stating the data dir: %v", err)
 	}
 }
+
+// The auth mode decides whether a connection is prompted at all. An older relay
+// that doesn't stamp the field must fall back to "session" (prompted), never to
+// "unattended" — defaulting the other way would admit anyone silently.
+func TestConnectAuthMode(t *testing.T) {
+	cases := map[string]string{
+		`{"auth":"unattended"}`:       "unattended",
+		`{"auth":"session"}`:          "session",
+		`{"targetId":"1"}`:            "session", // older relay: no field
+		`not json`:                    "session",
+		`{"auth":"UNATTENDED"}`:       "session", // exact match only
+		`{"auth":"unattended","x":1}`: "unattended",
+	}
+	for in, want := range cases {
+		if got := connectAuthMode([]byte(in)); got != want {
+			t.Errorf("connectAuthMode(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Clipboard traffic must be recognised so a profile that withholds clipboard
+// actually withholds it — including the delayed-render file messages.
+func TestIsClipboardMsg(t *testing.T) {
+	for _, p := range []string{
+		`{"k":"clip","t":"x"}`, `{"k":"clipfann"}`, `{"k":"clipfreq"}`, `{"k":"clipfdat"}`,
+	} {
+		if !isClipboardMsg([]byte(p)) {
+			t.Errorf("%s should be clipboard traffic", p)
+		}
+	}
+	for _, p := range []string{`{"k":"chat"}`, `{"k":"mv"}`, `{"k":"ft"}`, `bad`} {
+		if isClipboardMsg([]byte(p)) {
+			t.Errorf("%s is not clipboard traffic", p)
+		}
+	}
+}

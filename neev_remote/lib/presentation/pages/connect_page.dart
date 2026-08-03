@@ -153,6 +153,21 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     // actually injects input in TransportMode.
     service.hostGrantsControl = !_s.viewOnly;
     service.syncViewOnlyFlag(_s.viewOnly);
+    // Interactive Access + the two permission profiles, mirrored for the
+    // transport (the process that actually admits connections).
+    service.interactiveAccess = _s.interactiveAccess;
+    service.unattendedAllowControl = _s.unattendedAllowControl;
+    service.unattendedAllowClipboard = _s.unattendedAllowClipboard;
+    service.unattendedAllowFiles = _s.unattendedAllowFiles;
+    service.syncInteractiveAccess(_s.interactiveAccess);
+    service.syncAccessProfiles(
+      unattendedControl: _s.unattendedAllowControl && !_s.viewOnly,
+      unattendedClipboard: _s.unattendedAllowClipboard,
+      unattendedFiles: _s.unattendedAllowFiles,
+      interactiveControl: _s.defaultAllowControl && !_s.viewOnly,
+      interactiveClipboard: _s.defaultAllowClipboard,
+      interactiveFiles: _s.defaultAllowFiles,
+    );
     service.defaultPermClipboard = _s.defaultAllowClipboard;
     service.defaultPermFiles = _s.defaultAllowFiles;
     service.lockOnSessionEnd = _s.lockOnSessionEnd;

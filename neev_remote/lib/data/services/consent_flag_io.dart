@@ -21,7 +21,28 @@ Future<void> writeConsentFlag(bool ask) => _writeHostFlag('consent.txt', ask);
 Future<void> writeViewOnlyFlag(bool viewOnly) =>
     _writeHostFlag('viewonly.txt', viewOnly);
 
-Future<void> _writeHostFlag(String name, bool on) async {
+/// Interactive Access, modelled on AnyDesk: "always" prompts every interactive
+/// request, "when-open" only while the app is open, "never" means the
+/// unattended password is the ONLY way in. Read by the transport, which is the
+/// process that decides whether to admit a connection.
+Future<void> writeInteractiveAccess(String mode) =>
+    _writeHostText('interactive.txt', mode);
+
+/// The permission profile granted to unattended vs interactive sessions, so an
+/// unmanned machine can be handed a narrower grant than someone at the keyboard.
+Future<void> writeAccessProfile(
+        {required bool unattended,
+        required bool control,
+        required bool clipboard,
+        required bool files}) =>
+    _writeHostText(
+        unattended ? 'unattended-profile.json' : 'interactive-profile.json',
+        '{"control":$control,"clipboard":$clipboard,"files":$files}');
+
+Future<void> _writeHostFlag(String name, bool on) =>
+    _writeHostText(name, on ? '1' : '0');
+
+Future<void> _writeHostText(String name, String body) async {
   try {
     final Directory dir;
     if (Platform.isWindows) {
@@ -41,6 +62,6 @@ Future<void> _writeHostFlag(String name, bool on) async {
       return;
     }
     final sep = Platform.isWindows ? '\\' : '/';
-    await File('${dir.path}$sep$name').writeAsString(on ? '1' : '0', flush: true);
+    await File('${dir.path}$sep$name').writeAsString(body, flush: true);
   } catch (_) {}
 }

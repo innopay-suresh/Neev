@@ -58,6 +58,9 @@ type Transport struct {
 	// build, had full control no matter what the host wanted.
 	controlMu      sync.Mutex
 	controlAllowed map[string]bool
+	// Full permission profile per viewer, so clipboard and file transfer are
+	// governed by the same grant as control rather than being always-on.
+	peerProfile map[string]AccessProfile
 
 	bridge    *secureBridge // helper secure-desktop pipe (UAC/lock/login)
 	secureWas atomic.Bool   // last worker-frame saw secure active (for keyframe on revert)
@@ -113,6 +116,7 @@ func RunTransport(ctx context.Context, port int) error {
 		peers:          make(map[string]*peerSession),
 		consentWaiters: make(map[string]chan consentAnswer),
 		controlAllowed: make(map[string]bool),
+		peerProfile:    make(map[string]AccessProfile),
 	}
 	if err := t.setupSignaling(ctx); err != nil {
 		return err
@@ -234,16 +238,36 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	log.Info().Str("from", m.From).Msg("transport: incoming connect")
 
-	// Consent gate: when "Ask before allowing connections" is on, the logged-in
-	// user must Accept before we offer. The session-0 transport can't draw UI, so
-	// it asks the per-session worker to show the dialog and waits for the answer.
-	// Deny/timeout/no-user-session → refuse (no offer), matching the toggle's
-	// intent ("ask before allowing"; nobody there to accept = not allowed).
-	// Decide, HOST-side, whether this viewer may control the machine or only
-	// watch. Default comes from the host's own view-only setting; the consent
-	// prompt can override it per connection.
-	control := !hostViewOnlyDefault()
-	if t.consentRequired() {
+	// How did this controller authenticate? The relay checks the session password
+	// and the unattended password and now tells us which one matched. That
+	// distinction is the whole basis of unattended access: an unattended login is
+	// meant to proceed with nobody present, while a session-password login is an
+	// interactive request a human should be able to refuse.
+	authMode := connectAuthMode(m.Payload)
+	unattended := authMode == "unattended"
+
+	// Permissions come from the profile for THIS mode, so an unattended session
+	// can be granted less (or more) than someone sitting at the keyboard.
+	prof := hostProfile(unattended)
+	control := prof.Control
+
+	switch {
+	case unattended:
+		// The unattended password IS the authorisation. Prompting here would
+		// defeat the feature: there may be nobody to answer.
+		log.Info().Str("from", m.From).Bool("control", control).
+			Msg("transport: unattended login — no prompt")
+	case !t.interactiveAllowed():
+		// Interactive access disabled: the unattended password is the only way
+		// in. Refuse rather than prompt.
+		log.Info().Str("from", m.From).
+			Msg("transport: connection DENIED — interactive access is disabled")
+		return
+	case t.consentRequired():
+		// Interactive request → ask the logged-in user. The session-0 transport
+		// can't draw UI, so it asks the per-session worker and waits.
+		// Deny/timeout/no-user-session → refuse, matching the setting's intent
+		// (nobody there to accept = not allowed).
 		allow, granted := t.askConsent(ctx, m.From)
 		if !allow {
 			log.Info().Str("from", m.From).Msg("transport: connection DENIED (consent)")
@@ -252,9 +276,14 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		control = granted
 		log.Info().Str("from", m.From).Bool("control", control).
 			Msg("transport: connection approved (consent)")
+	default:
+		log.Info().Str("from", m.From).Bool("control", control).
+			Msg("transport: interactive login auto-accepted (prompt disabled)")
 	}
+	prof.Control = control
 	t.controlMu.Lock()
 	t.controlAllowed[m.From] = control
+	t.peerProfile[m.From] = prof
 	t.controlMu.Unlock()
 	if !control {
 		log.Info().Str("from", m.From).
@@ -331,6 +360,9 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 			// the host decides. Only real control attempts are dropped — clipboard,
 			// chat, file transfer and view-related commands still work, so
 			// view-only does not degrade into a half-dead session.
+			if isClipboardMsg(data) && !t.viewerProfile(viewerID).Clipboard {
+				return // clipboard not granted to this session
+			}
 			if isControlAttempt(data) && !t.viewerMayControl(viewerID) {
 				if n := t.inViewOnlyDropped.Add(1); n == 1 || n%256 == 0 {
 					log.Info().Uint64("n", n).Str("from", viewerID).
@@ -492,6 +524,35 @@ func (t *Transport) viewerMayControl(id string) bool {
 	defer t.controlMu.Unlock()
 	allowed, ok := t.controlAllowed[id]
 	return !ok || allowed
+}
+
+// viewerProfile returns the permission profile granted to a viewer. An unknown
+// viewer gets full access, matching viewerMayControl: defaulting to deny would
+// resurrect the footgun where an unset flag silently killed working features.
+func (t *Transport) viewerProfile(id string) AccessProfile {
+	t.controlMu.Lock()
+	defer t.controlMu.Unlock()
+	p, ok := t.peerProfile[id]
+	if !ok {
+		return AccessProfile{Control: true, Clipboard: true, Files: true}
+	}
+	return p
+}
+
+// isClipboardMsg reports whether a control-channel payload is clipboard traffic
+// (text, or the announce/request/deliver messages for clipboard FILES).
+func isClipboardMsg(data []byte) bool {
+	var m struct {
+		K string `json:"k"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	switch m.K {
+	case "clip", "clipfann", "clipfreq", "clipfdat":
+		return true
+	}
+	return false
 }
 
 // isSASCommand reports whether a payload is the viewer's Ctrl+Alt+Del request

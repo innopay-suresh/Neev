@@ -577,9 +577,19 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	}
 
 	// Verify Argon2id password hash against either the session hash or the unattended hash
+	// Track WHICH credential authenticated. The host needs this: an unattended
+	// login is meant to proceed with no prompt (nobody may be at the machine),
+	// while a session-password login is an interactive request that a person
+	// should still be able to accept or refuse. The relay knew this all along
+	// and discarded it, which forced the host into a single all-or-nothing
+	// "ask everyone / ask nobody" switch.
+	authMode := "session"
 	ok, err := auth.VerifyPassword(payload.PasswordHash, info.PasswordHash)
 	if (err != nil || !ok) && info.UnattendedHash != "" {
 		ok, err = auth.VerifyPassword(payload.PasswordHash, info.UnattendedHash)
+		if err == nil && ok {
+			authMode = "unattended"
+		}
 	}
 	if err != nil || !ok {
 		h.failMutex.Lock()
@@ -656,8 +666,14 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	h.agents[controllerID] = cli
 	h.mu.Unlock()
 
-	// Forward connect request to the target agent — it will show a consent prompt or just accept.
-	connectFwd, _ := json.Marshal(payload)
+	// Forward connect request to the target agent — it will show a consent prompt
+	// or just accept, depending on how the controller authenticated (above).
+	fwd := map[string]any{}
+	if raw, e := json.Marshal(payload); e == nil {
+		_ = json.Unmarshal(raw, &fwd)
+	}
+	fwd["auth"] = authMode
+	connectFwd, _ := json.Marshal(fwd)
 	_ = target.send(Message{
 		Type:    MsgConnect,
 		From:    controllerID,

@@ -202,6 +202,85 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     ];
   }
 
+  /// Interactive Access: what happens when someone connects with the SESSION
+  /// password. The unattended password is a separate door and is unaffected.
+  Widget _buildInteractiveAccess(AppSettings settings) {
+    const modes = [
+      ('always', 'Always allow requests', 'Anyone with the session password may ask'),
+      ('when-open', 'Only while the app is open', 'Requests are ignored when the app is closed'),
+      ('never', 'Disable interactive access',
+          'Refuse session-password logins entirely — only the unattended password works'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text('Interactive access',
+              style: AppTypography.body.copyWith(fontWeight: FontWeight.w600)),
+        ),
+        Text(
+          'Applies to the session password only. The unattended password always '
+          'connects without a prompt — that is what it is for.',
+          style: AppTypography.caption,
+        ),
+        const SizedBox(height: 8),
+        for (final m in modes)
+          RadioListTile<String>(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: m.$1,
+            groupValue: settings.interactiveAccess,
+            onChanged: (v) => ref
+                .read(settingsProvider.notifier)
+                .setInteractiveAccess(v ?? 'always'),
+            title: Text(m.$2, style: AppTypography.body),
+            subtitle: Text(m.$3, style: AppTypography.caption),
+          ),
+      ],
+    );
+  }
+
+  /// Permissions for UNATTENDED sessions, kept separate from interactive ones:
+  /// nobody is present to judge an unattended login, so it can be given less.
+  Widget _buildUnattendedProfile(AppSettings settings) {
+    final n = ref.read(settingsProvider.notifier);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text('Unattended session permissions',
+              style: AppTypography.body.copyWith(fontWeight: FontWeight.w600)),
+        ),
+        Text(
+          'Granted when someone connects with the unattended password. '
+          '"View only mode" still overrides control.',
+          style: AppTypography.caption,
+        ),
+        const SizedBox(height: 4),
+        _buildToggle(
+          label: 'Allow control',
+          subtitle: 'Keyboard and mouse, lock, restart',
+          value: settings.unattendedAllowControl,
+          onChanged: (v) => n.setUnattendedPerms(control: v),
+        ),
+        _buildToggle(
+          label: 'Allow clipboard',
+          subtitle: 'Share clipboard text and files',
+          value: settings.unattendedAllowClipboard,
+          onChanged: (v) => n.setUnattendedPerms(clipboard: v),
+        ),
+        _buildToggle(
+          label: 'Allow file transfer',
+          subtitle: 'Send and receive files',
+          value: settings.unattendedAllowFiles,
+          onChanged: (v) => n.setUnattendedPerms(files: v),
+        ),
+      ],
+    );
+  }
+
   List<Widget> _securitySection(AppSettings settings) {
     return [
               // Security — incoming access + default permissions (AnyDesk parity)
@@ -210,11 +289,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 _buildToggle(
                   label: 'Ask before allowing connections',
                   subtitle:
-                      'Show an Accept / Dismiss prompt for incoming sessions',
+                      'Show an Accept / Decline prompt for interactive sessions',
                   value: settings.askOnConnect,
                   onChanged: (v) =>
                       ref.read(settingsProvider.notifier).setAskOnConnect(v),
                 ),
+                const Divider(),
+                // Interactive Access, AnyDesk-style. The unattended password is
+                // a separate door and is never governed by this — that is the
+                // whole point of unattended access.
+                _buildInteractiveAccess(settings),
+                const Divider(),
+                _buildUnattendedProfile(settings),
                 const Divider(),
                 // Undo for "Remember this decision" on the consent prompt. A
                 // remembered DECLINE is otherwise a dead end: the device is

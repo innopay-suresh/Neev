@@ -828,10 +828,36 @@ class RemoteService extends ChangeNotifier {
         // A controller wants in. msg.from is the controller's routing id.
         final controllerId = msg.from;
         if (controllerId == null) break;
-        DiagLog.log('host', 'incoming connect from=$controllerId '
-            'promptOnConnect=$promptOnConnect');
-        // Attended: ask the host user first (AnyDesk-style). Unattended access
-        // (promptOnConnect=false) accepts immediately with full permissions.
+        // How the controller authenticated decides whether we prompt at all:
+        // the unattended password IS the authorisation (nobody may be present),
+        // while the session password is an interactive request a human should
+        // be able to refuse. An older relay omits the field, and that falls back
+        // to "session" — the safer side, since it prompts.
+        final unattendedLogin = msg.payload is Map &&
+            (msg.payload as Map)['auth'] == 'unattended';
+        DiagLog.log(
+            'host',
+            'incoming connect from=$controllerId '
+                'auth=${unattendedLogin ? 'unattended' : 'session'} '
+                'promptOnConnect=$promptOnConnect');
+
+        if (unattendedLogin) {
+          // Unattended profile — deliberately separate from the interactive one.
+          permClipboard = unattendedAllowClipboard;
+          permFiles = unattendedAllowFiles;
+          permControl = unattendedAllowControl && !settingsViewOnly;
+          hostGrantsControl = permControl;
+          await _startHostOffer(controllerId);
+          break;
+        }
+        if (interactiveAccess == 'never') {
+          // Interactive access disabled: the unattended password is the only
+          // way in, so refuse rather than prompt.
+          DiagLog.log('host',
+              'connect REFUSED — interactive access is disabled on this host');
+          _hostSignaling?.sendBye(controllerId);
+          break;
+        }
         // "Remember this decision" from an earlier prompt: apply it without
         // asking again. Checked before promptOnConnect so a remembered Decline
         // is honoured too, not just a remembered Accept.
@@ -2105,6 +2131,40 @@ class RemoteService extends ChangeNotifier {
 
   /// Mirror the host's "View only mode" to the transport (see writeViewOnlyFlag).
   Future<void> syncViewOnlyFlag(bool viewOnly) => writeViewOnlyFlag(viewOnly);
+
+  /// Mirror Interactive Access ('always' | 'when-open' | 'never').
+  Future<void> syncInteractiveAccess(String mode) =>
+      writeInteractiveAccess(mode);
+
+  /// Mirror both permission profiles. Unattended sessions and interactive ones
+  /// are granted separately: nobody is present to judge an unattended login.
+  Future<void> syncAccessProfiles({
+    required bool unattendedControl,
+    required bool unattendedClipboard,
+    required bool unattendedFiles,
+    required bool interactiveControl,
+    required bool interactiveClipboard,
+    required bool interactiveFiles,
+  }) async {
+    await writeAccessProfile(
+        unattended: true,
+        control: unattendedControl,
+        clipboard: unattendedClipboard,
+        files: unattendedFiles);
+    await writeAccessProfile(
+        unattended: false,
+        control: interactiveControl,
+        clipboard: interactiveClipboard,
+        files: interactiveFiles);
+  }
+
+  /// Host: interactive access policy, mirrored from settings.
+  String interactiveAccess = 'always';
+
+  /// Host: permissions granted to UNATTENDED sessions, mirrored from settings.
+  bool unattendedAllowControl = true;
+  bool unattendedAllowClipboard = true;
+  bool unattendedAllowFiles = true;
 
   /// Fetch the machine-wide id + password from the SYSTEM helper, or null when
   /// the helper isn't reachable. Lets the UI show the shared credentials.
