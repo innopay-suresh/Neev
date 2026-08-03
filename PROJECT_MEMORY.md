@@ -457,6 +457,37 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-08-03 — Consent card flicker fixed at the root; stale prompt withdrawn;
+  new logo applied (r114–r115).**
+  **(a) FLICKER.** Removing the map animation was necessary but NOT sufficient —
+  the animation was only one trigger. The card was painted DIRECTLY to the
+  window, so every repaint rebuilt it in place (background, map polygons, text)
+  and the intermediate states were visible. Hovering Accept/Decline invalidates
+  the whole card, so the flash happened exactly while the user was deciding.
+  Fixed by drawing into an off-screen bitmap blitted in one BitBlt, and claiming
+  WM_ERASEBKGND so the system never blanks the window first. Session bar gets the
+  same treatment. **LD-33 (new): any owner-drawn Win32 surface here must be
+  double buffered and must claim WM_ERASEBKGND. Hover states alone repaint often
+  enough that direct drawing is visibly broken.**
+  **(b) STALE CONSENT PROMPT.** If the viewer cancelled while the host's prompt
+  was open, it stayed up until dismissed by hand — nothing told the host the
+  question was moot; the transport just waited out its 30s timeout and the worker
+  was never notified. Added `KindConsentCancel`; withdrawn on viewer bye, on
+  askConsent giving up (covers cancel/timeout/shutdown), via WM_CLOSE on Windows
+  and by killing osascript on macOS. **The Flutter host had the same bug on its
+  own path** (bye removed the peer but left `_pendingConsent` set and the dialog
+  on screen) — fixed there too.
+  **(c) BRANDING.** New logo applied to macOS/Windows app icons, Flutter web
+  favicon + PWA icons, the deployed website and the Wails client. Two latent
+  problems found: `web/index.html` referenced `/favicon.png` **which never
+  existed** (broken favicon all along), and `.gitignore`'s blanket `public/` rule
+  would have silently swallowed the new one — narrow exceptions added. Browser
+  tab identity corrected from `neev_remote` to "Neev Remote".
+  **OPEN: the logo is green while DESIGN.md specifies an orange accent
+  (#F05A28) used throughout the UI. Shipped as-is on the user's instruction; the
+  icon and the app currently read as different brands. Needs a decision: retune
+  the design system to green, or recolour the mark.**
+
 - **2026-08-01 — Privacy becomes a LEASE; End button moved to the page that
   actually renders; laptop artwork corrected (r112).** All three reported as
   "still broken" after r111.
