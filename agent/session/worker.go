@@ -56,7 +56,10 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	// privacy ON would black the display until someone reset it. On the way IN,
 	// clear whatever a PREVIOUS worker may have left behind, for the same reason.
 	setPrivacy(false)
-	defer setPrivacy(false)
+	defer clearPrivacy()
+	// The guarantee: however a session ends — clean bye, viewer crash, network
+	// drop, lost IPC — the screen cannot stay blanked longer than the lease.
+	go runPrivacyWatchdog(ctx)
 	// Make the capture process DPI-aware BEFORE creating any capture DC, so on a
 	// scaled display (125/150/175%) the capture grabs the FULL physical desktop
 	// instead of losing the right/bottom edges to a logical/physical mismatch.
@@ -223,7 +226,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					// left the host screen blanked and local input blocked, locking the
 					// user out of their own machine until someone reconnected to turn it
 					// off.
-					setPrivacy(false)
+					clearPrivacy()
 				} else {
 					showHostSessionBar(func() {
 						// Empty payload = drop every viewer.

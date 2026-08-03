@@ -1083,6 +1083,9 @@ class RemoteService extends ChangeNotifier {
     };
     _hostPeers[controllerId] = peer;
     _auditHostStart[controllerId] = DateTime.now();
+    // Rebuild the host UI so the live-session banner (and its End control)
+    // appears immediately. Removal already notifies via _onHostPeerGone.
+    notifyListeners();
 
     // Use iceTransportPolicy 'all': direct path for same-network peers (e.g.
     // <->Mac), automatic TURN-relay fallback when no direct path exists (e.g.
@@ -1340,6 +1343,9 @@ class RemoteService extends ChangeNotifier {
   }
 
   Future<void> disconnectViewer({bool keepAutoReconnect = false}) async {
+    // Stop renewing the host's privacy lease so its screen comes back even if
+    // the explicit "privacy off" never lands (closing app, dropped link).
+    _stopPrivacyKeepAlive();
     // A user-initiated disconnect cancels any pending auto-reconnect.
     if (!keepAutoReconnect) {
       autoReconnect = false;
@@ -1577,10 +1583,38 @@ class RemoteService extends ChangeNotifier {
   /// Viewer: toggle privacy mode on the host (blank its screen + block its
   /// local input while you control it).
   bool privacyMode = false;
+  Timer? _privacyKeepAlive;
+
   void setPrivacyMode(bool on) {
     privacyMode = on;
     _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': 'privacy', 'on': on}));
+    // The host treats privacy as a LEASE, not a latch: it restores the screen
+    // unless the viewer keeps re-asserting it. That is what makes a crashed or
+    // disconnected viewer safe — the host cannot be left blanked, because
+    // nothing has to notice the disconnect for the screen to come back.
+    _privacyKeepAlive?.cancel();
+    _privacyKeepAlive = null;
+    if (on) {
+      _privacyKeepAlive = Timer.periodic(const Duration(seconds: 4), (t) {
+        if (!privacyMode || _viewerPeer == null) {
+          t.cancel();
+          _privacyKeepAlive = null;
+          return;
+        }
+        _viewerPeer?.sendData(
+            jsonEncode({'k': 'cmd', 'c': 'privacy', 'on': true}));
+      });
+    }
     notifyListeners();
+  }
+
+  /// Stop renewing the privacy lease. Called when a viewer session ends, so the
+  /// host's screen comes back at the end of the lease even if the explicit
+  /// "privacy off" never reaches it.
+  void _stopPrivacyKeepAlive() {
+    _privacyKeepAlive?.cancel();
+    _privacyKeepAlive = null;
+    privacyMode = false;
   }
 
   // Windows viewer: seamless capture of OS-reserved key combos (Win+R, Alt+Tab…)

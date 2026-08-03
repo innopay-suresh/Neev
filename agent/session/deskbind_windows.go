@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	modUser32Desk         = syscall.NewLazyDLL("user32.dll")
-	procOpenInputDesktop  = modUser32Desk.NewProc("OpenInputDesktop")
-	procSetThreadDesktop  = modUser32Desk.NewProc("SetThreadDesktop")
+	modUser32Desk            = syscall.NewLazyDLL("user32.dll")
+	procOpenInputDesktop     = modUser32Desk.NewProc("OpenInputDesktop")
+	procSetThreadDesktop     = modUser32Desk.NewProc("SetThreadDesktop")
 	procGetThreadDesktopDB   = modUser32Desk.NewProc("GetThreadDesktop")
 	procCloseDesktopDB       = modUser32Desk.NewProc("CloseDesktop")
 	modKernel32Desk          = syscall.NewLazyDLL("kernel32.dll")

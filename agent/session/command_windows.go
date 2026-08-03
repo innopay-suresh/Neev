@@ -97,7 +97,7 @@ func handleCommand(payload []byte) bool {
 		enableShutdownPrivilege()
 		procExitWindowsEx.Call(ewxReboot|ewxForceIfHung, 0)
 	case "privacy":
-		setPrivacy(m.On) // blank the local screen (excluded from capture) + block local input
+		assertPrivacy(m.On) // leased: auto-restores if the viewer stops renewing
 	default:
 		// sas / privacy / anything new: consume it (don't inject as input) but
 		// note it's not yet carried over the transport.

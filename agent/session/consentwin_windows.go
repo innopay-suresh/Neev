@@ -761,10 +761,11 @@ func (c *consentWin) isoLaptop(hdc uintptr, left, top int32, width int32, accent
 	p2 := iso(ox, oy, du, dv, k)
 	p3 := iso(ox, oy, 0, dv, k)
 
+	// Identical construction for both machines — deck, bezel and base are the
+	// same. Only the DISPLAY differs. When the accent laptop had a tinted deck
+	// and an accent bezel around an accent screen, there was no edge to define
+	// the screen plane and it read as a flat leaning slab rather than a laptop.
 	deckFill := cwColCard
-	if accent {
-		deckFill = cwColTint
-	}
 	// Base slab first, so the deck sits on something with thickness.
 	lip := int32(5 * k)
 	c.poly(hdc, []cwPoint{
@@ -797,13 +798,10 @@ func (c *consentWin) isoLaptop(hdc uintptr, left, top int32, width int32, accent
 	b2 := cwPoint{p1.X + tilt, p1.Y - sh}
 	b3 := cwPoint{p0.X + tilt, p0.Y - sh}
 	bezel := cwColBorderStr
-	if accent {
-		bezel = cwColAccentDim
-	}
 	c.poly(hdc, []cwPoint{b0, b1, b2, b3}, bezel, bezel, true)
 
 	// Inner display, inset from the bezel so the two read as separate parts.
-	in := 0.055
+	in := 0.13
 	i0 := lerpPt(b0, b2, in)
 	i1 := lerpPt(b1, b3, in)
 	i2 := lerpPt(b2, b0, in)

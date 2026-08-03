@@ -1116,6 +1116,15 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 40),
       children: [
+        // Live-session banner. Placed at the very top of the page that is
+        // actually rendered: the previous attempt put this control on
+        // CommandActivityPanel, which nothing instantiates, so it could never
+        // appear no matter what. Someone watching your screen must be
+        // impossible to miss, and ending it must be one click away.
+        if (service.connectedViewers > 0) ...[
+          _LiveSessionBanner(service: service),
+          const SizedBox(height: 18),
+        ],
         _StartConnectionCard(
           idController: widget.idController,
           passwordController: widget.passwordController,
@@ -2755,5 +2764,66 @@ class _SecurityBadges extends StatelessWidget {
       b('Pinned cert'),
       b('End-to-end'),
     ]);
+  }
+}
+
+
+/// Shown on the HOST while someone is connected: who is watching, and the
+/// control to end it. Until this existed only the VIEWER could hang up.
+class _LiveSessionBanner extends StatelessWidget {
+  const _LiveSessionBanner({required this.service});
+  final RemoteService service;
+
+  @override
+  Widget build(BuildContext context) {
+    final n = service.connectedViewers;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.primarySoft,
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.45)),
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.visibility_rounded, size: 19, color: AppColors.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  n == 1
+                      ? 'Someone is viewing this computer'
+                      : '$n people are viewing this computer',
+                  style: AppTypography.body.copyWith(
+                      fontWeight: FontWeight.w700, fontSize: 13.5),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  service.hostGrantsControl
+                      ? 'They can see and control your screen'
+                      : 'View only — they cannot control your screen',
+                  style: AppTypography.caption,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            onPressed: () => service.endHostSession(),
+            icon: const Icon(Icons.call_end_rounded, size: 16),
+            label: Text(n == 1 ? 'End session' : 'Disconnect all'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.error,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadii.md)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

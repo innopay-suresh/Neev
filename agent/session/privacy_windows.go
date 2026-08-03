@@ -38,21 +38,21 @@ var (
 )
 
 const (
-	wsExTopmost    = 0x00000008
-	wsExLayered    = 0x00080000
-	wsExTransparent = 0x00000020
-	wsExToolwindow = 0x00000080
-	wsExNoactivate = 0x08000000
-	wsPopup        = 0x80000000
-	lwaAlpha       = 0x00000002
-	swShowNoActivate = 4
-	blackBrush     = 4
+	wsExTopmost           = 0x00000008
+	wsExLayered           = 0x00080000
+	wsExTransparent       = 0x00000020
+	wsExToolwindow        = 0x00000080
+	wsExNoactivate        = 0x08000000
+	wsPopup               = 0x80000000
+	lwaAlpha              = 0x00000002
+	swShowNoActivate      = 4
+	blackBrush            = 4
 	wdaExcludeFromCapture = 0x00000011
-	smXVirtual     = 76
-	smYVirtual     = 77
-	smCXVirtual    = 78
-	smCYVirtual    = 79
-	pmRemove       = 0x0001
+	smXVirtual            = 76
+	smYVirtual            = 77
+	smCXVirtual           = 78
+	smCYVirtual           = 79
+	pmRemove              = 0x0001
 )
 
 type wndClassW struct {

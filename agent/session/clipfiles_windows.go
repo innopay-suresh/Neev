@@ -25,16 +25,16 @@ import (
 // for the host's CF_HDROP read/write. Ctrl+C a file on the host → viewer pastes;
 // Ctrl+C on the viewer → host pastes.
 //
-//   As SOURCE (host copied):     poll clipagent 'R' → clipfann → (on clipfreq) read bytes → clipfdat
-//   As DESTINATION (viewer copied): clipfann → clipfreq (eager) → assemble clipfdat → temp file → clipagent 'W'
+//	As SOURCE (host copied):     poll clipagent 'R' → clipfann → (on clipfreq) read bytes → clipfdat
+//	As DESTINATION (viewer copied): clipfann → clipfreq (eager) → assemble clipfdat → temp file → clipagent 'W'
 type clipFiles struct {
 	conn *ipc.Conn // to the transport (clipf* ride ipc.KindFileData → viewer file channel); writes serialized
 
 	mu       sync.Mutex
-	lastRead string                 // last host CF_HDROP paths seen (echo/change guard)
-	outFiles map[string][]string    // token → host paths we announced (serve on clipfreq)
-	seq      int                    // token counter
-	inAsm    map[string]*clipInASM  // token → destination assembly (viewer→host)
+	lastRead string                // last host CF_HDROP paths seen (echo/change guard)
+	outFiles map[string][]string   // token → host paths we announced (serve on clipfreq)
+	seq      int                   // token counter
+	inAsm    map[string]*clipInASM // token → destination assembly (viewer→host)
 }
 
 type clipInASM struct {

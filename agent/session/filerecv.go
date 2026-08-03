@@ -34,8 +34,8 @@ type fileReceiver struct {
 // unique path, the announced size, and bytes written so far — so 'end' can
 // verify the file is complete (not silently truncated) before acking.
 type recvFile struct {
-	f       *os.File
-	path    string
+	f        *os.File
+	path     string
 	size     int64
 	written  int64
 	lastLog  int64 // bytes at last progress log (so a stalled large file is visible)

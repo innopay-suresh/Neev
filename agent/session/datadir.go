@@ -11,9 +11,9 @@ import (
 // (LaunchDaemon / SYSTEM service) and any per-session worker so a viewer's
 // machine.dat and the written transport creds line up across processes.
 //
-//   Windows: %ProgramData%\NeevRemote      (e.g. C:\ProgramData\NeevRemote)
-//   macOS:   /Library/Application Support/NeevRemote
-//   Linux:   /var/lib/NeevRemote
+//	Windows: %ProgramData%\NeevRemote      (e.g. C:\ProgramData\NeevRemote)
+//	macOS:   /Library/Application Support/NeevRemote
+//	Linux:   /var/lib/NeevRemote
 //
 // The directory is created 0755 so a per-session worker (running as the logged-in
 // user) can still READ creds a root transport wrote. On macOS/Linux, falling back

@@ -49,8 +49,8 @@ func showConsentDialog(viewerID string) (allow bool, control bool, remember bool
 // plain prompt instead of silently denying a legitimate connection.
 func showConsentMessageBox(viewerID string) bool {
 	text, _ := syscall.UTF16PtrFromString(
-		"A remote device is requesting to connect and control this computer.\n\n"+
-			"Device ID:  "+prettyConsentID(viewerID)+"\n\n"+
+		"A remote device is requesting to connect and control this computer.\n\n" +
+			"Device ID:  " + prettyConsentID(viewerID) + "\n\n" +
 			"Only allow if you recognise this request.")
 	caption, _ := syscall.UTF16PtrFromString("Neev Remote  —  Allow connection?")
 	ret, _, _ := procMessageBoxW.Call(

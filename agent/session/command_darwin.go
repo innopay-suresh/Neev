@@ -21,6 +21,6 @@ func handleCommand(payload []byte) bool {
 	if m.C != "privacy" {
 		return false // unchanged: lock/logoff/reboot/sas not handled on macOS
 	}
-	setPrivacy(m.On)
+	assertPrivacy(m.On) // leased: auto-restores if the viewer stops renewing
 	return true
 }
