@@ -465,6 +465,19 @@ class RemoteService extends ChangeNotifier {
   String? get hostError => _hostError;
   int get connectedViewers => _hostPeers.length;
 
+  /// HOST: called whenever a viewer goes away. Privacy mode is SESSION state,
+  /// not machine state — leaving it on after the session that enabled it ended
+  /// blanked the host's screen and blocked its local input, locking the user
+  /// out of their own machine until someone reconnected and turned it off.
+  void _onHostPeerGone() {
+    if (_hostPeers.isNotEmpty) return;
+    if (PrivacyMode.isOn) {
+      DiagLog.log('host', 'last viewer gone — clearing privacy mode');
+      PrivacyMode.set(false);
+    }
+    notifyListeners();
+  }
+
   /// HOST: end the session(s) this machine is serving.
   ///
   /// Until this existed only the VIEWER could hang up — the person whose screen
@@ -481,7 +494,7 @@ class RemoteService extends ChangeNotifier {
       _hostPeers.remove(id)?.close();
     }
     DiagLog.log('host', 'host ended the session (viewers=${ids.length})');
-    notifyListeners();
+    _onHostPeerGone();
   }
 
   // ---- Viewer state ----
@@ -807,6 +820,8 @@ class RemoteService extends ChangeNotifier {
       await peer.close();
     }
     _hostPeers.clear();
+    // Stopping hosting must never leave the screen blanked.
+    if (PrivacyMode.isOn) PrivacyMode.set(false);
     await _capture.stopCapture();
     await _hostSignaling?.disconnect();
     _hostSignaling = null;
@@ -934,6 +949,7 @@ class RemoteService extends ChangeNotifier {
         break;
       case SignalingMessageType.bye:
         final peer = _hostPeers.remove(msg.from);
+        _onHostPeerGone();
         await peer?.close();
         _disablePrivacyIfNoViewers();
         notifyListeners();
@@ -1050,6 +1066,7 @@ class RemoteService extends ChangeNotifier {
               RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
         _hostPeers.remove(controllerId)?.close();
+        _onHostPeerGone();
         final st = _auditHostStart.remove(controllerId);
         if (st != null) {
           _auditWrite(

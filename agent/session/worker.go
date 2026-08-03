@@ -50,6 +50,13 @@ func isFileTransferMsg(payload []byte) bool {
 // user switch; the transport connection is unaffected.
 func RunCaptureWorker(ctx context.Context, port int) error {
 	setupFileLog("worker.log")
+	// Failsafe both ways. On the way OUT, a worker that exits (user switch,
+	// service restart, crash-and-relaunch) must never leave the screen blanked:
+	// on macOS the gamma table persists after the process dies, so a crash with
+	// privacy ON would black the display until someone reset it. On the way IN,
+	// clear whatever a PREVIOUS worker may have left behind, for the same reason.
+	setPrivacy(false)
+	defer setPrivacy(false)
 	// Make the capture process DPI-aware BEFORE creating any capture DC, so on a
 	// scaled display (125/150/175%) the capture grabs the FULL physical desktop
 	// instead of losing the right/bottom edges to a logical/physical mismatch.
@@ -211,6 +218,12 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 				// it did not start; this is that control.
 				if strings.TrimSpace(string(payload)) == "0" {
 					hideHostSessionBar()
+					// Privacy mode is SESSION state, not machine state. It used to survive
+					// the session that switched it on: disconnecting while privacy was ON
+					// left the host screen blanked and local input blocked, locking the
+					// user out of their own machine until someone reconnected to turn it
+					// off.
+					setPrivacy(false)
 				} else {
 					showHostSessionBar(func() {
 						// Empty payload = drop every viewer.
