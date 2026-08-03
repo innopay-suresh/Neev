@@ -51,12 +51,22 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 ; account is active. DEFAULT ON — without it the host stays stuck in the first
 ; user's session and won't follow user-switching / logon of another account.
 Name: "allusersstart"; Description: "Keep reachable for every user (follow user-switching / lock screen)"; GroupDescription: "Unattended access:"
-; Seamless user-switch (opt-in, EXPERIMENTAL): run the SYSTEM-service transport
-; (session 0, survives switches) + a per-session capture+input worker instead of
-; the per-session Flutter host, so a user-profile switch hands the viewer the new
-; profile's screen + control with NO disconnect. Requires neev-host.exe to be
-; bundled. DEFAULT OFF — the Flutter host stays the default until validated.
-Name: "seamless"; Description: "Seamless user-switch (experimental, no disconnect)"; GroupDescription: "Unattended access:"; Flags: unchecked
+; Seamless user-switch: run the SYSTEM-service transport (session 0, survives
+; switches) + a per-session capture+input worker instead of the per-session
+; Flutter host, so a user-profile switch hands the viewer the new profile's
+; screen + control with NO disconnect.
+;
+; DEFAULT ON. It was opt-in and unchecked while unvalidated, but this is the
+; path that carries unattended access, the host consent prompt, host-side
+; view-only enforcement and the session bar. A user who skipped the checkbox
+; silently got a lesser product and had no way to enable it afterwards short of
+; reinstalling — the flag lives in HKLM and there is no in-app toggle.
+;
+; Safe to default on because the service now falls back: if the transport
+; cannot stay up (3 fast failures) the helper gives up on seamless and runs the
+; Flutter host instead, so a broken transport can never leave the machine
+; unreachable. See neev_helper.cpp (transportBroken).
+Name: "seamless"; Description: "Seamless user-switch (recommended — no disconnect when switching users)"; GroupDescription: "Unattended access:"
 
 [Files]
 ; Packages the entire release folder produced by `flutter build windows`.

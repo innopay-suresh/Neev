@@ -559,6 +559,12 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   DWORD clipSession = 0xFFFFFFFF;
   int clipProbeTick = 0;   // loops since the last health probe (loop = 3s)
   int clipProbeFails = 0;  // consecutive failed probes
+  // TransportMode crash-loop fallback. Seamless mode is now the DEFAULT, so a
+  // transport that can never start must not leave the machine unreachable: after
+  // repeated fast failures we stop trying and let the Flutter host take over.
+  int transportFastFails = 0;
+  ULONGLONG transportStartedAt = 0;
+  bool transportBroken = false;
   HANDLE transport = nullptr;  // TransportMode: session-0 persistent transport
   HANDLE worker = nullptr;     // TransportMode: per-session capture worker
   DWORD workerSession = 0xFFFFFFFF;
@@ -639,15 +645,37 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
     // Transport = ONE persistent process in session 0 (survives switches).
     // Worker = per active session (swapped on switch), streams to the transport.
     // When on, the Flutter service-host below is NOT launched (they'd conflict).
-    if (transportMode) {
+    // Effective mode: seamless unless its transport has proven it cannot run.
+    bool useTransport = transportMode && !transportBroken;
+    if (useTransport) {
       bool tDead = (!transport || WaitForSingleObject(transport, 0) == WAIT_OBJECT_0);
       if (tDead) {
         if (transport) {
-          Log(L"svc", L"transport exited; relaunching");
+          // Exiting within seconds of launch is a crash loop, not a restart.
+          ULONGLONG up = GetTickCount64() - transportStartedAt;
+          if (up < 15000) {
+            transportFastFails++;
+          } else {
+            transportFastFails = 0;
+          }
+          Log(L"svc", L"transport exited after %llus (fast failures: %d); relaunching",
+              up / 1000, transportFastFails);
           CloseHandle(transport);
           transport = nullptr;
         }
+        if (transportFastFails >= 3) {
+          // Give up on seamless rather than loop forever with nothing hosting.
+          transportBroken = true;
+          Log(L"svc", L"transport failed to stay up 3x — FALLING BACK to the "
+                      L"Flutter host so this machine stays reachable");
+          continue; // re-evaluate this loop with useTransport=false
+        }
         transport = LaunchTransportSession0();
+        transportStartedAt = GetTickCount64();
+        if (!transport) {
+          transportFastFails++;
+          Log(L"svc", L"transport failed to launch (attempt %d)", transportFastFails);
+        }
       }
       // Retire a worker held over from the previous loop's swap. By now the new
       // worker has had a full loop (+ its own dial-retry) to attach to the
@@ -688,7 +716,10 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
       workerSession = 0xFFFFFFFF;
     }
 
-    if (ReadServiceHostFlag() && !transportMode) {
+    // Host the Flutter app when seamless is off — or when it broke and we fell
+    // back to it, in which case run it regardless of the ServiceHost flag: an
+    // unreachable machine is the worst outcome.
+    if ((ReadServiceHostFlag() || transportBroken) && !useTransport) {
       bool hDead = (!host || WaitForSingleObject(host, 0) == WAIT_OBJECT_0);
       bool hMoved = (host && target != 0xFFFFFFFF && target != hostSession);
       if (hDead || hMoved) {
