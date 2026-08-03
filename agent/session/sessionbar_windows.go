@@ -55,6 +55,7 @@ var (
 	procRoundRectSB        = modGdi32SB.NewProc("RoundRect")
 	procEllipseSB          = modGdi32SB.NewProc("Ellipse")
 	procGetDeviceCapsSB    = modGdi32SB.NewProc("GetDeviceCaps")
+	procGetTextExtent32SB  = modGdi32SB.NewProc("GetTextExtentPoint32W")
 	procCreateCompatDCSB   = modGdi32SB.NewProc("CreateCompatibleDC")
 	procCreateCompatBmpSB  = modGdi32SB.NewProc("CreateCompatibleBitmap")
 	procBitBltSB           = modGdi32SB.NewProc("BitBlt")
@@ -81,7 +82,29 @@ type sessionBar struct {
 	visible  bool
 }
 
+// The one label the bar shows; the window is sized from it.
+const barLabel = "Remote session active"
+
 var theBar = &sessionBar{scale: 1}
+
+// measure returns the rendered width of s in the bar's font. Uses a scratch
+// screen DC so the window can be sized BEFORE it exists.
+func (b *sessionBar) measure(s string) int32 {
+	dc, _, _ := procGetDCSB.Call(0)
+	if dc == 0 {
+		return b.px(150) // fall back to something generous rather than clipping
+	}
+	defer procReleaseDCSB.Call(0, dc)
+	f := b.font(11, true)
+	defer procDeleteObjectSB.Call(f)
+	old, _, _ := procSelectObjectSB.Call(dc, f)
+	u16, _ := syscall.UTF16FromString(s)
+	var sz struct{ CX, CY int32 }
+	procGetTextExtent32SB.Call(dc, uintptr(unsafe.Pointer(&u16[0])),
+		uintptr(len(u16)-1), uintptr(unsafe.Pointer(&sz)))
+	procSelectObjectSB.Call(dc, old)
+	return sz.CX
+}
 
 func (b *sessionBar) px(v int) int32 { return int32(float64(v) * b.scale) }
 
@@ -136,17 +159,16 @@ func (b *sessionBar) loop() {
 	}
 	procRegisterClassSB.Call(uintptr(unsafe.Pointer(&wc)))
 
-	w := b.px(212)
+	// Width MEASURED from the label, not hardcoded. A fixed 212px was narrower
+	// than "Remote session active" renders at some DPI/font combinations, so the
+	// text was clipped and the leading "R" disappeared.
 	h := b.px(38)
+	w := b.px(30) + b.measure(barLabel) + b.px(12) + b.px(76) + b.px(10)
 	sw, _, _ := procGetSystemMetricsSB.Call(cwSMCXScreen)
-	sh, _, _ := procGetSystemMetricsSB.Call(cwSMCYScreen)
-	// BOTTOM-centre, lifted clear of the taskbar. Top-centre put it straight on
-	// top of the app's own search bar — an always-on-top indicator must not
-	// cover the UI it is reporting on. Bottom-centre is out of the way of both
-	// the header and the taskbar, and it is where screen-sharing indicators are
-	// conventionally expected.
+	// TOP-centre, as requested. Note this can sit over a maximised app's own
+	// header; it is deliberately short and only visible while a session is live.
 	x := (int32(sw) - w) / 2
-	y := int32(sh) - h - b.px(64)
+	y := b.px(8)
 
 	title, _ := syscall.UTF16PtrFromString("Neev Remote")
 	hwnd, _, _ := procCreateWindowExSB.Call(
@@ -285,7 +307,7 @@ func (b *sessionBar) paint(hwnd uintptr) {
 
 	font := b.font(11, true)
 	defer procDeleteObjectSB.Call(font)
-	b.text(hdc, "Remote session active",
+	b.text(hdc, barLabel,
 		cwRect{b.px(26), 0, rc.Right - b.px(90), rc.Bottom},
 		font, cwColInk)
 

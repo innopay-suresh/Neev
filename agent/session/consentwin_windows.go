@@ -870,31 +870,46 @@ func (c *consentWin) connectionArt(hdc uintptr, r cwRect) {
 		}
 	}
 
-	// The connection: remote device -> this machine, as a great-circle-ish arc.
-	from := project(geoPt{Lon: -95, Lat: 40}) // somewhere else
-	to := project(geoPt{Lon: 78, Lat: 22})    // this machine
-	c.connectionArc(hdc, from, to)
+	// Connectivity fan: this machine sits at the hub and routes reach out across
+	// the world. A single point-to-point line said far less than the product
+	// actually does, and read as a stray scratch over the map.
+	hub := project(geoPt{Lon: 78, Lat: 22}) // India
+	spokes := []geoPt{
+		{Lon: -100, Lat: 45}, // North America
+		{Lon: -58, Lat: -20}, // South America
+		{Lon: 10, Lat: 50},   // Europe
+		{Lon: 20, Lat: 2},    // Africa
+		{Lon: 115, Lat: 40},  // East Asia
+		{Lon: 135, Lat: -27}, // Australia
+		{Lon: 45, Lat: 58},   // Northern Eurasia
+	}
+	for _, g := range spokes {
+		p := project(g)
+		c.connectionArc(hdc, hub, p)
+		// Destination dot.
+		c.ellipse(hdc, p.X-c.px(4), p.Y-c.px(4), c.px(8), cwColCard, cwColAccent, true)
+		c.ellipse(hdc, p.X-c.px(2), p.Y-c.px(2), c.px(4), cwColAccent, 0, false)
+	}
 
-	// Endpoints: origin ring, destination pin.
-	c.ellipse(hdc, from.X-c.px(6), from.Y-c.px(6), c.px(12), cwColCard, cwColAccent, true)
-	c.ellipse(hdc, from.X-c.px(3), from.Y-c.px(3), c.px(6), cwColAccent, 0, false)
-	c.ellipse(hdc, to.X-c.px(10), to.Y-c.px(10), c.px(20), cwColTint, cwColAccent, true)
-	c.ellipse(hdc, to.X-c.px(5), to.Y-c.px(5), c.px(10), cwColAccent, 0, false)
+	// The hub itself, drawn last so nothing crosses over it.
+	c.ellipse(hdc, hub.X-c.px(13), hub.Y-c.px(13), c.px(26), cwColTint, cwColTint, true)
+	c.ellipse(hdc, hub.X-c.px(8), hub.Y-c.px(8), c.px(16), cwColCard, cwColAccent, true)
+	c.ellipse(hdc, hub.X-c.px(4), hub.Y-c.px(4), c.px(8), cwColAccent, 0, false)
 }
 
-// arcPoint samples the connection arc at t in [0,1]. A quadratic bend lifted
-// perpendicular to the chord, which reads as a hop between two places.
+// arcPoint samples a route at t in [0,1]: a quadratic bowed ABOVE the straight
+// chord, the way flight paths are drawn. Bowing upward (rather than
+// perpendicular to the chord) keeps a fan of routes from one hub from crossing
+// each other into a tangle.
 func arcPoint(a, b cwPoint, t float64) cwPoint {
 	mx := float64(a.X+b.X) / 2
 	my := float64(a.Y+b.Y) / 2
-	dx := float64(b.X - a.X)
-	dy := float64(b.Y - a.Y)
-	// Control point pushed above the midpoint, scaled to the span.
-	cx := mx - dy*0.16
-	cy := my + dx*0.16 - float64(absInt32(b.X-a.X))*0.18
+	// Lift scales with span, so short hops stay shallow and long ones sweep.
+	span := float64(absInt32(b.X-a.X)) + float64(absInt32(b.Y-a.Y))
+	cy := my - span*0.22
 	u := 1 - t
 	return cwPoint{
-		X: int32(u*u*float64(a.X) + 2*u*t*cx + t*t*float64(b.X)),
+		X: int32(u*u*float64(a.X) + 2*u*t*mx + t*t*float64(b.X)),
 		Y: int32(u*u*float64(a.Y) + 2*u*t*cy + t*t*float64(b.Y)),
 	}
 }
@@ -921,16 +936,11 @@ func (c *consentWin) connectionArc(hdc uintptr, a, b cwPoint) {
 		c.line(hdc, prev.X, prev.Y, p.X, p.Y, cwColAccent)
 		prev = p
 	}
-	// Nodes marking the route, evenly spaced along the arc.
-	for i := 1; i <= 3; i++ {
-		t := float64(i) / 4.0
-		p := arcPoint(a, b, t)
-		rr := c.px(4)
-		c.ellipse(hdc, p.X-rr, p.Y-rr, rr*2, cwColAccent, 0, false)
-		// Soft halo so the packet reads against the map.
-		hr := c.px(7)
-		c.ellipseOutline(hdc, p.X-hr, p.Y-hr, hr*2, cwColAccent)
-	}
+	// One marker at the midpoint. Seven routes with three nodes each was noise;
+	// a single dot per route still reads as traffic without clutter.
+	p := arcPoint(a, b, 0.5)
+	rr := c.px(3)
+	c.ellipse(hdc, p.X-rr, p.Y-rr, rr*2, cwColAccent, 0, false)
 }
 
 // ellipseOutline strokes a circle without filling it.

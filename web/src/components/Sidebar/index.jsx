@@ -40,8 +40,12 @@ export function Sidebar() {
     <aside className={`${styles.sidebar} ${collapsed ? styles.collapsed : ''}`}>
       {/* Logo */}
       <div className={styles.logo}>
-        <div className={styles.logoIcon} style={{ background: 'transparent' }}>
-          <img src="/favicon.png" alt="Neev Remote" style={{ width: '22px', height: '22px', display: 'block' }} />
+        <div className={styles.logoIcon}>
+          <img
+            src="/favicon.png"
+            alt="Neev Remote"
+            style={{ width: '38px', height: '38px', display: 'block' }}
+          />
         </div>
         {!collapsed && (
           <span className={styles.logoText}>
