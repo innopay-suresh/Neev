@@ -49,6 +49,8 @@ var (
 	procCloseClipboardCW   = modUser32CW.NewProc("CloseClipboard")
 	procEmptyClipboardCW   = modUser32CW.NewProc("EmptyClipboard")
 	procSetClipboardDataCW = modUser32CW.NewProc("SetClipboardData")
+	procSetTimerCW         = modUser32CW.NewProc("SetTimer")
+	procKillTimerCW        = modUser32CW.NewProc("KillTimer")
 
 	procCreateSolidBrushCW = modGdi32CW.NewProc("CreateSolidBrush")
 	procCreatePenCW        = modGdi32CW.NewProc("CreatePen")
@@ -64,6 +66,7 @@ var (
 	procLineToCW           = modGdi32CW.NewProc("LineTo")
 	procGetDeviceCapsCW    = modGdi32CW.NewProc("GetDeviceCaps")
 	procPolygonCW          = modGdi32CW.NewProc("Polygon")
+	procGetStockObjectCW   = modGdi32CW.NewProc("GetStockObject")
 
 	modKernel32CW      = syscall.NewLazyDLL("kernel32.dll")
 	procGlobalAllocCW  = modKernel32CW.NewProc("GlobalAlloc")
@@ -84,6 +87,8 @@ const (
 	cwWMLButtonDown = 0x0201
 	cwWMLButtonUp   = 0x0202
 	cwWMKeyDown     = 0x0100
+	cwWMTimer       = 0x0113
+	cwAnimTimerID   = 1
 	cwVKEscape      = 0x1B
 	cwVKReturn      = 0x0D
 	cwIDCArrow      = 32512
@@ -196,6 +201,8 @@ type consentWin struct {
 	rcFullCtl, rcViewOnly                            cwRect
 	hotAccept, hotDecline                            bool
 	copied                                           bool
+	// Animation phase in [0,1): advances the packets along the connection arc.
+	phase float64
 }
 
 func (c *consentWin) px(v int) int32 { return int32(float64(v) * c.scale) }
@@ -283,6 +290,8 @@ func showConsentWindow(viewerID string) (allow bool, control bool, remember bool
 	// The window is created before this point, so the first paint happens now.
 	procInvalidateRectCW.Call(hwnd, 0, 1)
 	procSetForegroundWinCW.Call(hwnd)
+	// ~30 fps for the packet animation; killed with the window below.
+	procSetTimerCW.Call(hwnd, cwAnimTimerID, 33, 0)
 
 	var msg cwMsg
 	for {
@@ -296,6 +305,7 @@ func showConsentWindow(viewerID string) (allow bool, control bool, remember bool
 			break
 		}
 	}
+	procKillTimerCW.Call(hwnd, cwAnimTimerID)
 	procDestroyWindowCW.Call(hwnd)
 	return c.res.allow, c.res.control, c.res.remember
 }
@@ -320,6 +330,15 @@ func (c *consentWin) proc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	switch msg {
 	case cwWMPaint:
 		c.paint(hwnd)
+		return 0
+	case cwWMTimer:
+		// Advance the connection animation and repaint. A consent prompt that
+		// shows a LIVE link reads as a live request; a frozen diagram does not.
+		c.phase += 0.02
+		for c.phase >= 1 {
+			c.phase -= 1
+		}
+		procInvalidateRectCW.Call(hwnd, 0, 0)
 		return 0
 	case cwWMMouseMove:
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
@@ -734,213 +753,126 @@ func iso(ox, oy int32, u, v, k float64) cwPoint {
 	}
 }
 
-// isoLaptop draws a laptop in isometric projection: a keyboard deck on the
-// floor plane and a screen standing along its far edge with a bezel.
+// connectionArt draws a world map with the connection arcing across it.
 //
-// The first version drew this at k=0.72, which made a laptop about 38px wide —
-// the deck collapsed to a sliver and the whole thing read as a few stray lines
-// rather than a machine. Scale is now set by the caller in real pixels, and the
-// deck is filled (not outlined) so it holds its shape.
-func (c *consentWin) isoLaptop(hdc uintptr, left, top int32, width int32, accent bool) {
-	// Size from the FULL footprint, not one axis. An isometric rhombus spans
-	// both u and v, so scaling by du alone made each laptop ~230px wide when 132
-	// was asked for, with ~98px hanging off the left edge — clipped away, which
-	// is why only stray edges were visible instead of a machine.
-	du, dv := 62.0, 46.0
-	k := float64(width) / ((du + dv) * 0.866)
-	sh := int32(46 * k) // screen height
-
-	// Place the origin so the caller's (left, top) is the bounding box corner:
-	// the deck reaches dv*cos30 to the LEFT of the origin, and the screen rises
-	// sh ABOVE it.
-	ox := left + int32(dv*0.866*k)
-	oy := top + sh
-
-	p0 := iso(ox, oy, 0, 0, k)
-	p1 := iso(ox, oy, du, 0, k)
-	p2 := iso(ox, oy, du, dv, k)
-	p3 := iso(ox, oy, 0, dv, k)
-
-	// Identical construction for both machines — deck, bezel and base are the
-	// same. Only the DISPLAY differs. When the accent laptop had a tinted deck
-	// and an accent bezel around an accent screen, there was no edge to define
-	// the screen plane and it read as a flat leaning slab rather than a laptop.
-	deckFill := cwColCard
-	// Base slab first, so the deck sits on something with thickness.
-	lip := int32(5 * k)
-	c.poly(hdc, []cwPoint{
-		{p0.X, p0.Y + lip}, {p1.X, p1.Y + lip},
-		{p2.X, p2.Y + lip}, {p3.X, p3.Y + lip},
-	}, cwColBorderStr, cwColBorderStr, true)
-	c.poly(hdc, []cwPoint{p0, p1, p2, p3}, deckFill, cwColBorderStr, true)
-
-	// Keyboard block + trackpad, in the deck's own perspective.
-	kb0 := iso(ox, oy, du*0.10, dv*0.16, k)
-	kb1 := iso(ox, oy, du*0.90, dv*0.16, k)
-	kb2 := iso(ox, oy, du*0.90, dv*0.60, k)
-	kb3 := iso(ox, oy, du*0.10, dv*0.60, k)
-	c.poly(hdc, []cwPoint{kb0, kb1, kb2, kb3}, cwColCard, cwColBorder, true)
-	for i := 1; i <= 3; i++ {
-		f := 0.16 + (0.44 * float64(i) / 4.0)
-		a := iso(ox, oy, du*0.13, dv*f, k)
-		b := iso(ox, oy, du*0.87, dv*f, k)
-		c.line(hdc, a.X, a.Y, b.X, b.Y, cwColBorder)
-	}
-	t0 := iso(ox, oy, du*0.34, dv*0.70, k)
-	t1 := iso(ox, oy, du*0.66, dv*0.70, k)
-	t2 := iso(ox, oy, du*0.66, dv*0.92, k)
-	t3 := iso(ox, oy, du*0.34, dv*0.92, k)
-	c.poly(hdc, []cwPoint{t0, t1, t2, t3}, cwColCard, cwColBorderStr, true)
-
-	// Screen: bezel quad standing on the far edge, tilted back slightly.
-	tilt := int32(7 * k)
-	b0, b1 := p0, p1
-	b2 := cwPoint{p1.X + tilt, p1.Y - sh}
-	b3 := cwPoint{p0.X + tilt, p0.Y - sh}
-	bezel := cwColBorderStr
-	c.poly(hdc, []cwPoint{b0, b1, b2, b3}, bezel, bezel, true)
-
-	// Inner display, inset from the bezel so the two read as separate parts.
-	in := 0.13
-	i0 := lerpPt(b0, b2, in)
-	i1 := lerpPt(b1, b3, in)
-	i2 := lerpPt(b2, b0, in)
-	i3 := lerpPt(b3, b1, in)
-	screenFill := cwColCard
-	lineCol := cwColBorder
-	if accent {
-		screenFill = cwColAccent
-		lineCol = cwColTint
-	}
-	c.poly(hdc, []cwPoint{i0, i1, i2, i3}, screenFill, screenFill, true)
-
-	// Content lines across the display, following its slope.
-	for i := 1; i <= 3; i++ {
-		f := float64(i) / 4.0
-		ax := i0.X + int32(float64(i3.X-i0.X)*f) + int32(6*k)
-		ay := i0.Y + int32(float64(i3.Y-i0.Y)*f)
-		bx := i1.X + int32(float64(i2.X-i1.X)*f) - int32(6*k)
-		by := i1.Y + int32(float64(i2.Y-i1.Y)*f)
-		c.line(hdc, ax, ay, bx, by, lineCol)
-	}
-	// Hinge: the seam where the screen meets the deck.
-	c.line(hdc, b0.X, b0.Y, b1.X, b1.Y, bezel)
-}
-
-// lerpPt walks t of the way from a to b.
-func lerpPt(a, b cwPoint, t float64) cwPoint {
-	return cwPoint{
-		X: a.X + int32(float64(b.X-a.X)*t),
-		Y: a.Y + int32(float64(b.Y-a.Y)*t),
-	}
-}
-
-// connectionArt draws the two machines and the encrypted link between them.
-//
-// Vector geometry, not a bitmap: it stays sharp at any DPI and needs no asset
-// pipeline inside the worker. It cannot reproduce a rendered 3D illustration
-// with glow and gradients — GDI has no such primitives — but it does carry the
-// same composition: a remote device on the left, this computer on the right,
-// and a traced connection meeting at a secured node.
+// Replaces the isometric laptops: the map is the product's existing visual
+// identity (the same coastline data the Flutter home page uses, ported in
+// worldmap_windows.go), so the prompt and the app show one world instead of two
+// unrelated illustrations. It also says the right thing — a remote device,
+// somewhere else, reaching this machine.
 func (c *consentWin) connectionArt(hdc uintptr, r cwRect) {
-	w := r.Right - r.Left
-	// Faint isometric floor grid, so the devices sit in a space.
-	c.isoGrid(hdc, r)
-
-	nx := r.Left + w/2 + c.px(2)
-	ny := r.Top + c.px(104)
-
-	baseY := r.Top + c.px(78)
-	// Remote device (left, accent) sits lower and larger; this computer (right)
-	// sits higher and slightly smaller, which reads as depth.
-	c.isoLaptop(hdc, r.Left+c.px(16), baseY, c.px(132), true)
-	c.isoLaptop(hdc, r.Right-c.px(124), r.Top+c.px(30), c.px(112), false)
-
-	// Link: two routed traces meeting at the node.
-	c.trace(hdc, r.Left+c.px(146), baseY+c.px(70), nx, ny, true)
-	c.trace(hdc, nx, ny, r.Right-c.px(116), r.Top+c.px(86), false)
-
-	// Node: concentric rings + spokes, with a lock at the centre.
-	nodeR := c.px(26)
-	c.ellipse(hdc, nx-nodeR, ny-nodeR, nodeR*2, cwColTint, cwColTint, true)
-	inner := c.px(17)
-	c.ellipse(hdc, nx-inner, ny-inner, inner*2, cwColCard, cwColAccent, true)
-	for i := 0; i < 8; i++ {
-		ang := float64(i) * 0.785
-		dx := int32(float64(nodeR) * 0.95 * cosApprox(ang))
-		dy := int32(float64(nodeR) * 0.95 * sinApprox(ang))
-		ix := int32(float64(inner) * 1.05 * cosApprox(ang))
-		iy := int32(float64(inner) * 1.05 * sinApprox(ang))
-		c.line(hdc, nx+ix, ny+iy, nx+dx, ny+dy, cwColAccent)
-		c.ellipse(hdc, nx+dx-c.px(2), ny+dy-c.px(2), c.px(4), cwColAccent, 0, false)
+	// Fit an equirectangular world into the rect, preserving the 2:1 aspect so
+	// the continents aren't stretched.
+	w := float64(r.Right - r.Left)
+	h := float64(r.Bottom - r.Top)
+	mw := w
+	mh := mw / 2
+	if mh > h*0.72 {
+		mh = h * 0.72
+		mw = mh * 2
 	}
-	c.lockGlyph(hdc, nx, ny, c.px(10))
+	ox := float64(r.Left) + (w-mw)/2
+	oy := float64(r.Top) + float64(c.px(6))
+
+	project := func(g geoPt) cwPoint {
+		return cwPoint{
+			X: int32(ox + (g.Lon+180.0)/360.0*mw),
+			Y: int32(oy + (90.0-g.Lat)/180.0*mh),
+		}
+	}
+
+	// Land masses, filled in the tint so the map reads as a soft backdrop rather
+	// than competing with the text beneath it.
+	for _, ring := range mapLand {
+		if len(ring) < 3 {
+			continue
+		}
+		pts := make([]cwPoint, 0, len(ring))
+		for _, g := range ring {
+			pts = append(pts, project(g))
+		}
+		c.poly(hdc, pts, cwColTint, cwColTint, true)
+	}
+	// Internal borders, a shade darker.
+	for _, line := range mapBorders {
+		for i := 0; i+1 < len(line); i++ {
+			a, b := project(line[i]), project(line[i+1])
+			c.line(hdc, a.X, a.Y, b.X, b.Y, cwColBorder)
+		}
+	}
+
+	// The connection: remote device -> this machine, as a great-circle-ish arc.
+	from := project(geoPt{Lon: -95, Lat: 40}) // somewhere else
+	to := project(geoPt{Lon: 78, Lat: 22})    // this machine
+	c.connectionArc(hdc, from, to)
+
+	// Endpoints: origin ring, destination pin.
+	c.ellipse(hdc, from.X-c.px(6), from.Y-c.px(6), c.px(12), cwColCard, cwColAccent, true)
+	c.ellipse(hdc, from.X-c.px(3), from.Y-c.px(3), c.px(6), cwColAccent, 0, false)
+	c.ellipse(hdc, to.X-c.px(10), to.Y-c.px(10), c.px(20), cwColTint, cwColAccent, true)
+	c.ellipse(hdc, to.X-c.px(5), to.Y-c.px(5), c.px(10), cwColAccent, 0, false)
 }
 
-// isoGrid lays a faint floor grid under the artwork.
-func (c *consentWin) isoGrid(hdc uintptr, r cwRect) {
-	ox := r.Left + (r.Right-r.Left)/2
-	oy := r.Top + c.px(120)
-	k := 1.0 * c.scale
-	span := 150.0
-	for i := -4; i <= 4; i++ {
-		u := float64(i) * 38
-		a := iso(ox, oy, u, -span, k)
-		b := iso(ox, oy, u, span, k)
-		c.line(hdc, a.X, a.Y, b.X, b.Y, cwColTint)
-		a2 := iso(ox, oy, -span, u, k)
-		b2 := iso(ox, oy, span, u, k)
-		c.line(hdc, a2.X, a2.Y, b2.X, b2.Y, cwColTint)
+// arcPoint samples the connection arc at t in [0,1]. A quadratic bend lifted
+// perpendicular to the chord, which reads as a hop between two places.
+func arcPoint(a, b cwPoint, t float64) cwPoint {
+	mx := float64(a.X+b.X) / 2
+	my := float64(a.Y+b.Y) / 2
+	dx := float64(b.X - a.X)
+	dy := float64(b.Y - a.Y)
+	// Control point pushed above the midpoint, scaled to the span.
+	cx := mx - dy*0.16
+	cy := my + dx*0.16 - float64(absInt32(b.X-a.X))*0.18
+	u := 1 - t
+	return cwPoint{
+		X: int32(u*u*float64(a.X) + 2*u*t*cx + t*t*float64(b.X)),
+		Y: int32(u*u*float64(a.Y) + 2*u*t*cy + t*t*float64(b.Y)),
 	}
 }
 
-// trace draws one routed connection: an L-shaped path with data squares along
-// it, the way a circuit diagram reads.
-func (c *consentWin) trace(hdc uintptr, x1, y1, x2, y2 int32, fromLeft bool) {
-	midX := (x1 + x2) / 2
-	c.line(hdc, x1, y1, midX, y1, cwColAccent)
-	c.line(hdc, midX, y1, midX, y2, cwColAccent)
-	c.line(hdc, midX, y2, x2, y2, cwColAccent)
-	// Data squares.
-	sq := c.px(4)
-	pts := []cwPoint{
-		{X: (x1 + midX) / 2, Y: y1},
-		{X: midX, Y: (y1 + y2) / 2},
-		{X: (midX + x2) / 2, Y: y2},
+func absInt32(v int32) int32 {
+	if v < 0 {
+		return -v
 	}
-	for _, p := range pts {
-		c.roundRect(hdc, cwRect{p.X - sq, p.Y - sq, p.X + sq, p.Y + sq}, c.px(1),
-			cwColAccent, 0, false)
+	return v
+}
+
+// connectionArc draws the arc plus the packets travelling along it. The window
+// retimes a repaint (see the WM_TIMER handler), so the packets actually move —
+// the prompt shows a live connection, not a frozen diagram.
+func (c *consentWin) connectionArc(hdc uintptr, a, b cwPoint) {
+	const steps = 48
+	prev := a
+	for i := 1; i <= steps; i++ {
+		p := arcPoint(a, b, float64(i)/steps)
+		c.line(hdc, prev.X, prev.Y, p.X, p.Y, cwColAccent)
+		prev = p
+	}
+	// Three packets, evenly spaced, advancing with the animation phase.
+	for i := 0; i < 3; i++ {
+		t := c.phase + float64(i)/3.0
+		for t > 1 {
+			t -= 1
+		}
+		p := arcPoint(a, b, t)
+		rr := c.px(4)
+		c.ellipse(hdc, p.X-rr, p.Y-rr, rr*2, cwColAccent, 0, false)
+		// Soft halo so the packet reads against the map.
+		hr := c.px(7)
+		c.ellipseOutline(hdc, p.X-hr, p.Y-hr, hr*2, cwColAccent)
 	}
 }
 
-// lockGlyph draws a padlock centred on x,y — the link is encrypted.
-func (c *consentWin) lockGlyph(hdc uintptr, x, y, size int32) {
-	bw := size
-	bh := size * 3 / 4
-	body := cwRect{x - bw/2, y - bh/4, x + bw/2, y - bh/4 + bh}
-	// Shackle.
-	sr := bw / 3
-	pen, _, _ := procCreatePenCW.Call(0, uintptr(c.px(2)), cwColAccent)
+// ellipseOutline strokes a circle without filling it.
+func (c *consentWin) ellipseOutline(hdc uintptr, x, y, size int32, col uintptr) {
+	pen, _, _ := procCreatePenCW.Call(0, uintptr(c.px(1)), col)
+	hollow, _, _ := procGetStockObjectCW.Call(5 /*NULL_BRUSH*/)
 	op, _, _ := procSelectObjectCW.Call(hdc, pen)
-	procMoveToExCW.Call(hdc, uintptr(x-sr), uintptr(body.Top), 0)
-	procLineToCW.Call(hdc, uintptr(x-sr), uintptr(body.Top-sr))
-	procLineToCW.Call(hdc, uintptr(x+sr), uintptr(body.Top-sr))
-	procLineToCW.Call(hdc, uintptr(x+sr), uintptr(body.Top))
+	ob, _, _ := procSelectObjectCW.Call(hdc, hollow)
+	procEllipseCW.Call(hdc, uintptr(x), uintptr(y), uintptr(x+size), uintptr(y+size))
 	procSelectObjectCW.Call(hdc, op)
+	procSelectObjectCW.Call(hdc, ob)
 	procDeleteObjectCW.Call(pen)
-	c.roundRect(hdc, body, c.px(2), cwColAccent, 0, false)
-}
-
-// Cheap trig: the agent avoids math imports in this file, and eight fixed
-// angles do not justify one. Values are cos/sin at 45° steps.
-func cosApprox(a float64) float64 {
-	tbl := []float64{1, 0.707, 0, -0.707, -1, -0.707, 0, 0.707}
-	return tbl[int(a/0.785+0.5)%8]
-}
-func sinApprox(a float64) float64 {
-	tbl := []float64{0, 0.707, 1, 0.707, 0, -0.707, -1, -0.707}
-	return tbl[int(a/0.785+0.5)%8]
 }
 
 // shieldGlyph draws a filled shield — the security mark next to the trust note.

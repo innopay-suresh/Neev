@@ -132,13 +132,17 @@ func (b *sessionBar) loop() {
 	}
 	procRegisterClassSB.Call(uintptr(unsafe.Pointer(&wc)))
 
-	w := b.px(268)
-	h := b.px(46)
+	w := b.px(212)
+	h := b.px(38)
 	sw, _, _ := procGetSystemMetricsSB.Call(cwSMCXScreen)
-	// Top-centre: visible without covering the taskbar or the window the user
-	// is most likely working in.
+	sh, _, _ := procGetSystemMetricsSB.Call(cwSMCYScreen)
+	// BOTTOM-centre, lifted clear of the taskbar. Top-centre put it straight on
+	// top of the app's own search bar — an always-on-top indicator must not
+	// cover the UI it is reporting on. Bottom-centre is out of the way of both
+	// the header and the taskbar, and it is where screen-sharing indicators are
+	// conventionally expected.
 	x := (int32(sw) - w) / 2
-	y := b.px(12)
+	y := int32(sh) - h - b.px(64)
 
 	title, _ := syscall.UTF16PtrFromString("Neev Remote")
 	hwnd, _, _ := procCreateWindowExSB.Call(
@@ -230,29 +234,29 @@ func (b *sessionBar) paint(hwnd uintptr) {
 	procDeleteObjectSB.Call(pen)
 
 	// Live dot.
-	dot := b.px(9)
+	dot := b.px(8)
 	dy := (rc.Bottom - dot) / 2
 	dbrush, _, _ := procCreateSolidBrushSB.Call(cwColAccent)
 	dpen, _, _ := procCreatePenSB.Call(5, 0, 0)
 	ob2, _, _ := procSelectObjectSB.Call(hdc, dbrush)
 	op2, _, _ := procSelectObjectSB.Call(hdc, dpen)
-	procEllipseSB.Call(hdc, uintptr(b.px(14)), uintptr(dy),
-		uintptr(b.px(14)+dot), uintptr(dy+dot))
+	procEllipseSB.Call(hdc, uintptr(b.px(12)), uintptr(dy),
+		uintptr(b.px(12)+dot), uintptr(dy+dot))
 	procSelectObjectSB.Call(hdc, ob2)
 	procSelectObjectSB.Call(hdc, op2)
 	procDeleteObjectSB.Call(dbrush)
 	procDeleteObjectSB.Call(dpen)
 
-	font := b.font(12, true)
+	font := b.font(11, true)
 	defer procDeleteObjectSB.Call(font)
 	b.text(hdc, "Remote session active",
-		cwRect{b.px(30), 0, rc.Right - b.px(104), rc.Bottom},
+		cwRect{b.px(26), 0, rc.Right - b.px(90), rc.Bottom},
 		font, cwColInk)
 
 	// Disconnect button.
-	bw, bh := b.px(88), b.px(28)
-	b.rcHangUp = cwRect{rc.Right - bw - b.px(10), (rc.Bottom - bh) / 2,
-		rc.Right - b.px(10), (rc.Bottom-bh)/2 + bh}
+	bw, bh := b.px(76), b.px(24)
+	b.rcHangUp = cwRect{rc.Right - bw - b.px(8), (rc.Bottom - bh) / 2,
+		rc.Right - b.px(8), (rc.Bottom-bh)/2 + bh}
 	fill := cwColDanger
 	if b.hot {
 		fill = cwColAccentDim
