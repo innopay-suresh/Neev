@@ -1027,12 +1027,24 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
       online.putIfAbsent(_norm(d.id), () => d);
     }
 
+    // Ask the relay about every SAVED device. Discovery above only covers
+    // machines sharing our public IP, so an address-book entry on another
+    // network was always drawn "Offline" — even while it was reachable and
+    // being connected to. Presence is the relay answering about ids we already
+    // hold, so nothing new is exposed.
+    final watch = <String>{
+      for (final r in recents) r.id,
+      for (final e in book) e.id,
+    }.where((id) => id.trim().isNotEmpty).toList();
+    service.trackPresenceFor(watch);
+    final present = service.presentIds;
+
     final map = <String, _HomeDevice>{};
     void put(String id, String name, String os, DateTime? last) {
       final k = _norm(id);
       if (k.isEmpty) return;
       final existing = map[k];
-      final on = online.containsKey(k);
+      final on = online.containsKey(k) || present.contains(k);
       final o = online[k];
       map[k] = _HomeDevice(
         id,

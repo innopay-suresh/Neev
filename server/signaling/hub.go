@@ -29,6 +29,11 @@ const (
 	// Controller → Server
 	MsgConnect  MessageType = "connect"  // controller requests to connect to agentID
 	MsgDiscover MessageType = "discover" // client asks who else is on its network
+	// Presence: "are these specific device ids online right now?" Discovery only
+	// covers machines sharing the requester's public IP, so a saved device on
+	// another network always looked offline — every address-book entry showed
+	// Offline even while it was reachable and being connected to.
+	MsgPresence MessageType = "presence"
 
 	// Server → both peers (SDP / ICE exchange)
 	MsgOffer     MessageType = "offer"     // SDP offer (controller → agent via server)
@@ -39,6 +44,7 @@ const (
 	MsgRegistered MessageType = "registered"  // response to register, carries assigned ID
 	MsgClientCert MessageType = "client_cert" // server pushes a new client cert bundle
 	MsgPeers      MessageType = "peers"       // response to discover: same-network hosts
+	MsgPresenceResult MessageType = "presence_result" // which of the asked-for ids are online
 	MsgError      MessageType = "error"
 	MsgBye        MessageType = "bye" // session ended
 
@@ -305,6 +311,8 @@ func (h *Hub) HandleWS(c *websocket.Conn) {
 			h.handleConnect(ctx, cli, msg)
 		case MsgDiscover:
 			h.handleDiscover(cli)
+		case MsgPresence:
+			h.handlePresence(cli, msg.Payload)
 		case MsgOffer, MsgAnswer, MsgCandidate:
 			h.handleRelay(ctx, cli, msg)
 		case MsgSetAlias:
@@ -739,6 +747,46 @@ func (h *Hub) handleDiscover(cli *client) {
 	h.mu.RUnlock()
 	payload, _ := json.Marshal(map[string]any{"peers": peers})
 	_ = cli.send(Message{Type: MsgPeers, Payload: payload})
+}
+
+// maxPresenceIDs caps one request. A device id is the only thing needed to ask,
+// so an uncapped query would let a caller sweep the id space for live machines;
+// this keeps a request to the size of a real address book.
+const maxPresenceIDs = 200
+
+// handlePresence answers "which of these ids are online?" for ids the caller
+// already knows. Unlike discovery it is not limited to the caller's public IP —
+// that limit is why saved devices on other networks always showed as offline —
+// but it deliberately answers ONLY about ids that were asked for, so nothing is
+// enumerable and no list of machines is ever handed out.
+func (h *Hub) handlePresence(cli *client, raw json.RawMessage) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return
+	}
+	if len(req.IDs) > maxPresenceIDs {
+		req.IDs = req.IDs[:maxPresenceIDs]
+	}
+	online := make([]string, 0, len(req.IDs))
+	h.mu.RLock()
+	for _, id := range req.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		other, ok := h.agents[id]
+		// Only registered HOSTS count as present; a controller being connected
+		// says nothing about whether that machine can be reached.
+		if !ok || other.conn == nil || other.role != "agent" {
+			continue
+		}
+		online = append(online, id)
+	}
+	h.mu.RUnlock()
+	payload, _ := json.Marshal(map[string]any{"online": online})
+	_ = cli.send(Message{Type: MsgPresenceResult, Payload: payload})
 }
 
 // hostOnly strips the port from an "ip:port" (v4 or v6) address.

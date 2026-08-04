@@ -14,6 +14,8 @@ enum SignalingMessageType {
   error,
   discover,
   peers,
+  presence,
+  presenceResult,
   setAlias,
   aliasResult,
   resolveAlias,
@@ -74,6 +76,10 @@ class SignalingMessage {
         return SignalingMessageType.peers;
       case 'discover':
         return SignalingMessageType.discover;
+      case 'presence':
+        return SignalingMessageType.presence;
+      case 'presence_result':
+        return SignalingMessageType.presenceResult;
       default:
         return SignalingMessageType.register;
     }
@@ -99,6 +105,10 @@ class SignalingMessage {
         return 'error';
       case SignalingMessageType.discover:
         return 'discover';
+      case SignalingMessageType.presence:
+        return 'presence';
+      case SignalingMessageType.presenceResult:
+        return 'presence_result';
       case SignalingMessageType.peers:
         return 'peers';
       case SignalingMessageType.setAlias:
@@ -274,6 +284,15 @@ class SignalingService {
   /// discovery that works even when UDP broadcast is blocked).
   void sendDiscover() {
     send(SignalingMessage(type: SignalingMessageType.discover));
+  }
+
+  /// Ask the relay which of [ids] are online right now. Discovery only covers
+  /// machines on the requester's own public IP, so saved devices elsewhere
+  /// always looked offline; this asks about specific known ids instead.
+  void requestPresence(List<String> ids) {
+    if (ids.isEmpty) return;
+    send(SignalingMessage(
+        type: SignalingMessageType.presence, payload: {'ids': ids}));
   }
 
   Future<void> disconnect() async {

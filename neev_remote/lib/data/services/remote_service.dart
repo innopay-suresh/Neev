@@ -398,6 +398,54 @@ class RemoteService extends ChangeNotifier {
   /// Hosts the relay reports on our network (from the last `peers` reply).
   List<DiscoveredDevice> get serverPeers => _serverPeers.values.toList();
 
+  // Presence for SAVED devices. Relay discovery only covers machines sharing
+  // our public IP, so an address-book entry on another network always showed
+  // "Offline" even while it was reachable — which is what users actually see.
+  final Set<String> _presentIds = {};
+  Timer? _presenceTimer;
+
+  /// Device ids the relay says are online right now (normalised to digits).
+  Set<String> get presentIds => Set.unmodifiable(_presentIds);
+
+  /// Ask about these ids on a timer. Called with whatever the UI knows about
+  /// (address book + recents), so we only ever ask about ids the user already
+  /// has — nothing is enumerable from this.
+  void trackPresenceFor(List<String> ids) {
+    _presenceIdsToWatch = ids;
+    if (_presenceTimer != null) return;
+    _pollPresence();
+    _presenceTimer =
+        Timer.periodic(const Duration(seconds: 20), (_) => _pollPresence());
+  }
+
+  List<String> _presenceIdsToWatch = const [];
+
+  void _pollPresence() {
+    if (_presenceIdsToWatch.isEmpty) return;
+    // Either socket will do — the relay answers on whichever asked. A
+    // viewer-only install never registers as a host, so _hostSignaling can be
+    // null and the viewer socket is the only way to ask.
+    final sig = _hostSignaling ?? _viewerSignaling;
+    sig?.requestPresence(_presenceIdsToWatch);
+  }
+
+  void _onPresenceResult(dynamic payload) {
+    if (payload is! Map) return;
+    final list = payload['online'];
+    if (list is! List) return;
+    final next = <String>{
+      for (final e in list)
+        if (e is String) e.replaceAll(RegExp(r'[^0-9]'), '')
+    };
+    if (next.length == _presentIds.length && next.containsAll(_presentIds)) {
+      return; // unchanged — don't rebuild the device grid for nothing
+    }
+    _presentIds
+      ..clear()
+      ..addAll(next);
+    notifyListeners();
+  }
+
   // ---- Incoming-connection consent + per-session permissions (host) --------
   /// When true, an incoming connection prompts the host user (Accept/Dismiss).
   /// Set false for unattended access. The app wires this from settings.
@@ -857,6 +905,9 @@ class RemoteService extends ChangeNotifier {
         break;
       case SignalingMessageType.peers:
         _onServerPeers(msg.payload);
+        break;
+      case SignalingMessageType.presenceResult:
+        _onPresenceResult(msg.payload);
         break;
       case SignalingMessageType.connect:
         // A controller wants in. msg.from is the controller's routing id.
@@ -1754,6 +1805,12 @@ class RemoteService extends ChangeNotifier {
 
   Future<void> _onViewerMessage(SignalingMessage msg) async {
     switch (msg.type) {
+      // A viewer-only install never registers as a host, so presence replies
+      // arrive on THIS socket. Without this case they were silently dropped and
+      // saved devices stayed grey.
+      case SignalingMessageType.presenceResult:
+        _onPresenceResult(msg.payload);
+        break;
       case SignalingMessageType.connect:
         // Server confirmed the request was accepted; await the host's offer.
         break;
@@ -2862,6 +2919,10 @@ class RemoteService extends ChangeNotifier {
   @override
   void dispose() {
     _statsTimerMaybeStop();
+    // Presence polls every 20s for the lifetime of the app; without this it
+    // outlives the service and keeps writing to a dead socket.
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
     _stopClipboardSync();
     _uac.dispose();
     _sessionWatcher.dispose();
