@@ -20,10 +20,10 @@ import zipfile
 # survive Swift/Dart small-string inlining and specific enough that a rename
 # fails the check loudly rather than passing by accident.
 VIEWER_STRINGS = [
-    ("Record button present", b"The host captures it and sends"),
-    ("recording sent-back promise", b"The file is sent here when"),
-    ("host-refusal reason (interactive)", b"not accepting interactive connections"),
-    ("host-refusal reason (declined)", b"declined the connection"),
+    ("Record button present", "The host captures it and sends"),
+    ("recording sent-back promise", "The file is sent here when"),
+    ("host-refusal reason (interactive)", "not accepting interactive connections"),
+    ("host-refusal reason (declined)", "declined the connection"),
 ]
 
 failures = []
@@ -38,18 +38,46 @@ def check(label, ok):
         failures.append(label)
 
 
+def _encodings(needle):
+    """Every byte form a string may take in a shipped binary.
+
+    Dart AOT stores a string as Latin-1 when every character fits in a byte and
+    as UTF-16LE the moment one does not — so an em dash silently moves a whole
+    tooltip into a different encoding. Probing UTF-8 only reported a shipped
+    feature as MISSING, which is the worst kind of check: it fails on good
+    builds and teaches you to ignore it.
+    """
+    if isinstance(needle, bytes):
+        return [needle]
+    forms = [needle.encode("utf-8"), needle.encode("utf-16-le")]
+    try:
+        forms.append(needle.encode("latin-1"))
+    except UnicodeEncodeError:
+        pass
+    # De-duplicate while keeping order (ASCII utf-8 and latin-1 are identical).
+    seen, out = set(), []
+    for f in forms:
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
+
+
 def blob_contains(zf, name_filter, needle, size_cap=250 * 1024 * 1024):
-    """True if any member matching name_filter contains needle."""
+    """True if any member matching name_filter contains needle, in any of the
+    encodings a compiled binary might have stored it in."""
+    forms = _encodings(needle)
     for info in zf.infolist():
         if info.is_dir() or info.file_size > size_cap:
             continue
         if not name_filter(info.filename):
             continue
         try:
-            if needle in zf.read(info):
-                return True
+            blob = zf.read(info)
         except Exception:
-            pass
+            continue
+        if any(f in blob for f in forms):
+            return True
     return False
 
 
