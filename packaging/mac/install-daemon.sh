@@ -34,6 +34,19 @@ echo "==> installing binary to $SUPPORT/neev-agent"
 mkdir -p "$SUPPORT"
 install -m 0755 "$AGENT_SRC" "$SUPPORT/neev-agent"
 
+# The menu-bar session controls live NEXT TO the agent, because the worker
+# resolves them relative to its own executable. Without this a macOS host has
+# no way to end a session or to speak to the viewer.
+VOICE_SRC="$(dirname "$AGENT_SRC")/NeevVoice.app"
+if [ -d "$VOICE_SRC" ]; then
+  echo "==> installing session controls to $SUPPORT/NeevVoice.app"
+  rm -rf "$SUPPORT/NeevVoice.app"
+  cp -R "$VOICE_SRC" "$SUPPORT/NeevVoice.app"
+else
+  echo "==> NeevVoice.app not found beside the agent — this host will have no"
+  echo "    session bar and no microphone control"
+fi
+
 echo "==> writing $DAEMON_PLIST (relay=$RELAY_URL)"
 sed "s#__RELAY_URL__#${RELAY_URL}#g" "$HERE/com.neev.transport.plist" > "$DAEMON_PLIST"
 chown root:wheel "$DAEMON_PLIST"; chmod 0644 "$DAEMON_PLIST"

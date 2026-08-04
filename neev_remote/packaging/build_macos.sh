@@ -36,6 +36,17 @@ if [ -f "$AGENT_BIN" ]; then
   # Ad-hoc here; a Developer-ID re-sign downstream keeps the same identifier.
   codesign --force --sign - --identifier com.neev.agent --timestamp=none \
     "$DAEMON_DST/neev-agent" 2>/dev/null || echo "   (agent re-sign skipped)"
+  # The host's macOS session controls (menu bar): "Remote session active",
+  # a microphone toggle, and End session. Built here rather than checked in so
+  # the shipped bundle always matches the source.
+  if bash "$REPO_ROOT/packaging/mac/NeevVoice/build.sh" "$DAEMON_DST" >/dev/null; then
+    echo "   bundled NeevVoice.app (host session controls)"
+  else
+    # Not fatal: the daemon still hosts, it just has no host-side controls.
+    # Silently shipping without them is what must not happen.
+    echo "   WARNING: NeevVoice.app failed to build — macOS hosts will have NO"
+    echo "            session bar and NO microphone control in this package"
+  fi
   cp "$REPO_ROOT/packaging/mac/com.neev.transport.plist" "$DAEMON_DST/"
   cp "$REPO_ROOT/packaging/mac/com.neev.worker.plist" "$DAEMON_DST/"
   install -m 0755 "$REPO_ROOT/packaging/mac/install-daemon.sh" "$DAEMON_DST/"

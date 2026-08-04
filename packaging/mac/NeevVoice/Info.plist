@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>NeevVoice</string>
+    <key>CFBundleDisplayName</key>
+    <string>Neev Remote Session</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.neev.remote.voice</string>
+    <key>CFBundleExecutable</key>
+    <string>NeevVoice</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <!-- Menu-bar only: no Dock icon, no window. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Neev Remote uses the microphone only while you turn it on during a remote session, so you can talk to the person connected to this Mac.</string>
+</dict>
+</plist>

@@ -396,9 +396,14 @@ hardware-confirmed intact.
 - **KP-VOICE — PARTLY CLOSED in r126 (pending hardware verify).** The Go
   transport now carries a PCMU audio track, capture/playback live in the worker,
   and the host has a "Mic on/off" button on the Windows session bar. Still open:
-  no host-owned mic control on a macOS daemon host (the bar is Windows-only), so
-  a macOS TransportMode host can be HEARD only via the Flutter app path — it can
-  still hear the viewer. Original entry follows.
+  CLOSED in r127: macOS hosts now get NeevVoice.app, a menu-bar item with
+  "Remote session active", a microphone toggle and End session, started by the
+  worker for the life of a session. It is an .app bundle rather than a bare tool
+  because macOS shows the mic prompt using the CALLING process's Info.plist — a
+  bare executable gets an unexplained prompt, which users decline. Ad-hoc signed
+  with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
+  Still unverified on hardware: the TCC prompt itself, and audio over a real
+  session. Original entry follows.
 
 - **KP-VOICE (as filed at r125) — in-session voice does not work against a
   TransportMode host.** The Flutter host/viewer path carries two-way audio, but a

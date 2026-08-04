@@ -1,10 +1,10 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package session
 
-// The host session bar is a native Windows window today. Off Windows the host
-// ends a session from the Flutter UI instead, so these are no-ops rather than
-// stubs that pretend to show something.
+// The host session bar is a native Windows window, and macOS has its own
+// menu-bar helper. Everywhere else the host ends a session from the Flutter UI
+// instead, so these are no-ops rather than stubs that pretend to show something.
 func showHostSessionBar(onHangUp func()) {}
 func hideHostSessionBar()                {}
 

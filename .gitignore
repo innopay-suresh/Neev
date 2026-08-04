@@ -72,3 +72,4 @@ external_scan_103.txt
 !web/public/**
 !client/frontend/public/
 !client/frontend/public/**
+packaging/mac/NeevVoice/build/
