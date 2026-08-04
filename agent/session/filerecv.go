@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -176,6 +177,72 @@ func (f *fileReceiver) handle(payload []byte) bool {
 		go f.serveExport()
 	}
 	return true
+}
+
+// ExportFileStreaming sends a file to the viewer without a picker, reading it
+// in chunks rather than whole.
+//
+// The whole-file read that serveExport uses is fine for a document a host picks
+// by hand, but a session recording is minutes of video — around 11 MB per
+// minute — and holding all of it plus its base64 expansion in memory at once is
+// how a long session turns into an out-of-memory kill on the host.
+//
+// Returns an error rather than reporting success on a partial send: a truncated
+// recording that claims to have transferred is worse than one that visibly
+// failed.
+func (f *fileReceiver) ExportFileStreaming(path string) error {
+	fh, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", filepath.Base(path), err)
+	}
+	defer fh.Close()
+
+	st, err := fh.Stat()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", filepath.Base(path), err)
+	}
+	size := st.Size()
+	if size == 0 {
+		return fmt.Errorf("%s is empty", filepath.Base(path))
+	}
+
+	id := fmt.Sprintf("hx-%d", f.seq.Add(1))
+	name := filepath.Base(path)
+	f.sendFT(map[string]interface{}{"k": "ft", "t": "offer",
+		"id": id, "name": name, "size": size})
+
+	const chunk = 36 * 1024
+	buf := make([]byte, chunk)
+	seq := 0
+	var sent int64
+	for {
+		n, rerr := fh.Read(buf)
+		if n > 0 {
+			f.sendFTBulk(map[string]interface{}{
+				"k": "ft", "t": "data", "id": id, "seq": seq,
+				"d": base64.StdEncoding.EncodeToString(buf[:n]),
+			})
+			seq++
+			sent += int64(n)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": id,
+				"err": "host could not read " + name + ": " + rerr.Error()})
+			return fmt.Errorf("read %s: %w", name, rerr)
+		}
+	}
+	if sent != size {
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": id,
+			"err": name + " was truncated while sending"})
+		return fmt.Errorf("%s: sent %d of %d bytes", name, sent, size)
+	}
+	f.sendFT(map[string]interface{}{"k": "ft", "t": "end", "id": id})
+	log.Info().Str("name", name).Int64("bytes", sent).
+		Msg("worker: streamed file to viewer")
+	return nil
 }
 
 // serveExport shows the host file picker and streams the chosen file to the

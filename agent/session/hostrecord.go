@@ -120,6 +120,28 @@ func stopRecording() string {
 	return path
 }
 
+// deliverRecording hands a finished recording to the connected viewer.
+//
+// Safe to do without asking: the viewer WATCHED this session live, so the
+// recording contains nothing they have not already seen. What it adds is a
+// copy for the person who usually wants one — the technician — without which
+// the file sits on the host's disk and the feature helps nobody remotely.
+//
+// The host keeps their copy either way; this sends, it does not move.
+func deliverRecording(f *fileReceiver, path string) {
+	if f == nil || path == "" {
+		return
+	}
+	if err := f.ExportFileStreaming(path); err != nil {
+		// The host's copy is already on disk, so a failed hand-off costs the
+		// recording nothing — say so plainly and leave it where it is.
+		log.Warn().Err(err).Str("path", path).
+			Msg("worker: could not send the recording to the viewer — it is still saved on this machine")
+		return
+	}
+	log.Info().Str("path", path).Msg("worker: recording sent to viewer")
+}
+
 // recordingActive reports whether a recording is running.
 func recordingActive() bool {
 	recMu.Lock()

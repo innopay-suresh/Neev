@@ -393,6 +393,24 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **r132 — recordings reach the VIEWER.** Recording still happens host-side
+  (VP8 mux, no re-encode), but when the host stops it the file is streamed to
+  the connected viewer over the existing file-transfer channel and lands in
+  their Downloads. No consent gate: the viewer WATCHED that session live, so the
+  file contains nothing new to them — and the host keeps their copy regardless.
+  Viewer-side recording remains impossible (flutter_webrtc `startRecordToFile`
+  is unimplemented on Windows/macOS; `captureFrame` exists but polling PNGs is
+  not a recorder).
+  Two transfer bugs found while building it:
+  • `ExportFileStreaming` added — the old export read the WHOLE file into memory,
+    which at ~11 MB/min of recording is an OOM risk on the host.
+  • RECEIVER never checked that the bytes received matched the offered size: it
+    wrote whatever arrived, marked it done, acked `saved`, and set
+    `transferred = offered size` regardless. Since `end` (hi lane) can overtake
+    data (bulk lane), a truncated recording looked identical to a good one. Now
+    a length mismatch is an error. This was the receiving half of the sender-side
+    short-read bug fixed earlier.
+
 - **r129 features (pending hardware verify).** Remote sound + session recording.
   • Remote sound = WASAPI loopback via miniaudio on Windows. **CORRECTION
     (r130): the earlier claim that macOS cannot capture system audio without a
@@ -448,6 +466,24 @@ hardware-confirmed intact.
   with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
   Still unverified on hardware: the TCC prompt itself, and audio over a real
   session. Original entry follows.
+
+- **r132 — recordings reach the VIEWER.** Recording still happens host-side
+  (VP8 mux, no re-encode), but when the host stops it the file is streamed to
+  the connected viewer over the existing file-transfer channel and lands in
+  their Downloads. No consent gate: the viewer WATCHED that session live, so the
+  file contains nothing new to them — and the host keeps their copy regardless.
+  Viewer-side recording remains impossible (flutter_webrtc `startRecordToFile`
+  is unimplemented on Windows/macOS; `captureFrame` exists but polling PNGs is
+  not a recorder).
+  Two transfer bugs found while building it:
+  • `ExportFileStreaming` added — the old export read the WHOLE file into memory,
+    which at ~11 MB/min of recording is an OOM risk on the host.
+  • RECEIVER never checked that the bytes received matched the offered size: it
+    wrote whatever arrived, marked it done, acked `saved`, and set
+    `transferred = offered size` regardless. Since `end` (hi lane) can overtake
+    data (bulk lane), a truncated recording looked identical to a good one. Now
+    a length mismatch is an error. This was the receiving half of the sender-side
+    short-read bug fixed earlier.
 
 - **r129 features (pending hardware verify).** Remote sound + session recording.
   • Remote sound = WASAPI loopback via miniaudio on Windows. **CORRECTION

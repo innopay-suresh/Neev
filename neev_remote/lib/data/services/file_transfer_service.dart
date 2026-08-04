@@ -392,6 +392,21 @@ class FileTransferManager {
   Future<void> _finishIncoming(_Incoming inc) async {
     try {
       final bytes = inc.buf.takeBytes();
+      // A short transfer must NOT be saved as a complete file.
+      //
+      // 'end' and the data chunks travel on different priority lanes, so 'end'
+      // can arrive before the tail of a large file. Until now this wrote
+      // whatever had turned up, marked it done, and acked 'saved' — so a
+      // truncated download looked identical to a good one. That matters most
+      // for the biggest thing this app sends: a session recording, which would
+      // simply refuse to play with no indication why.
+      //
+      // This is the receiving half of the bug already fixed on the sending side,
+      // where short reads were being reported as successful transfers.
+      if (inc.ft.size > 0 && bytes.length != inc.ft.size) {
+        throw StateError(
+            'incomplete transfer: received ${bytes.length} of ${inc.ft.size} bytes');
+      }
       String? path;
       if (store.supported) {
         // Write to the destination reserved at offer time (unique per transfer).
@@ -406,7 +421,10 @@ class FileTransferManager {
         if (inc.ft.clipboard) await onClipboardFile?.call(path);
       }
       inc.ft.savedPath = path;
-      inc.ft.transferred = inc.ft.size == 0 ? bytes.length : inc.ft.size;
+      // Report what ACTUALLY arrived. This used to assign the offered size
+      // whichever number of bytes turned up, which is how a short file could
+      // show a full progress bar.
+      inc.ft.transferred = bytes.length;
       inc.ft.status = FileStatus.done;
       // Tell the sender the file is fully + uniquely saved, so its status can go
       // from "Delivered" to confirmed. Without this the sender can only ever

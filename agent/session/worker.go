@@ -253,8 +253,11 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 								if path, ok := startRecording(w, h); ok {
 									log.Info().Str("path", path).Msg("worker: host started recording")
 								}
-							} else {
-								stopRecording()
+							} else if path := stopRecording(); path != "" {
+								// Off the toggle goroutine: a long recording
+								// takes real time to stream and must not stall
+								// the session bar.
+								go deliverRecording(files, path)
 							}
 							return
 						}

@@ -66,13 +66,25 @@ def verify_macos(path, tag):
                   blob_contains(z, lambda n: n.endswith("NeevVoice.app/Contents/Info.plist"),
                                 b"NSMicrophoneUsageDescription"))
             if helper:
+                # Only strings that RELIABLY appear as literals. Swift stores
+                # short strings inline rather than in the binary's literal
+                # section, so "End session" (11 bytes) is absent even from a
+                # build that definitely has that menu item — checking for it
+                # failed on a known-good binary, which is worse than not
+                # checking at all: it teaches you to wave failures through.
                 for label, needle in [
                     ("helper: system-sound menu", b"Share this Mac"),
                     ("helper: ScreenCaptureKit linked", b"ScreenCaptureKit"),
                     ("helper: recording menu", b"Record this session"),
-                    ("helper: end-session menu", b"End session"),
+                    ("helper: session-active title", b"Remote session active"),
+                    ("helper: permission guidance", b"Screen & System Audio Recording"),
                 ]:
                     check(label, blob_contains(z, lambda n: n == helper[0], needle))
+                # Universal binary, so Intel Macs are covered too. A silently
+                # arm64-only helper would simply not launch on an Intel host.
+                info = next(i for i in z.infolist() if i.filename == helper[0])
+                check("helper: binary is a plausible universal build (>200 KB)",
+                      info.file_size > 200 * 1024)
             check("neev-agent (daemon) present",
                   any(n.endswith("Resources/daemon/neev-agent") for n in names))
 
