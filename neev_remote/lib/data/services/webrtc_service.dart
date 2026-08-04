@@ -1,3 +1,4 @@
+import '../../core/diag_log.dart';
 import 'dart:async';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -189,26 +190,70 @@ class WebRTCService {
   Future<void> adoptVoiceTransceiver() async {
     if (_pc == null || _audioSender != null) return;
     try {
-      // After setRemoteDescription the peer has a transceiver per m-line; the
-      // audio one is identified by its receiver track. Matching on the RECEIVER
-      // (not the sender) matters — our sender has no track yet, because the mic
-      // is deliberately not opened until the user turns voice on.
-      for (final t in await _pc!.getTransceivers()) {
+      final transceivers = await _pc!.getTransceivers();
+
+      // Preferred match: the receiver's track kind.
+      for (final t in transceivers) {
         if (t.receiver.track?.kind == 'audio') {
-          // Force SENDRECV before the answer is created.
-          //
-          // This is what makes viewer→host voice possible at all. With no mic
-          // attached yet, the answer would otherwise declare RECVONLY — the
-          // viewer hears the host, the host hears nothing — and no later
-          // replaceTrack can undo it: replaceTrack swaps the track, it never
-          // changes a negotiated direction. So the mic appeared to turn on and
-          // simply transmitted into a channel the SDP said was one-way.
-          await t.setDirection(TransceiverDirection.SendRecv);
-          _audioSender = t.sender;
+          await _claimVoice(t);
           return;
         }
       }
-    } catch (_) {}
+
+      // Fallback: match by the mid of the offer's m=audio section.
+      //
+      // receiver.track is NOT reliably populated straight after
+      // setRemoteDescription, and when it is null the loop above finds nothing,
+      // _audioSender stays null, and the microphone is later attached to
+      // nothing at all — silent, with every visible sign of working. Reading
+      // the mid out of the SDP does not depend on that timing.
+      final mid = _audioMidOf((await _pc!.getRemoteDescription())?.sdp);
+      if (mid != null) {
+        for (final t in transceivers) {
+          if (t.mid == mid) {
+            await _claimVoice(t);
+            return;
+          }
+        }
+      }
+      DiagLog.log('voice',
+          'no audio transceiver found in the offer — viewer cannot speak back');
+    } catch (e) {
+      DiagLog.log('voice', 'adopting the voice channel failed: $e');
+    }
+  }
+
+  /// Takes the sender and forces the channel two-way.
+  Future<void> _claimVoice(RTCRtpTransceiver t) async {
+    // Force SENDRECV before the answer is created.
+    //
+    // This is what makes viewer→host voice possible at all. With no mic
+    // attached yet the answer would otherwise declare RECVONLY — the viewer
+    // hears the host, the host hears nothing — and no later replaceTrack can
+    // undo it: replaceTrack swaps the track, it never changes a negotiated
+    // direction.
+    await t.setDirection(TransceiverDirection.SendRecv);
+    _audioSender = t.sender;
+    DiagLog.log('voice', 'voice channel adopted (mid=${t.mid}) as sendrecv');
+  }
+
+  /// Test hook for [_audioMidOf].
+  static String? debugAudioMidOf(String? sdp) => _audioMidOf(sdp);
+
+  /// Returns the mid of the first m=audio section in an SDP, or null.
+  static String? _audioMidOf(String? sdp) {
+    if (sdp == null) return null;
+    var inAudio = false;
+    for (final line in sdp.split(RegExp(r'\r?\n'))) {
+      if (line.startsWith('m=')) {
+        inAudio = line.startsWith('m=audio');
+        continue;
+      }
+      if (inAudio && line.startsWith('a=mid:')) {
+        return line.substring('a=mid:'.length).trim();
+      }
+    }
+    return null;
   }
 
   /// The negotiated direction of the voice channel, for diagnosis.
