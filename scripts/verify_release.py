@@ -16,6 +16,16 @@ is wrong rather than one thing at a time.
 import sys
 import zipfile
 
+# Strings that prove a viewer-facing feature actually shipped. Long enough to
+# survive Swift/Dart small-string inlining and specific enough that a rename
+# fails the check loudly rather than passing by accident.
+VIEWER_STRINGS = [
+    ("Record button present", b"The host captures it and sends"),
+    ("recording sent-back promise", b"The file is sent here when"),
+    ("host-refusal reason (interactive)", b"not accepting interactive connections"),
+    ("host-refusal reason (declined)", b"declined the connection"),
+]
+
 failures = []
 checks = 0
 
@@ -54,9 +64,12 @@ def verify_macos(path, tag):
         import io
         with zipfile.ZipFile(io.BytesIO(outer.read(inner_name))) as z:
             names = z.namelist()
-            check(f"build stamp {tag} in App.framework",
-                  blob_contains(z, lambda n: n.endswith("Frameworks/App.framework/Versions/A/App"),
-                                tag.encode()))
+            appfw = lambda n: n.endswith("Frameworks/App.framework/Versions/A/App")
+            check(f"build stamp {tag} in App.framework", blob_contains(z, appfw, tag.encode()))
+            # Viewer-facing features live in the Dart snapshot. Checking the
+            # host binary alone is how a missing macOS helper passed once.
+            for label, needle in VIEWER_STRINGS:
+                check("viewer: " + label, blob_contains(z, appfw, needle))
             # The check that r130 was missing.
             helper = [n for n in names if n.endswith("NeevVoice.app/Contents/MacOS/NeevVoice")]
             check("NeevVoice.app binary present (host session controls)", bool(helper))
@@ -99,8 +112,10 @@ def verify_windows(path, tag):
             return
         import io
         with zipfile.ZipFile(io.BytesIO(outer.read(inner_name))) as z:
-            check(f"build stamp {tag} in app.so",
-                  blob_contains(z, lambda n: n.endswith("data/app.so"), tag.encode()))
+            appso = lambda n: n.endswith("data/app.so")
+            check(f"build stamp {tag} in app.so", blob_contains(z, appso, tag.encode()))
+            for label, needle in VIEWER_STRINGS:
+                check("viewer: " + label, blob_contains(z, appso, needle))
             host = lambda n: n.endswith("neev-host.exe")
             for label, needle in [
                 ("host: Record button", b"Record"),
