@@ -2,6 +2,7 @@ package session
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
 
@@ -196,14 +197,26 @@ func feedHostSound(frame []byte) {
 
 // playViewerVoice queues one mu-law frame from the viewer for the speakers.
 func playViewerVoice(mu []byte) {
+	if len(mu) == 0 {
+		return
+	}
 	hostAudioMu.Lock()
 	d := ensureDeviceLocked()
 	hostAudioMu.Unlock()
-	if d == nil || len(mu) == 0 {
+	if d == nil {
 		return
+	}
+	// One line the first time audio actually reaches the speakers. Without it,
+	// "the host cannot hear the viewer" could be the channel, the transport, or
+	// the audio device, and there was nothing to tell them apart.
+	if !playedViewerVoice.Swap(true) {
+		log.Info().Msg("worker: playing viewer voice on the host speakers")
 	}
 	d.Play(mu)
 }
+
+// playedViewerVoice makes the log above fire once per worker, not per frame.
+var playedViewerVoice atomic.Bool
 
 // closeHostAudio releases every audio device. Called when the worker shuts down
 // so a microphone can never outlive the session that opened it.

@@ -328,7 +328,12 @@ class RemoteService extends ChangeNotifier {
         await p.setMicTrack(track);
       }
       _voiceOn = true;
-      DiagLog.log('voice', 'microphone ON');
+      // Log the NEGOTIATED direction, not just "on". If this ever reads
+      // recvOnly the microphone is fine and the channel is one-way — the exact
+      // bug that made viewer→host silent while host→viewer worked.
+      for (final p in peers) {
+        DiagLog.log('voice', 'microphone ON — channel is ${await p.voiceDirection()}');
+      }
     } else {
       for (final p in peers) {
         await p.setMicTrack(null);

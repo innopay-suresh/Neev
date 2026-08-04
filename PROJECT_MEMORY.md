@@ -393,6 +393,18 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **r134 — viewer→host voice was NEVER working (fixed).** Host→viewer worked,
+  so voice looked fine. The viewer adopted the offered audio transceiver and
+  took its sender, but never set its DIRECTION — with no mic attached at answer
+  time the answer declared `recvonly`, and `replaceTrack` swaps a track, it
+  does NOT change a negotiated direction. So enabling the viewer mic opened the
+  device and transmitted into a channel the SDP said was one-way. Fix:
+  `setDirection(SendRecv)` on the adopted transceiver BEFORE `createAnswer`.
+  Lesson: a one-way voice bug is indistinguishable from a dead microphone from
+  the outside. Diagnostics added on all three hops — viewer logs the NEGOTIATED
+  direction when the mic turns on, transport logs the viewer track opening and
+  its first arriving packet, worker logs first playback to the speakers.
+
 - **r133 — the VIEWER can start/stop recording.** Record button in the viewer
   toolbar sends `{k:'cmd',c:'record',on:...}`; the host captures (no re-encode)
   and streams the file back on stop. Handled BEFORE the per-platform
@@ -477,6 +489,18 @@ hardware-confirmed intact.
   with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
   Still unverified on hardware: the TCC prompt itself, and audio over a real
   session. Original entry follows.
+
+- **r134 — viewer→host voice was NEVER working (fixed).** Host→viewer worked,
+  so voice looked fine. The viewer adopted the offered audio transceiver and
+  took its sender, but never set its DIRECTION — with no mic attached at answer
+  time the answer declared `recvonly`, and `replaceTrack` swaps a track, it
+  does NOT change a negotiated direction. So enabling the viewer mic opened the
+  device and transmitted into a channel the SDP said was one-way. Fix:
+  `setDirection(SendRecv)` on the adopted transceiver BEFORE `createAnswer`.
+  Lesson: a one-way voice bug is indistinguishable from a dead microphone from
+  the outside. Diagnostics added on all three hops — viewer logs the NEGOTIATED
+  direction when the mic turns on, transport logs the viewer track opening and
+  its first arriving packet, worker logs first playback to the speakers.
 
 - **r133 — the VIEWER can start/stop recording.** Record button in the viewer
   toolbar sends `{k:'cmd',c:'record',on:...}`; the host captures (no re-encode)

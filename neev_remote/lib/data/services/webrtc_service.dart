@@ -195,11 +195,39 @@ class WebRTCService {
       // is deliberately not opened until the user turns voice on.
       for (final t in await _pc!.getTransceivers()) {
         if (t.receiver.track?.kind == 'audio') {
+          // Force SENDRECV before the answer is created.
+          //
+          // This is what makes viewer→host voice possible at all. With no mic
+          // attached yet, the answer would otherwise declare RECVONLY — the
+          // viewer hears the host, the host hears nothing — and no later
+          // replaceTrack can undo it: replaceTrack swaps the track, it never
+          // changes a negotiated direction. So the mic appeared to turn on and
+          // simply transmitted into a channel the SDP said was one-way.
+          await t.setDirection(TransceiverDirection.SendRecv);
           _audioSender = t.sender;
           return;
         }
       }
     } catch (_) {}
+  }
+
+  /// The negotiated direction of the voice channel, for diagnosis.
+  ///
+  /// Worth logging because a one-way voice bug looks identical to a broken
+  /// microphone from the outside: the button lights, the mic opens, and the
+  /// audio goes into a channel the SDP declared receive-only.
+  Future<String> voiceDirection() async {
+    if (_pc == null) return 'no-peer';
+    try {
+      for (final t in await _pc!.getTransceivers()) {
+        if (t.receiver.track?.kind == 'audio' || t.sender == _audioSender) {
+          return (await t.getCurrentDirection())?.name ?? 'unset';
+        }
+      }
+    } catch (e) {
+      return 'unknown ($e)';
+    }
+    return 'no-audio-section';
   }
 
   /// Attach or detach the microphone. Null detaches, which stops transmitting

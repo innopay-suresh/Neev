@@ -342,6 +342,8 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		if track.Kind() != webrtc.RTPCodecTypeAudio {
 			return
 		}
+		log.Info().Str("codec", track.Codec().MimeType).
+			Msg("transport: viewer opened a voice track")
 		go t.pumpViewerVoice(ctx, track)
 	}
 
@@ -982,6 +984,7 @@ func (t *Transport) refuse(viewer, reason string) {
 // in the worker, where the playback clock actually lives.
 func (t *Transport) pumpViewerVoice(ctx context.Context, track *webrtc.TrackRemote) {
 	buf := make([]byte, 1500)
+	first := true
 	for {
 		if ctx.Err() != nil {
 			return
@@ -997,6 +1000,14 @@ func (t *Transport) pumpViewerVoice(ctx context.Context, track *webrtc.TrackRemo
 		}
 		if len(pkt.Payload) == 0 {
 			continue
+		}
+		// Log the FIRST packet only. Viewer→host voice failing silently is hard
+		// to tell apart from a muted microphone, so one line proving audio
+		// reached the host turns a guessing game into a lookup.
+		if first {
+			first = false
+			log.Info().Str("codec", track.Codec().MimeType).
+				Msg("transport: viewer voice is arriving — forwarding to the worker for playback")
 		}
 		t.sendToWorker(ipc.KindAudioPlay, pkt.Payload)
 	}
