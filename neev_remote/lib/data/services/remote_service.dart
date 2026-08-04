@@ -556,6 +556,21 @@ class RemoteService extends ChangeNotifier {
   SignalingService? _viewerSignaling;
   WebRTCService? _viewerPeer;
   ViewerStatus _viewerStatus = ViewerStatus.idle;
+
+  /// How far the CURRENT connection attempt has actually got.
+  ///
+  /// The connect screen used to advance four ticks on a 420ms timer regardless
+  /// of what was happening — it showed "Verifying identity" complete for a
+  /// password that had already been rejected. That is a Data Honesty Rule
+  /// violation (DESIGN.md) and it actively misled us while debugging.
+  int _viewerPhase = 0;
+  int get viewerPhase => _viewerPhase;
+
+  void _setPhase(int p) {
+    if (p <= _viewerPhase) return; // never go backwards within one attempt
+    _viewerPhase = p;
+    notifyListeners();
+  }
   String? _targetId;
   String? _viewerError;
 
@@ -1247,6 +1262,7 @@ class RemoteService extends ChangeNotifier {
 
     _targetId = targetId;
     _viewerStatus = ViewerStatus.connecting;
+    _viewerPhase = 0; // new attempt — start the progress over
     _viewerError = null;
     DiagLog.log('viewer', 'connectToHost target=$targetId relay=$relayUrl '
         'autoReconnect=$autoReconnect tries=$_reconnectTries');
@@ -1257,6 +1273,8 @@ class RemoteService extends ChangeNotifier {
       serverUrl: relayUrl,
       onMessage: _onViewerMessage,
       onConnected: () {
+        // Relay reached — the request can now be made. Real signal, not a timer.
+        _setPhase(1);
         // The viewer (controller) does not register; it just requests a peer.
         _viewerSignaling?.sendConnect(targetId, password);
       },
@@ -1830,6 +1848,10 @@ class RemoteService extends ChangeNotifier {
         // Server confirmed the request was accepted; await the host's offer.
         break;
       case SignalingMessageType.offer:
+        // The host sent an offer: the relay accepted the password and the host
+        // agreed to the session. This is the real "verified" moment — the old
+        // screen claimed it on a timer, even for a password already rejected.
+        _setPhase(2);
         await _answerHostOffer(msg);
         break;
       case SignalingMessageType.candidate:
@@ -1887,6 +1909,7 @@ class RemoteService extends ChangeNotifier {
     peer.onDataMessage = (raw) => _handleData(raw, isHost: false);
     peer.onRemoteStream = (stream) {
       _remoteStream = stream;
+      _setPhase(3);
       _viewerStatus = ViewerStatus.connected;
       _auditViewerStart ??= DateTime.now();
       DiagLog.log('viewer', 'connected — remote stream up (session live)');

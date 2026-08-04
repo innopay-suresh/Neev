@@ -22,10 +22,15 @@ import '../providers/app_providers.dart';
 class ConnectionSequence extends StatefulWidget {
   final String targetLabel;
   final VoidCallback onCancel;
+
+  /// How far the attempt has REALLY got (RemoteService.viewerPhase). Ticks are
+  /// driven by this, never by elapsed time.
+  final int phase;
   const ConnectionSequence({
     super.key,
     required this.targetLabel,
     required this.onCancel,
+    this.phase = 0,
   });
   @override
   State<ConnectionSequence> createState() => _ConnectionSequenceState();
@@ -33,15 +38,15 @@ class ConnectionSequence extends StatefulWidget {
 
 class _ConnectionSequenceState extends State<ConnectionSequence>
     with SingleTickerProviderStateMixin {
+  // Labels describe what each stage ACTUALLY waits on, so a stall points at the
+  // real step. "Negotiating display quality" described nothing that happens.
   static const _stages = [
-    'Locating device',
-    'Establishing secure channel',
-    'Verifying identity',
-    'Negotiating display quality',
+    'Contacting relay',
+    'Requesting the device',
+    'Waiting for the host to accept',
+    'Receiving the screen',
   ];
   late final AnimationController _c;
-  int _stage = 0;
-  Timer? _timer;
 
   @override
   void initState() {
@@ -49,17 +54,14 @@ class _ConnectionSequenceState extends State<ConnectionSequence>
     _c = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1400))
       ..repeat();
-    _timer = Timer.periodic(const Duration(milliseconds: 420), (_) {
-      if (!mounted) return;
-      // Advance through the stages, then hold on the last one until the real
-      // connection completes (the parent replaces this screen on 'connected').
-      if (_stage < _stages.length - 1) setState(() => _stage++);
-    });
+    // No timer. Progress comes from the service's real connection phase — the
+    // old 420ms ticker marched to the last stage no matter what, so a rejected
+    // password still showed "Verifying identity" complete and a stall told you
+    // nothing about where it stalled.
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     _c.dispose();
     super.dispose();
   }
@@ -99,15 +101,15 @@ class _ConnectionSequenceState extends State<ConnectionSequence>
               ),
             ),
             const SizedBox(height: 30),
-            Text(_stages[_stage],
+            Text(_stages[widget.phase.clamp(0, _stages.length - 1)],
                 style: AppTypography.pageTitle.copyWith(fontSize: 18)),
             const SizedBox(height: 4),
             Text('Securing an end-to-end encrypted connection…',
                 style: AppTypography.caption),
             const SizedBox(height: 22),
             ...List.generate(_stages.length, (i) {
-              final done = i < _stage;
-              final active = i == _stage;
+              final done = i < widget.phase;
+              final active = i == widget.phase;
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(children: [

@@ -190,6 +190,7 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     if (service.viewerStatus == ViewerStatus.connecting) {
       final target = _idController.text.trim();
       return ConnectionSequence(
+        phase: service.viewerPhase,
         targetLabel: target.isEmpty ? 'Remote device' : target,
         onCancel: () => service.disconnectViewer(),
       );
