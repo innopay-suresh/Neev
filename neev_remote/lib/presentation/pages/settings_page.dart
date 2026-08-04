@@ -4,6 +4,7 @@ import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import 'audit_log_page.dart';
 import '../../data/services/consent_store.dart';
+import '../../data/services/update_service.dart';
 import '../../data/services/mac_daemon.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
@@ -194,6 +195,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         _buildInfoRow('Version', AppConstants.appVersion),
         const Divider(),
         _buildInfoRow('Build', AppConstants.buildTag),
+        const Divider(),
+        // "Which build am I running, and is it current?" was unanswerable from
+        // inside the app, which is how bug reports ended up filed against code
+        // that had already been fixed.
+        const _UpdateCheckRow(),
         const Divider(),
         _buildInfoRow('Platform', 'Desktop'),
         const Divider(),
@@ -773,6 +779,57 @@ class _ForgetRememberedDevicesState extends State<_ForgetRememberedDevices> {
         onPressed: _forget,
         child: const Text('Forget'),
       ),
+    );
+  }
+}
+
+/// Reports whether a newer build has been published. Deliberately does not
+/// download or run anything — it shows the answer and where to get it.
+class _UpdateCheckRow extends ConsumerStatefulWidget {
+  const _UpdateCheckRow();
+
+  @override
+  ConsumerState<_UpdateCheckRow> createState() => _UpdateCheckRowState();
+}
+
+class _UpdateCheckRowState extends ConsumerState<_UpdateCheckRow> {
+  bool _busy = false;
+  String? _result;
+
+  Future<void> _check() async {
+    setState(() {
+      _busy = true;
+      _result = null;
+    });
+    final relay = ref.read(settingsProvider).relayUrl;
+    final info = await UpdateService.check(relay);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      // "Couldn't check" is deliberately distinct from "up to date". Reporting
+      // an unreachable portal as current is the false reassurance this feature
+      // exists to remove.
+      _result = info == null
+          ? "Couldn't check — the portal was unreachable"
+          : info.available
+              ? 'Update available: ${info.latestBuild}'
+              : 'You are on the latest build';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.system_update_alt_rounded, size: 20),
+      title: Text('Check for updates', style: AppTypography.body),
+      subtitle: _result == null
+          ? null
+          : Text(_result!, style: AppTypography.caption),
+      trailing: _busy
+          ? const SizedBox(
+              width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          : TextButton(onPressed: _check, child: const Text('Check')),
     );
   }
 }
