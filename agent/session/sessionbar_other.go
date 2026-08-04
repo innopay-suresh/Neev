@@ -12,3 +12,6 @@ func hideHostSessionBar()                {}
 // no native bar, so there is no host-owned microphone control either — and
 // without one the host's mic stays shut, which is the safe direction to fail.
 func showHostSessionBarWithVoice(onHangUp func(), onTalk func(string, bool)) {}
+
+// setSessionBarRecording is a no-op where there is no native bar to update.
+func setSessionBarRecording(on bool) {}

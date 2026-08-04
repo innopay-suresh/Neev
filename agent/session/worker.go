@@ -203,6 +203,8 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 				// in the user session; anything else is real mouse/keyboard input.
 				if clip.handleInbound(payload) {
 					// consumed as a clipboard update
+				} else if handleRecordCmd(payload, files) {
+					// consumed as a viewer record start/stop
 				} else if handleCommand(payload) {
 					// consumed as a session command
 				} else if handleChat(payload) {

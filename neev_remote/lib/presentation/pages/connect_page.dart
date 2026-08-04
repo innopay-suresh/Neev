@@ -2643,9 +2643,8 @@ class _SessionToolbar extends ConsumerWidget {
                   icon: service.voiceOn ? Icons.mic : Icons.mic_off_outlined,
                   label: service.voiceOn ? 'Mic on' : 'Mic off',
                   tooltip: !service.voiceAvailable
-                      ? 'Voice is not available in this session — '
-                          'the host is running the service backend, which '
-                          'does not carry audio yet'
+                      ? 'Voice is not available in this session — the host is '
+                          'on a build older than r126, which carries no audio'
                       : service.voiceOn
                           ? 'Microphone on — click to mute'
                           : 'Talk to the person at the other end',
@@ -2655,6 +2654,19 @@ class _SessionToolbar extends ConsumerWidget {
                   onPressed: service.voiceAvailable
                       ? () => service.setVoice(!service.voiceOn)
                       : null,
+                ),
+                _ToolButton(
+                  icon: service.recording
+                      ? Icons.stop_circle_outlined
+                      : Icons.fiber_manual_record_outlined,
+                  label: service.recording ? 'Recording' : 'Record',
+                  tooltip: service.recording
+                      ? 'Recording — click to stop. The file is sent here when '
+                          'it finishes.'
+                      : 'Record this session. The host captures it and sends '
+                          'you the file when you stop.',
+                  active: service.recording,
+                  onPressed: () => service.setRecording(!service.recording),
                 ),
                 // --- Control group ---
                 // When the HOST granted view-only the viewer cannot take

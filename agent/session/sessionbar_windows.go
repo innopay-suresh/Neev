@@ -146,6 +146,23 @@ func showHostSessionBarWithVoice(onHangUp func(), onTalk func(string, bool)) {
 	}
 }
 
+// setSessionBarRecording reflects a recording started or stopped from somewhere
+// other than this button — currently the viewer. The host must be able to SEE
+// that a recording is running no matter who began it.
+func setSessionBarRecording(on bool) {
+	b := theBar
+	b.mu.Lock()
+	if b.recOn == on {
+		b.mu.Unlock()
+		return
+	}
+	b.recOn = on
+	b.mu.Unlock()
+	if b.hwnd != 0 {
+		procInvalidateRectSB.Call(b.hwnd, 0, 0)
+	}
+}
+
 // hideHostSessionBar removes the indicator when no viewer is connected.
 func hideHostSessionBar() {
 	b := theBar

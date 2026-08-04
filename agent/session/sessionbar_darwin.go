@@ -35,6 +35,9 @@ var (
 	macOnHang  func()
 	macOnTalk  func(string, bool)
 	macBarLive bool
+	// macBarConn is the live helper connection, kept so worker-side state
+	// changes (a recording the VIEWER started) can be pushed to the menu.
+	macBarConn net.Conn
 )
 
 // voiceSockPath is per-user, in the user's own temp dir — NOT the machine-wide
@@ -127,7 +130,17 @@ func acceptVoiceControl(ln net.Listener) {
 }
 
 func serveVoiceControl(conn net.Conn) {
-	defer conn.Close()
+	macBarMu.Lock()
+	macBarConn = conn
+	macBarMu.Unlock()
+	defer func() {
+		macBarMu.Lock()
+		if macBarConn == conn {
+			macBarConn = nil
+		}
+		macBarMu.Unlock()
+		conn.Close()
+	}()
 	sc := bufio.NewScanner(conn)
 	// Audio frames are base64 lines; a 20 ms mu-law frame is ~216 chars, but
 	// give the scanner room so a long line can never silently truncate a frame
@@ -177,6 +190,20 @@ func serveVoiceControl(conn net.Conn) {
 			log.Info().Msg("worker: host ended the session from the menu bar")
 		}
 	}
+}
+
+// setSessionBarRecording pushes recording state to the menu-bar helper, so a
+// recording the VIEWER started still shows on the host's menu. The helper
+// renders whatever the worker reports and holds no state of its own, so this is
+// the only thing needed to keep the two honest.
+func setSessionBarRecording(on bool) {
+	macBarMu.Lock()
+	conn := macBarConn
+	macBarMu.Unlock()
+	if conn == nil {
+		return
+	}
+	_, _ = conn.Write([]byte("rec " + strconv.FormatBool(on) + "\n"))
 }
 
 // hideHostSessionBar stops the helper when the last viewer leaves.

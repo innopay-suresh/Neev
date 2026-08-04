@@ -1534,6 +1534,9 @@ class RemoteService extends ChangeNotifier {
     // Forget the grant: the next host may allow something different, and a
     // stale "view only" would mislabel a session that actually has control.
     _hostGrantedControl = true;
+    // A dropped session must not leave the Record button lit for a recording
+    // that is no longer running.
+    recording = false;
     // Release the microphone with the session — an open mic outliving the call
     // it belonged to is the worst possible bug in a voice feature.
     await _stopVoice();
@@ -1775,6 +1778,30 @@ class RemoteService extends ChangeNotifier {
   /// local input while you control it).
   bool privacyMode = false;
   Timer? _privacyKeepAlive;
+
+  /// Whether this session is being recorded at the viewer's request.
+  ///
+  /// Recording happens on the HOST — it muxes the frames it has already encoded,
+  /// so there is no second encode and no quality loss — and the finished file is
+  /// sent here when it stops. flutter_webrtc cannot record on desktop
+  /// (startRecordToFile is unimplemented on Windows and macOS), so recording
+  /// locally would mean re-encoding polled screenshots: worse quality, far more
+  /// CPU, and a new failure surface next to the live stream.
+  bool recording = false;
+
+  /// Viewer: start or stop recording this session.
+  ///
+  /// The host is not asked to approve, because the viewer is already watching
+  /// every pixel live and a recording adds no new visibility. It is not hidden
+  /// either: the host's session bar turns red and says "Recording" for as long
+  /// as it runs, and the host can stop it whenever they like.
+  void setRecording(bool on) {
+    if (_viewerPeer == null) return;
+    recording = on;
+    _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': 'record', 'on': on}));
+    DiagLog.log('viewer', 'recording ${on ? "started" : "stopped"} by viewer');
+    notifyListeners();
+  }
 
   void setPrivacyMode(bool on) {
     privacyMode = on;

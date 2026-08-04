@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -140,6 +141,44 @@ func deliverRecording(f *fileReceiver, path string) {
 		return
 	}
 	log.Info().Str("path", path).Msg("worker: recording sent to viewer")
+}
+
+// handleRecordCmd handles a viewer's request to start or stop recording.
+//
+// Handled BEFORE the per-platform handleCommand so none of the existing session
+// commands (lock/logoff/reboot/privacy) change shape — recording is already
+// cross-platform, and touching three platform files to add it would risk the
+// paths that currently work.
+//
+// The viewer may start this without the host approving, because the viewer is
+// already watching every pixel live and a recording adds no new visibility. It
+// is NOT silent, though: the host's session bar switches to a red "Recording"
+// the moment it starts, and the host can stop it at any time. Transparency the
+// host can act on, rather than a modal nobody reads.
+func handleRecordCmd(payload []byte, files *fileReceiver) bool {
+	var m struct {
+		K  string `json:"k"`
+		C  string `json:"c"`
+		On bool   `json:"on"`
+	}
+	if err := json.Unmarshal(payload, &m); err != nil || m.K != "cmd" || m.C != "record" {
+		return false
+	}
+	if m.On {
+		w, h := capturerBounds()
+		if path, ok := startRecording(w, h); ok {
+			setSessionBarRecording(true)
+			log.Info().Str("path", path).Msg("worker: recording started by viewer")
+		}
+		return true
+	}
+	setSessionBarRecording(false)
+	if path := stopRecording(); path != "" {
+		// Streaming a long recording takes real time; never on this goroutine,
+		// which is also carrying the viewer's mouse and keyboard.
+		go deliverRecording(files, path)
+	}
+	return true
 }
 
 // recordingActive reports whether a recording is running.

@@ -393,6 +393,17 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **r133 — the VIEWER can start/stop recording.** Record button in the viewer
+  toolbar sends `{k:'cmd',c:'record',on:...}`; the host captures (no re-encode)
+  and streams the file back on stop. Handled BEFORE the per-platform
+  `handleCommand` so lock/logoff/reboot/privacy keep their existing shape —
+  tests assert the record handler consumes ONLY its own message and never mouse
+  or keyboard traffic.
+  No host approval prompt: the viewer already sees every pixel live, so a
+  recording adds no new visibility. It is not silent either — the host's session
+  bar turns red "Recording" whoever started it (`setSessionBarRecording`, pushed
+  to the macOS helper over the control socket), and the host can stop it.
+
 - **r132 — recordings reach the VIEWER.** Recording still happens host-side
   (VP8 mux, no re-encode), but when the host stops it the file is streamed to
   the connected viewer over the existing file-transfer channel and lands in
@@ -466,6 +477,17 @@ hardware-confirmed intact.
   with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
   Still unverified on hardware: the TCC prompt itself, and audio over a real
   session. Original entry follows.
+
+- **r133 — the VIEWER can start/stop recording.** Record button in the viewer
+  toolbar sends `{k:'cmd',c:'record',on:...}`; the host captures (no re-encode)
+  and streams the file back on stop. Handled BEFORE the per-platform
+  `handleCommand` so lock/logoff/reboot/privacy keep their existing shape —
+  tests assert the record handler consumes ONLY its own message and never mouse
+  or keyboard traffic.
+  No host approval prompt: the viewer already sees every pixel live, so a
+  recording adds no new visibility. It is not silent either — the host's session
+  bar turns red "Recording" whoever started it (`setSessionBarRecording`, pushed
+  to the macOS helper over the control socket), and the host can stop it.
 
 - **r132 — recordings reach the VIEWER.** Recording still happens host-side
   (VP8 mux, no re-encode), but when the host stops it the file is streamed to
