@@ -11,4 +11,4 @@ func hideHostSessionBar()                {}
 // showHostSessionBarWithVoice is likewise a no-op off Windows. A host there has
 // no native bar, so there is no host-owned microphone control either — and
 // without one the host's mic stays shut, which is the safe direction to fail.
-func showHostSessionBarWithVoice(onHangUp func(), onTalk func(bool)) {}
+func showHostSessionBarWithVoice(onHangUp func(), onTalk func(string, bool)) {}

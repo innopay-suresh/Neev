@@ -77,13 +77,19 @@ type sessionBar struct {
 	rcHangUp cwRect
 	rcTalk   cwRect
 	hotTalk  bool
+	rcSound  cwRect
+	hotSound bool
+	soundOn  bool
+	rcRec    cwRect
+	hotRec   bool
+	recOn    bool
 	// micOn mirrors whether the host's microphone is currently open. The button
 	// is the ONLY way it turns on: a viewer must never be able to open the
 	// host's microphone remotely, or the tool becomes a listening device.
 	micOn    bool
 	hot      bool
 	onHangUp func()
-	onTalk   func(on bool)
+	onTalk   func(kind string, on bool)
 	mu       sync.Mutex
 	started  bool
 	visible  bool
@@ -122,7 +128,7 @@ func showHostSessionBar(onHangUp func()) {
 }
 
 // showHostSessionBarWithVoice adds a host-controlled microphone toggle.
-func showHostSessionBarWithVoice(onHangUp func(), onTalk func(bool)) {
+func showHostSessionBarWithVoice(onHangUp func(), onTalk func(string, bool)) {
 	b := theBar
 	b.mu.Lock()
 	b.onHangUp = onHangUp
@@ -176,7 +182,8 @@ func (b *sessionBar) loop() {
 	// than "Remote session active" renders at some DPI/font combinations, so the
 	// text was clipped and the leading "R" disappeared.
 	h := b.px(38)
-	w := b.px(30) + b.measure(barLabel) + b.px(12) + b.px(64) + b.px(6) + b.px(76) + b.px(10)
+	w := b.px(30) + b.measure(barLabel) + b.px(12) +
+		b.px(76) + b.px(6) + b.px(70) + b.px(6) + b.px(64) + b.px(6) + b.px(76) + b.px(10)
 	sw, _, _ := procGetSystemMetricsSB.Call(cwSMCXScreen)
 	// TOP-centre, as requested. Note this can sit over a maximised app's own
 	// header; it is deliberately short and only visible while a session is live.
@@ -223,13 +230,39 @@ func sessionBarProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
 		h := ptInRect(b.rcHangUp, x, y)
 		ht := ptInRect(b.rcTalk, x, y)
-		if h != b.hot || ht != b.hotTalk {
-			b.hot, b.hotTalk = h, ht
+		hs := ptInRect(b.rcSound, x, y)
+		hr := ptInRect(b.rcRec, x, y)
+		if h != b.hot || ht != b.hotTalk || hs != b.hotSound || hr != b.hotRec {
+			b.hot, b.hotTalk, b.hotSound, b.hotRec = h, ht, hs, hr
 			procInvalidateRectSB.Call(hwnd, 0, 0)
 		}
 		return 0
 	case cwWMLButtonDown:
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
+		if ptInRect(b.rcRec, x, y) {
+			b.mu.Lock()
+			b.recOn = !b.recOn
+			on := b.recOn
+			cb := b.onTalk
+			b.mu.Unlock()
+			if cb != nil {
+				go cb("record", on)
+			}
+			procInvalidateRectSB.Call(hwnd, 0, 0)
+			return 0
+		}
+		if ptInRect(b.rcSound, x, y) {
+			b.mu.Lock()
+			b.soundOn = !b.soundOn
+			on := b.soundOn
+			cb := b.onTalk
+			b.mu.Unlock()
+			if cb != nil {
+				go cb("sound", on)
+			}
+			procInvalidateRectSB.Call(hwnd, 0, 0)
+			return 0
+		}
 		if ptInRect(b.rcTalk, x, y) {
 			b.mu.Lock()
 			b.micOn = !b.micOn
@@ -237,7 +270,7 @@ func sessionBarProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 			cb := b.onTalk
 			b.mu.Unlock()
 			if cb != nil {
-				go cb(on)
+				go cb("mic", on)
 			}
 			procInvalidateRectSB.Call(hwnd, 0, 0)
 			return 0
@@ -396,6 +429,79 @@ func (b *sessionBar) paint(hwnd uintptr) {
 		label = "Mic on"
 	}
 	b.text(hdc, label, b.rcTalk, font, tcol)
+
+	// Share-sound button — lets the viewer hear what this machine is playing,
+	// so a technician can hear the error chime they are being told about.
+	sw := b.px(70)
+	b.rcSound = cwRect{b.rcTalk.Left - sw - b.px(6), (rc.Bottom - bh) / 2,
+		b.rcTalk.Left - b.px(6), (rc.Bottom-bh)/2 + bh}
+	b.mu.Lock()
+	soundOn := b.soundOn
+	b.mu.Unlock()
+	sfill := cwColTint
+	if soundOn {
+		sfill = cwColAccent
+	}
+	if b.hotSound {
+		sfill = cwColAccentDim
+	}
+	sb, _, _ := procCreateSolidBrushSB.Call(sfill)
+	sp, _, _ := procCreatePenSB.Call(5, 0, 0)
+	ob5, _, _ := procSelectObjectSB.Call(hdc, sb)
+	op5, _, _ := procSelectObjectSB.Call(hdc, sp)
+	procRoundRectSB.Call(hdc, uintptr(b.rcSound.Left), uintptr(b.rcSound.Top),
+		uintptr(b.rcSound.Right), uintptr(b.rcSound.Bottom),
+		uintptr(b.px(7)), uintptr(b.px(7)))
+	procSelectObjectSB.Call(hdc, ob5)
+	procSelectObjectSB.Call(hdc, op5)
+	procDeleteObjectSB.Call(sb)
+	procDeleteObjectSB.Call(sp)
+	scol := cwColInk
+	if soundOn || b.hotSound {
+		scol = cwColCard
+	}
+	slabel := "Sound off"
+	if soundOn {
+		slabel = "Sound on"
+	}
+	b.text(hdc, slabel, b.rcSound, font, scol)
+
+	// Record button. Deliberately on the HOST's bar and nowhere else: a viewer
+	// able to silently record the screen of the machine it connected to would
+	// make this a surveillance tool rather than a support one.
+	rw := b.px(76)
+	b.rcRec = cwRect{b.rcSound.Left - rw - b.px(6), (rc.Bottom - bh) / 2,
+		b.rcSound.Left - b.px(6), (rc.Bottom-bh)/2 + bh}
+	b.mu.Lock()
+	recOn := b.recOn
+	b.mu.Unlock()
+	rfill := cwColTint
+	if recOn {
+		rfill = cwColDanger // recording is the one state worth an alarm colour
+	}
+	if b.hotRec {
+		rfill = cwColAccentDim
+	}
+	rb, _, _ := procCreateSolidBrushSB.Call(rfill)
+	rp, _, _ := procCreatePenSB.Call(5, 0, 0)
+	ob6, _, _ := procSelectObjectSB.Call(hdc, rb)
+	op6, _, _ := procSelectObjectSB.Call(hdc, rp)
+	procRoundRectSB.Call(hdc, uintptr(b.rcRec.Left), uintptr(b.rcRec.Top),
+		uintptr(b.rcRec.Right), uintptr(b.rcRec.Bottom),
+		uintptr(b.px(7)), uintptr(b.px(7)))
+	procSelectObjectSB.Call(hdc, ob6)
+	procSelectObjectSB.Call(hdc, op6)
+	procDeleteObjectSB.Call(rb)
+	procDeleteObjectSB.Call(rp)
+	rcol := cwColInk
+	if recOn || b.hotRec {
+		rcol = cwColCard
+	}
+	rlabel := "Record"
+	if recOn {
+		rlabel = "Recording"
+	}
+	b.text(hdc, rlabel, b.rcRec, font, rcol)
 }
 
 func (b *sessionBar) font(size int, bold bool) uintptr {

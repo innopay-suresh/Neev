@@ -18,7 +18,7 @@ func TestVoiceControlTogglesMic(t *testing.T) {
 
 	got := make(chan bool, 4)
 	macBarMu.Lock()
-	macOnTalk = func(on bool) { got <- on }
+	macOnTalk = func(_ string, on bool) { got <- on }
 	macBarMu.Unlock()
 	defer func() {
 		macBarMu.Lock()
@@ -102,7 +102,7 @@ func TestVoiceControlIgnoresJunk(t *testing.T) {
 
 	fired := make(chan bool, 2)
 	macBarMu.Lock()
-	macOnTalk = func(on bool) { fired <- on }
+	macOnTalk = func(_ string, on bool) { fired <- on }
 	macBarMu.Unlock()
 	defer func() {
 		macBarMu.Lock()

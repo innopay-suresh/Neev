@@ -393,6 +393,26 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **r129 features (pending hardware verify).** Remote sound + session recording.
+  • Remote sound = WASAPI loopback via miniaudio, so WINDOWS HOSTS ONLY.
+    `audio.LoopbackSupported()` is false on macOS (no system-audio capture
+    without a virtual device like BlackHole); the macOS menu shows the item
+    DISABLED with that reason rather than hiding it. Mic + system sound share
+    ONE PCMU track and are mixed in the PCM domain (`audio.Mix`) — adding mu-law
+    bytes would be noise, since mu-law is logarithmic. Quality is 8 kHz mono
+    telephone-grade: fine for an error chime or speech, poor for music.
+  • Recording = VP8 → WebM MUX in the worker (`agent/record`), reusing frames
+    already encoded, so no second encoder competes with the live stream.
+    Segment and clusters use UNKNOWN size so a recording cut short by a crash
+    still plays — verified with ffprobe in the test suite. Saved to
+    ~/Documents/Neev Recordings/. A resolution change closes the file and opens
+    a new one, because a WebM track declares one size.
+  • BOTH are host-only controls, by design: a viewer able to start recording or
+    open the host's mic remotely would make this a surveillance tool.
+  • NOT possible viewer-side: flutter_webrtc's MediaRecorder (`startRecordToFile`)
+    is unimplemented on Windows and macOS — Dart-side only. Viewer-side recording
+    needs native plugin work in libwebrtc.
+
 - **KP-WHENOPEN — FIXED r128 (pending hardware verify).** Interactive Access
   "Only while the app is open" behaved exactly like "always": the headless
   transport could not observe the app window, so `interactiveAllowed()` admitted
@@ -419,6 +439,26 @@ hardware-confirmed intact.
   with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
   Still unverified on hardware: the TCC prompt itself, and audio over a real
   session. Original entry follows.
+
+- **r129 features (pending hardware verify).** Remote sound + session recording.
+  • Remote sound = WASAPI loopback via miniaudio, so WINDOWS HOSTS ONLY.
+    `audio.LoopbackSupported()` is false on macOS (no system-audio capture
+    without a virtual device like BlackHole); the macOS menu shows the item
+    DISABLED with that reason rather than hiding it. Mic + system sound share
+    ONE PCMU track and are mixed in the PCM domain (`audio.Mix`) — adding mu-law
+    bytes would be noise, since mu-law is logarithmic. Quality is 8 kHz mono
+    telephone-grade: fine for an error chime or speech, poor for music.
+  • Recording = VP8 → WebM MUX in the worker (`agent/record`), reusing frames
+    already encoded, so no second encoder competes with the live stream.
+    Segment and clusters use UNKNOWN size so a recording cut short by a crash
+    still plays — verified with ffprobe in the test suite. Saved to
+    ~/Documents/Neev Recordings/. A resolution change closes the file and opens
+    a new one, because a WebM track declares one size.
+  • BOTH are host-only controls, by design: a viewer able to start recording or
+    open the host's mic remotely would make this a surveillance tool.
+  • NOT possible viewer-side: flutter_webrtc's MediaRecorder (`startRecordToFile`)
+    is unimplemented on Windows and macOS — Dart-side only. Viewer-side recording
+    needs native plugin work in libwebrtc.
 
 - **KP-WHENOPEN — FIXED r128 (pending hardware verify).** Interactive Access
   "Only while the app is open" behaved exactly like "always": the headless

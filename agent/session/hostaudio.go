@@ -20,6 +20,19 @@ var (
 	hostAudioMu sync.Mutex
 	hostAudio   *audio.Device
 	micOn       bool
+	soundOn     bool
+
+	// sink is where outgoing audio goes, set when either source starts. Held so
+	// the second source to start can reuse it without the caller passing it
+	// twice.
+	sink func([]byte)
+
+	// pendingSound holds the most recent system-sound frame waiting to be mixed
+	// with the microphone. Exactly one frame, deliberately: mic and loopback run
+	// on independent device clocks, and queueing would let system sound drift
+	// steadily behind the voice describing it. Dropping to the newest keeps them
+	// aligned.
+	pendingSound []byte
 )
 
 // ensureDeviceLocked returns the shared device, creating it on first use.
@@ -41,6 +54,11 @@ func ensureDeviceLocked() *audio.Device {
 }
 
 // startHostMic opens the microphone and streams mu-law frames to fn.
+//
+// When system sound is also on, the microphone drives the clock: each mic frame
+// is mixed with the latest system-sound frame and sent as one. Both sources
+// share a single audio track, so mixing here is what lets the host be heard
+// over the sound of their own machine.
 func startHostMic(fn func([]byte)) {
 	hostAudioMu.Lock()
 	defer hostAudioMu.Unlock()
@@ -51,7 +69,21 @@ func startHostMic(fn func([]byte)) {
 	if d == nil {
 		return
 	}
-	if err := d.StartCapture(fn); err != nil {
+	sink = fn
+	if err := d.StartCapture(func(frame []byte) {
+		hostAudioMu.Lock()
+		other := pendingSound
+		pendingSound = nil
+		out := sink
+		hostAudioMu.Unlock()
+		if out == nil {
+			return
+		}
+		if other != nil {
+			frame = audio.Mix(frame, other)
+		}
+		out(frame)
+	}); err != nil {
 		log.Warn().Err(err).Msg("worker: microphone could not be opened")
 		return
 	}
@@ -67,6 +99,66 @@ func stopHostMic() {
 	}
 	hostAudio.StopCapture()
 	micOn = false
+	pendingSound = nil
+	if !soundOn {
+		sink = nil
+	}
+}
+
+// startHostSound shares what the host machine is PLAYING with the viewer, so a
+// technician can hear an error chime or the audio of whatever is on screen.
+//
+// Windows only — see audio.LoopbackSupported. Returns false when unavailable so
+// the caller can say why instead of leaving a control that does nothing.
+func startHostSound(fn func([]byte)) bool {
+	hostAudioMu.Lock()
+	defer hostAudioMu.Unlock()
+	if soundOn {
+		return true
+	}
+	if !audio.LoopbackSupported() {
+		log.Info().Msg("worker: system sound sharing unavailable on this OS")
+		return false
+	}
+	d := ensureDeviceLocked()
+	if d == nil {
+		return false
+	}
+	if sink == nil {
+		sink = fn
+	}
+	if err := d.StartLoopback(func(frame []byte) {
+		hostAudioMu.Lock()
+		// With the microphone on, the mic callback does the sending so the two
+		// arrive as one mixed frame. Park this one for it to collect.
+		if micOn {
+			pendingSound = frame
+			hostAudioMu.Unlock()
+			return
+		}
+		out := sink
+		hostAudioMu.Unlock()
+		if out != nil {
+			out(frame)
+		}
+	}); err != nil {
+		log.Warn().Err(err).Msg("worker: system sound could not be captured")
+		return false
+	}
+	soundOn = true
+	return true
+}
+
+// stopHostSound stops sharing the host's system sound.
+func stopHostSound() {
+	hostAudioMu.Lock()
+	d := hostAudio
+	soundOn = false
+	pendingSound = nil
+	hostAudioMu.Unlock()
+	if d != nil {
+		d.StopLoopback()
+	}
 }
 
 // playViewerVoice queues one mu-law frame from the viewer for the speakers.
@@ -87,6 +179,9 @@ func closeHostAudio() {
 	d := hostAudio
 	hostAudio = nil
 	micOn = false
+	soundOn = false
+	sink = nil
+	pendingSound = nil
 	hostAudioMu.Unlock()
 	if d != nil {
 		d.Close()

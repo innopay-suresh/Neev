@@ -21,3 +21,8 @@ func (d *Device) StartCapture(func([]byte)) error { return errNoCGO }
 func (d *Device) StopCapture()                    {}
 func (d *Device) Play([]byte)                     {}
 func (d *Device) Close()                          {}
+
+// System-sound capture is WASAPI-only and needs cgo either way.
+func LoopbackSupported() bool                      { return false }
+func (d *Device) StartLoopback(func([]byte)) error { return errNoCGO }
+func (d *Device) StopLoopback()                    {}

@@ -95,3 +95,33 @@ func DecodeFrame(mu []byte) []int16 {
 	}
 	return out
 }
+
+// Mix sums two mu-law frames into one.
+//
+// Summed in the PCM domain, not the mu-law domain: mu-law is a logarithmic
+// encoding, so adding the bytes produces noise rather than a mixture. Clipping
+// is handled by EncodeMuLaw, so a loud voice over loud system sound distorts
+// instead of wrapping into a crackle.
+func Mix(a, b []byte) []byte {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	out := make([]byte, n)
+	for i := 0; i < n; i++ {
+		var sum int
+		if i < len(a) {
+			sum += int(DecodeMuLaw(a[i]))
+		}
+		if i < len(b) {
+			sum += int(DecodeMuLaw(b[i]))
+		}
+		if sum > 32767 {
+			sum = 32767
+		} else if sum < -32768 {
+			sum = -32768
+		}
+		out[i] = EncodeMuLaw(int16(sum))
+	}
+	return out
+}

@@ -21,6 +21,7 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem!
     private var sock: Int32 = -1
     private var micOn = false
+    private var recOn = false
     private let socketPath: String
 
     init(socketPath: String) {
@@ -54,6 +55,29 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
         mic.target = self
         mic.state = micOn ? .on : .off
         menu.addItem(mic)
+
+        // Sharing this Mac's system sound needs WASAPI-style loopback capture,
+        // which macOS does not provide without installing a virtual audio
+        // device. Shown DISABLED with the reason rather than hidden: a feature
+        // the host may have seen on Windows should not silently vanish here,
+        // and a control that cannot work must say so.
+        let sound = NSMenuItem(
+            title: "Share this Mac's sound — not available on macOS",
+            action: nil, keyEquivalent: "")
+        sound.isEnabled = false
+        sound.toolTip = "macOS has no built-in way to capture system audio. "
+            + "This works on Windows hosts."
+        menu.addItem(sound)
+
+        // Recording is offered to the HOST only. A viewer able to silently
+        // record this machine's screen would make the product a surveillance
+        // tool; the host records their own session, for their own record of it.
+        let rec = NSMenuItem(
+            title: recOn ? "Recording — click to stop" : "Record this session",
+            action: #selector(toggleRec), keyEquivalent: "")
+        rec.target = self
+        rec.state = recOn ? .on : .off
+        menu.addItem(rec)
 
         menu.addItem(.separator())
         let end = NSMenuItem(title: "End session", action: #selector(endSession), keyEquivalent: "")
@@ -114,11 +138,18 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
                     return
                 }
                 guard let text = String(bytes: buf[0..<n], encoding: .utf8) else { continue }
-                for line in text.split(separator: "\n") where line.hasPrefix("mic ") {
+                for line in text.split(separator: "\n") {
                     let on = line.hasSuffix("true")
-                    DispatchQueue.main.async {
-                        self?.micOn = on
-                        self?.rebuildMenu()
+                    if line.hasPrefix("mic ") {
+                        DispatchQueue.main.async {
+                            self?.micOn = on
+                            self?.rebuildMenu()
+                        }
+                    } else if line.hasPrefix("rec ") {
+                        DispatchQueue.main.async {
+                            self?.recOn = on
+                            self?.rebuildMenu()
+                        }
                     }
                 }
             }
@@ -131,6 +162,12 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
         // Ask, do not assume. The menu updates when the worker confirms, so a
         // failed device open cannot leave the menu showing "on".
         send(micOn ? "mic-off" : "mic-on")
+    }
+
+    @objc private func toggleRec() {
+        // Same rule as the microphone: ask, then render what the worker
+        // confirms, so the menu cannot claim to be recording when it is not.
+        send(recOn ? "rec-off" : "rec-on")
     }
 
     @objc private func endSession() {

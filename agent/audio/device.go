@@ -4,6 +4,7 @@ package audio
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -21,9 +22,10 @@ import (
 type Device struct {
 	mu sync.Mutex
 
-	ctx     *malgo.AllocatedContext
-	capture *malgo.Device
-	play    *malgo.Device
+	ctx      *malgo.AllocatedContext
+	capture  *malgo.Device
+	play     *malgo.Device
+	loopback *malgo.Device
 
 	// onCaptured receives each mu-law encoded frame from the microphone.
 	onCaptured func([]byte)
@@ -90,6 +92,68 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 	d.capture = dev
 	log.Info().Msg("audio: microphone opened")
 	return nil
+}
+
+// LoopbackSupported reports whether this machine can capture what it is
+// playing.
+//
+// Loopback is a WASAPI feature, so Windows only. macOS has no system-audio
+// capture without installing a virtual audio device (BlackHole and friends),
+// and shipping an audio driver is a different product decision — so this
+// returns false there rather than pretending and failing at open time.
+func LoopbackSupported() bool { return runtime.GOOS == "windows" }
+
+// StartLoopback captures what the host is PLAYING and calls fn with each 20 ms
+// mu-law frame, so the viewer hears the host's system sound.
+func (d *Device) StartLoopback(fn func([]byte)) error {
+	if !LoopbackSupported() {
+		return fmt.Errorf("audio: system sound capture needs Windows (WASAPI loopback)")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.loopback != nil {
+		return nil
+	}
+
+	cfg := malgo.DefaultDeviceConfig(malgo.Loopback)
+	cfg.Capture.Format = malgo.FormatS16
+	cfg.Capture.Channels = Channels
+	cfg.SampleRate = SampleRate
+	cfg.PeriodSizeInFrames = SamplesPerFrame
+
+	dev, err := malgo.InitDevice(d.ctx.Context, cfg, malgo.DeviceCallbacks{
+		Data: func(_, in []byte, frames uint32) {
+			if frames == 0 || len(in) < int(frames)*2 {
+				return
+			}
+			pcm := unsafe.Slice((*int16)(unsafe.Pointer(&in[0])), frames)
+			fn(EncodeFrame(pcm))
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("open system sound: %w", err)
+	}
+	if err := dev.Start(); err != nil {
+		dev.Uninit()
+		return fmt.Errorf("start system sound: %w", err)
+	}
+	d.loopback = dev
+	log.Info().Msg("audio: system sound capture opened")
+	return nil
+}
+
+// StopLoopback closes system-sound capture.
+func (d *Device) StopLoopback() {
+	d.mu.Lock()
+	dev := d.loopback
+	d.loopback = nil
+	d.mu.Unlock()
+	if dev == nil {
+		return
+	}
+	_ = dev.Stop()
+	dev.Uninit()
+	log.Info().Msg("audio: system sound capture closed")
 }
 
 // StopCapture closes the microphone and releases it back to the OS.
@@ -201,6 +265,7 @@ func (d *Device) startPlayback() error {
 // Close releases every device and the context. Safe to call more than once.
 func (d *Device) Close() {
 	d.StopCapture()
+	d.StopLoopback()
 
 	d.mu.Lock()
 	dev := d.play

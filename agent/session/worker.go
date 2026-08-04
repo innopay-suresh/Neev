@@ -128,6 +128,10 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	// dies for any reason — transport gone, session switch, crash on the way out
 	// — the device is handed back and the OS mic indicator goes dark.
 	defer closeHostAudio()
+	// Close the recording file on the way out, whatever the reason. An
+	// unfinished WebM still plays, but leaving the handle open risks the last
+	// frames never reaching disk.
+	defer stopRecording()
 
 	// Text clipboard both ways (viewer↔host) so copy-paste keeps working in
 	// TransportMode where the app no longer hosts. Runs as the logged-in user.
@@ -236,7 +240,30 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 						// Empty payload = drop every viewer.
 						_ = ic.WriteMessage(ipc.KindEndSession, nil)
 						log.Info().Msg("worker: host ended the session from the session bar")
-					}, func(on bool) {
+					}, func(kind string, on bool) {
+						if kind == "record" {
+							if on {
+								w, h := capturerBounds()
+								if path, ok := startRecording(w, h); ok {
+									log.Info().Str("path", path).Msg("worker: host started recording")
+								}
+							} else {
+								stopRecording()
+							}
+							return
+						}
+						if kind == "sound" {
+							if on {
+								if !startHostSound(func(frame []byte) {
+									_ = ic.WriteDroppable(ipc.KindAudioFrame, frame)
+								}) {
+									log.Info().Msg("worker: system sound sharing refused (unsupported)")
+								}
+							} else {
+								stopHostSound()
+							}
+							return
+						}
 						// The host's OWN microphone control. It is driven from this
 						// process and never from an IPC message, so there is no path
 						// by which a viewer can open the host's microphone remotely.
@@ -314,6 +341,7 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	defer capturer.Close()
 
 	w, h := capturer.Bounds()
+	setCaptureSize(w, h)
 	log.Info().Int("bounds_w", w).Int("bounds_h", h).
 		Msg("worker: capture bounds (should equal the host's full physical screen)")
 	enc, err := encode.NewEncoder(w, h, workerFPS, workerBitrate)
@@ -371,6 +399,18 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 				return err
 			}
 			_ = ic.WriteMessage(ipc.KindVideoInfo, ipc.EncodeVideoInfo(fw, fh))
+			setCaptureSize(fw, fh)
+			// A WebM track declares ONE size. Rather than keep appending frames
+			// of a different resolution to a file that says otherwise — which
+			// players render stretched or refuse — close the recording and start
+			// a fresh one at the new size.
+			if recordingActive() {
+				old := stopRecording()
+				if path, ok := startRecording(fw, fh); ok {
+					log.Info().Str("previous", old).Str("now", path).
+						Msg("worker: screen resolution changed — recording continued in a new file")
+				}
+			}
 			wantKeyframe.Store(true)
 		}
 
@@ -384,6 +424,10 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		} else {
 			framesSinceKey++
 		}
+		// Record from the frame we already encoded — a mux, not a second
+		// encode, so recording does not compete with the live stream.
+		writeRecordingFrame(out.Data, out.IsKeyframe)
+
 		if err := ic.WriteDroppable(ipc.KindVideoFrame,
 			ipc.EncodeVideoFrame(out.IsKeyframe, out.Data)); err != nil {
 			log.Info().Err(err).Msg("worker: transport disconnected")

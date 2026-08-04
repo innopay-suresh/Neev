@@ -31,7 +31,7 @@ var (
 	macBarCmd  *exec.Cmd
 	macBarLn   net.Listener
 	macOnHang  func()
-	macOnTalk  func(bool)
+	macOnTalk  func(string, bool)
 	macBarLive bool
 )
 
@@ -65,7 +65,7 @@ func showHostSessionBar(onHangUp func()) {
 }
 
 // showHostSessionBarWithVoice starts the menu-bar helper for this session.
-func showHostSessionBarWithVoice(onHangUp func(), onTalk func(bool)) {
+func showHostSessionBarWithVoice(onHangUp func(), onTalk func(string, bool)) {
 	macBarMu.Lock()
 	macOnHang = onHangUp
 	macOnTalk = onTalk
@@ -137,10 +137,20 @@ func serveVoiceControl(conn net.Conn) {
 			macBarMu.Unlock()
 			micOn = on
 			if cb != nil {
-				cb(on)
+				cb("mic", on)
 			}
 			log.Info().Bool("on", on).Msg("worker: host microphone toggled from menu bar")
 			_, _ = conn.Write([]byte("mic " + strconv.FormatBool(micOn) + "\n"))
+		case "rec-on", "rec-off":
+			on := sc.Text() == "rec-on"
+			macBarMu.Lock()
+			cb := macOnTalk
+			macBarMu.Unlock()
+			if cb != nil {
+				cb("record", on)
+			}
+			log.Info().Bool("on", on).Msg("worker: host toggled recording from menu bar")
+			_, _ = conn.Write([]byte("rec " + strconv.FormatBool(recordingActive()) + "\n"))
 		case "end-session":
 			macBarMu.Lock()
 			cb := macOnHang
