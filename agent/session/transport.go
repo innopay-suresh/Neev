@@ -336,6 +336,7 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		// mapping. The control DC may not be open at the instant OnConnected fires,
 		// so retry briefly until it lands (idempotent on the viewer).
 		go t.announceHostOS(peer)
+		go t.announceGrant(peer, control)
 	}
 
 	// Viewer input (mouse/keyboard) arrives on the control + cursor channels.
@@ -581,6 +582,30 @@ func isSASCommand(data []byte) bool {
 		return false
 	}
 	return m.K == "cmd" && m.C == "sas"
+}
+
+// announceGrant tells the viewer what access the HOST granted it.
+//
+// Without this the viewer had no idea it was view-only: the host silently
+// dropped its input while the viewer's own toolbar still said "Control", so a
+// correctly-enforced restriction looked exactly like a broken app — clicks that
+// did nothing, with no explanation anywhere.
+//
+// Retried like the OS announce: the control channel can open a beat after the
+// peer connects, and a grant the viewer never receives is the same as no grant.
+func (t *Transport) announceGrant(peer *network.Peer, control bool) {
+	msg := `{"k":"grant","control":true}`
+	if !control {
+		msg = `{"k":"grant","control":false}`
+	}
+	for i := 0; i < 15; i++ {
+		if err := peer.SendControlText(msg); err == nil {
+			log.Info().Bool("control", control).Msg("transport: announced grant to viewer")
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Warn().Msg("transport: grant announce never landed (control DC not open)")
 }
 
 // announceHostOS tells the viewer this host is Windows so it un-hides the

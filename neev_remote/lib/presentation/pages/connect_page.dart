@@ -2206,8 +2206,11 @@ class _ConnectedSession extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final viewOnly =
-        ref.watch(settingsProvider).viewOnly || service.viewerViewOnly;
+    // Three ways to end up watching without control, and the HOST's refusal is
+    // the one the viewer could not see before: it just clicked into a void.
+    final viewOnly = ref.watch(settingsProvider).viewOnly ||
+        service.viewerViewOnly ||
+        !service.hostGrantedControl;
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F1A),
       // Slim persistent header (AnyDesk-style) above the remote view. Because
@@ -2633,17 +2636,31 @@ class _SessionToolbar extends ConsumerWidget {
                   );
                 }),
                 // --- Control group ---
-                _ToolButton(
-                  icon: service.viewerViewOnly
-                      ? Icons.visibility_outlined
-                      : Icons.ads_click,
-                  label: service.viewerViewOnly ? 'View only' : 'Control',
-                  tooltip: service.viewerViewOnly
-                      ? 'View only — click to take control'
-                      : 'Controlling — click for view only',
-                  active: !service.viewerViewOnly,
-                  onPressed: () => service.setViewOnly(!service.viewerViewOnly),
-                ),
+                // When the HOST granted view-only the viewer cannot take
+                // control, so the button says why instead of offering a toggle
+                // that silently does nothing — the host drops the input either
+                // way, and pretending otherwise is what made this look broken.
+                if (!service.hostGrantedControl)
+                  _ToolButton(
+                    icon: Icons.visibility_outlined,
+                    label: 'View only',
+                    tooltip: 'The host granted view-only access — '
+                        'control is disabled for this session',
+                    active: false,
+                    onPressed: null,
+                  )
+                else
+                  _ToolButton(
+                    icon: service.viewerViewOnly
+                        ? Icons.visibility_outlined
+                        : Icons.ads_click,
+                    label: service.viewerViewOnly ? 'View only' : 'Control',
+                    tooltip: service.viewerViewOnly
+                        ? 'View only — click to take control'
+                        : 'Controlling — click for view only',
+                    active: !service.viewerViewOnly,
+                    onPressed: () => service.setViewOnly(!service.viewerViewOnly),
+                  ),
                 if (service.keyboardCaptureSupported)
                   _ToolButton(
                     icon: service.keyboardCapture
@@ -3028,7 +3045,10 @@ class _ToolButton extends StatefulWidget {
   final String label;
   final String tooltip;
   final bool active;
-  final VoidCallback onPressed;
+  /// Null renders the button DISABLED — dimmed, no hover, default cursor. A
+  /// control the user cannot use must look that way; a live-looking button that
+  /// silently does nothing is what made host-enforced view-only feel broken.
+  final VoidCallback? onPressed;
   const _ToolButton({
     required this.icon,
     required this.label,
@@ -3047,17 +3067,24 @@ class _ToolButtonState extends State<_ToolButton> {
   @override
   Widget build(BuildContext context) {
     final active = widget.active;
-    final fg = active
-        ? AppColors.primary
-        : (_hover ? const Color(0xFF1D1D1F) : const Color(0xFF5B5B60));
-    final bg = _hover ? const Color(0xFFEAEAEC) : Colors.transparent;
+    final enabled = widget.onPressed != null;
+    final fg = !enabled
+        ? const Color(0xFFB4B4B8)
+        : active
+            ? AppColors.primary
+            : (_hover ? const Color(0xFF1D1D1F) : const Color(0xFF5B5B60));
+    final bg = (_hover && enabled)
+        ? const Color(0xFFEAEAEC)
+        : Colors.transparent;
     return Tooltip(
       message: widget.tooltip,
       waitDuration: const Duration(milliseconds: 400),
       child: MouseRegion(
-        onEnter: (_) => setState(() => _hover = true),
+        onEnter: (_) => setState(() => _hover = enabled),
         onExit: (_) => setState(() => _hover = false),
-        cursor: SystemMouseCursors.click,
+        cursor: enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         child: GestureDetector(
           onTap: widget.onPressed,
           child: SizedBox(

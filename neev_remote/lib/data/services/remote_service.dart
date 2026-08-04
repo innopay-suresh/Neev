@@ -276,6 +276,13 @@ class RemoteService extends ChangeNotifier {
     _sendFileData(jsonEncode({'k': 'ft', 't': 'request'}));
   }
 
+  /// VIEWER: whether the host granted control. False means the host is
+  /// dropping our input on purpose — the viewer must show that rather than
+  /// letting the user click into a void. Defaults true so an older host, which
+  /// announces nothing, behaves exactly as before.
+  bool _hostGrantedControl = true;
+  bool get hostGrantedControl => _hostGrantedControl;
+
   /// In-session view-only: when true the viewer watches without sending input
   /// (separate from the persisted view-only setting; either one disables input).
   bool viewerViewOnly = false;
@@ -1106,6 +1113,11 @@ class RemoteService extends ChangeNotifier {
     // than one monitor, the monitor list so the viewer can switch between them.
     peer.onDataChannelOpen = () async {
       peer.sendData(jsonEncode({'k': 'os', 'v': _osName()}));
+      // Tell the viewer what it was actually granted. Without this a view-only
+      // viewer sees its own toolbar saying "Control" while the host silently
+      // drops every click — enforcement that looks identical to a broken app.
+      peer.sendData(
+          jsonEncode({'k': 'grant', 'control': hostGrantsControl}));
       try {
         final mons = await _capture.getSources();
         if (mons.length > 1) {
@@ -1405,6 +1417,9 @@ class RemoteService extends ChangeNotifier {
     // Stop renewing the host's privacy lease so its screen comes back even if
     // the explicit "privacy off" never lands (closing app, dropped link).
     _stopPrivacyKeepAlive();
+    // Forget the grant: the next host may allow something different, and a
+    // stale "view only" would mislabel a session that actually has control.
+    _hostGrantedControl = true;
     // A user-initiated disconnect cancels any pending auto-reconnect.
     if (!keepAutoReconnect) {
       autoReconnect = false;
@@ -2009,6 +2024,18 @@ class RemoteService extends ChangeNotifier {
     }
     if (m['k'] == 'clipfdat') {
       _onClipFileData(m);
+      return;
+    }
+
+    // Host announces the access level it granted us. Absent (older host) means
+    // control, matching how it behaved before this existed.
+    if (m['k'] == 'grant') {
+      final granted = m['control'] != false;
+      if (granted != _hostGrantedControl) {
+        _hostGrantedControl = granted;
+        DiagLog.log('viewer', 'host granted ${granted ? 'full control' : 'VIEW ONLY'}');
+        notifyListeners();
+      }
       return;
     }
 
