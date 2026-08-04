@@ -124,6 +124,10 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 	// elsewhere it's a no-op.
 	injector := newInputSink()
 	defer injector.Close()
+	// A microphone must never outlive the session that opened it. If the worker
+	// dies for any reason — transport gone, session switch, crash on the way out
+	// — the device is handed back and the OS mic indicator goes dark.
+	defer closeHostAudio()
 
 	// Text clipboard both ways (viewer↔host) so copy-paste keeps working in
 	// TransportMode where the app no longer hosts. Runs as the logged-in user.
@@ -228,12 +232,42 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					// off.
 					clearPrivacy()
 				} else {
-					showHostSessionBar(func() {
+					showHostSessionBarWithVoice(func() {
 						// Empty payload = drop every viewer.
 						_ = ic.WriteMessage(ipc.KindEndSession, nil)
 						log.Info().Msg("worker: host ended the session from the session bar")
+					}, func(on bool) {
+						// The host's OWN microphone control. It is driven from this
+						// process and never from an IPC message, so there is no path
+						// by which a viewer can open the host's microphone remotely.
+						if on {
+							startHostMic(func(frame []byte) {
+								_ = ic.WriteDroppable(ipc.KindAudioFrame, frame)
+							})
+						} else {
+							stopHostMic()
+						}
+						log.Info().Bool("on", on).Msg("worker: host microphone toggled from session bar")
 					})
 				}
+			case ipc.KindAudioCapture:
+				// Host microphone on/off. The device is opened here, in the
+				// worker, because the worker runs in the interactive session and
+				// therefore HAS an audio session; the transport is SYSTEM in
+				// session 0 and has no audio endpoint at all.
+				if strings.TrimSpace(string(payload)) == "1" {
+					startHostMic(func(frame []byte) {
+						// Droppable: voice is realtime, so if the pipe is congested
+						// the right move is to lose a frame, not to queue audio that
+						// will arrive too late to be worth hearing.
+						_ = ic.WriteDroppable(ipc.KindAudioFrame, frame)
+					})
+				} else {
+					stopHostMic()
+				}
+			case ipc.KindAudioPlay:
+				// Viewer's voice → host speakers.
+				playViewerVoice(payload)
 			case ipc.KindConsentCancel:
 				// The viewer stopped asking (cancelled, disconnected, timed out).
 				// Withdraw the prompt instead of leaving the host staring at a

@@ -103,6 +103,29 @@ const (
 	// that no longer exists, and it sat there until dismissed by hand.
 	// payload = viewer id.
 	KindConsentCancel byte = 0x0E
+
+	// Worker -> transport: one 20 ms frame of the host's microphone, already
+	// mu-law encoded (see agent/audio). payload = 160 bytes of PCMU.
+	//
+	// Capture lives in the WORKER, not here, and that placement is the whole
+	// reason voice can work at all under TransportMode: the worker is launched
+	// into the interactive session via CreateProcessAsUser, so it has an audio
+	// session and can see the user's microphone. The transport runs as SYSTEM
+	// in session 0, which has no audio endpoint of its own.
+	KindAudioFrame byte = 0x0F
+
+	// Transport -> worker: one 20 ms frame of the VIEWER's voice to play out on
+	// the host's speakers. payload = 160 bytes of PCMU.
+	KindAudioPlay byte = 0x10
+
+	// Transport -> worker: turn host microphone capture on or off.
+	// payload = "1" to capture, "0" to stop.
+	//
+	// Capture must be OFF until asked. A remote-support tool that opens the
+	// microphone on connect is indistinguishable from a bug that listens to the
+	// room, and the OS mic indicator lighting up unbidden is how that accusation
+	// starts. The device is opened on "1" and CLOSED on "0" — not merely muted.
+	KindAudioCapture byte = 0x11
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

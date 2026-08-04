@@ -38,6 +38,9 @@ const (
 // VideoTrackID is the standard track ID used for the desktop stream.
 const VideoTrackID = "desktop-video"
 
+// AudioTrackID is the in-session voice track.
+const AudioTrackID = "session-audio"
+
 // ConnectionMode indicates which ICE candidate type succeeded first.
 // This is used by the UI to show connection quality.
 type ConnectionMode string
@@ -87,6 +90,7 @@ type Peer struct {
 	fallbackICEservers []webrtc.ICEServer // TURN servers for fallback
 	iceTimeoutTimer    *time.Timer
 	VideoTrack         *webrtc.TrackLocalStaticRTP // nil for controller role
+	AudioTrack         *webrtc.TrackLocalStaticRTP // nil for controller role; voice
 	ControlDC          *webrtc.DataChannel         // the control data channel
 	ClipboardDC        *webrtc.DataChannel         // clipboard data channel
 	ChatDC             *webrtc.DataChannel         // chat data channel
@@ -156,6 +160,42 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 		}
 		p.VideoTrack = track
 		log.Info().Str("codec", videoCodec.MimeType).Msg("video track added to peer connection")
+
+		// Voice. PCMU rather than Opus — see agent/audio for why (no libopus
+		// means no new native dependency on the Windows build, which is the
+		// baseline that must not wobble).
+		//
+		// Added as SENDRECV in one transceiver so both directions share a single
+		// m=audio section: the host is heard on the sender, the viewer is heard
+		// on the receiver. Two separate tracks would mean two sections and a
+		// second round of negotiation for nothing.
+		//
+		// The track is created unconditionally, but NOTHING is written to it
+		// until voice is switched on, and the host's microphone is not opened
+		// until then either. Negotiating up front is what lets the toggle be a
+		// plain state change later instead of a renegotiation mid-session.
+		audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+			webrtc.RTPCodecCapability{
+				MimeType:  webrtc.MimeTypePCMU,
+				ClockRate: 8000,
+				Channels:  1,
+			},
+			AudioTrackID,
+			"remote-agent-stream",
+		)
+		if err != nil {
+			pc.Close()
+			return nil, fmt.Errorf("create audio track: %w", err)
+		}
+		if _, err := pc.AddTransceiverFromTrack(audioTrack,
+			webrtc.RTPTransceiverInit{
+				Direction: webrtc.RTPTransceiverDirectionSendrecv,
+			}); err != nil {
+			pc.Close()
+			return nil, fmt.Errorf("add audio transceiver: %w", err)
+		}
+		p.AudioTrack = audioTrack
+		log.Info().Str("codec", webrtc.MimeTypePCMU).Msg("audio track added (silent until voice is enabled)")
 	}
 
 	// ICE candidate handling — both forwards to peer and detects connection mode.

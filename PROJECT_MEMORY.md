@@ -393,6 +393,38 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **KP-VOICE — PARTLY CLOSED in r126 (pending hardware verify).** The Go
+  transport now carries a PCMU audio track, capture/playback live in the worker,
+  and the host has a "Mic on/off" button on the Windows session bar. Still open:
+  no host-owned mic control on a macOS daemon host (the bar is Windows-only), so
+  a macOS TransportMode host can be HEARD only via the Flutter app path — it can
+  still hear the viewer. Original entry follows.
+
+- **KP-VOICE (as filed at r125) — in-session voice does not work against a
+  TransportMode host.** The Flutter host/viewer path carries two-way audio, but a
+  TransportMode host is the Go transport, which builds a video track only
+  (`agent/network/peer.go` adds one `TrackLocalStaticRTP`, VP8) — so those
+  sessions have no `m=audio` section at all. Since TransportMode is the default
+  install, most users get no voice. This is SURFACED, not hidden:
+  `RemoteService.voiceAvailable` is false and the mic button disables with an
+  explanation. Plan for closing it (design settled, not built):
+  - Capture/playback must live in the **capture worker**, not the transport. The
+    worker runs in the user session via `CreateProcessAsUser` and therefore has
+    an audio session; the SYSTEM transport does not.
+  - Use **G.711 PCMU, not Opus**. PCMU is ~40 lines of pure Go (mu-law table),
+    is a standard WebRTC codec, and needs no libopus — which would mean a new
+    system dependency on both CI runners. Telephone-grade 8 kHz mono is right
+    for support voice, and keeping the Windows toolchain unchanged protects the
+    Windows-to-Windows baseline (LD rule).
+  - Device I/O via header-only miniaudio (cgo, compiles inline, no external
+    lib). cgo is already in the build for libvpx, so this adds no new class of
+    dependency.
+  - New IPC kinds for audio in both directions, mirroring `KindVideoFrame`;
+    transport packetizes to an RTP audio track and depacketizes `OnTrack` back
+    down to the worker.
+  - The Flutter viewer needs NO change: it adopts whatever audio transceiver the
+    offer contains and does not munge the `m=audio` section.
+
 - **KP-1 — UAC prompt not shown on viewer (regression). FIX IMPLEMENTED
   2026-07-08 (pending hardware verify).** Root cause: NOT capture (helper log
   proves capture+send work every time). The UAC frames reached whichever single
@@ -1616,3 +1648,6 @@ Guardrail: shipping Flutter host (r30) stays default + untouched through 1–3.
   or test secure-desktop/session behavior — those go via CI + user hardware.
 - When a bug report contradicts the code, verify which build (commit SHA) the
   installer under test was actually built from.
+- A control that cannot do anything must be DISABLED and say why, never left
+  looking live. This project has been bitten twice (End button on a widget
+  nothing instantiated; mic button with no audio channel behind it).

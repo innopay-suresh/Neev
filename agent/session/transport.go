@@ -17,6 +17,9 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/rs/zerolog/log"
 
+	"github.com/pion/webrtc/v3"
+
+	"github.com/neev/remote-agent/agent/audio"
 	"github.com/neev/remote-agent/agent/auth"
 	"github.com/neev/remote-agent/agent/ipc"
 	"github.com/neev/remote-agent/agent/network"
@@ -97,6 +100,10 @@ type Transport struct {
 type peerSession struct {
 	peer *network.Peer
 	pktz rtp.Packetizer
+	// apktz packetizes voice. Separate from pktz because audio and video carry
+	// their own sequence numbers and clock — sharing one would make every audio
+	// packet look to the viewer like a gap in the video stream.
+	apktz rtp.Packetizer
 }
 
 // RunTransport starts the persistent transport: registers with the relay, then
@@ -317,11 +324,24 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	// capture-worker swaps (the whole point: the viewer never sees a disconnect).
 	pktz := rtp.NewPacketizer(1200, 96, 0x1234ABCD,
 		&codecs.VP8Payloader{}, rtp.NewRandomSequencer(), vp8ClockRate)
+	// Payload type 0 and clock 8000 are fixed by the G.711 spec, not a choice.
+	apktz := rtp.NewPacketizer(1200, 0, 0x1234ABCE,
+		&codecs.G711Payloader{}, rtp.NewRandomSequencer(), audio.SampleRate)
 
-	ps := &peerSession{peer: peer, pktz: pktz}
+	ps := &peerSession{peer: peer, pktz: pktz, apktz: apktz}
 	t.mu.Lock()
 	t.peers[m.From] = ps
 	t.mu.Unlock()
+
+	// Viewer voice → host speakers. The RTP payload of a PCMU packet IS the
+	// mu-law bytes, so no decode happens here; the transport just unwraps and
+	// hands them down to the worker, which owns the audio device.
+	peer.OnTrack = func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		if track.Kind() != webrtc.RTPCodecTypeAudio {
+			return
+		}
+		go t.pumpViewerVoice(ctx, track)
+	}
 
 	peer.OnConnected = func() {
 		log.Info().Str("controller", m.From).Msg("transport: viewer connected")
@@ -848,6 +868,17 @@ func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 			}
 			continue
 		}
+		// Host microphone → viewers. Guarded by the same single-producer rule as
+		// video: a superseded worker must not keep talking over the live one.
+		if kind == ipc.KindAudioFrame {
+			t.workerMu.Lock()
+			current := t.worker == conn
+			t.workerMu.Unlock()
+			if current {
+				t.distributeAudio(payload)
+			}
+			continue
+		}
 		if kind != ipc.KindVideoFrame {
 			continue
 		}
@@ -914,6 +945,63 @@ func (t *Transport) distributeFrame(vp8 []byte) {
 		}
 		for _, pkt := range ps.pktz.Packetize(vp8, samplesPerFrame) {
 			_ = ps.peer.VideoTrack.WriteRTP(pkt)
+		}
+	}
+}
+
+// pumpViewerVoice reads the viewer's voice track and forwards each packet to
+// the capture worker for playback.
+//
+// Runs until the track ends, which is how a disconnect stops playback: the read
+// fails, the loop exits, and nothing further is handed to the worker. There is
+// deliberately no jitter buffer here — that belongs next to the output device
+// in the worker, where the playback clock actually lives.
+func (t *Transport) pumpViewerVoice(ctx context.Context, track *webrtc.TrackRemote) {
+	buf := make([]byte, 1500)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		n, _, err := track.Read(buf)
+		if err != nil {
+			log.Info().Err(err).Msg("transport: viewer voice track ended")
+			return
+		}
+		var pkt rtp.Packet
+		if err := pkt.Unmarshal(buf[:n]); err != nil {
+			continue
+		}
+		if len(pkt.Payload) == 0 {
+			continue
+		}
+		t.sendToWorker(ipc.KindAudioPlay, pkt.Payload)
+	}
+}
+
+// distributeAudio packetizes one 20 ms mu-law frame onto every viewer's voice
+// track.
+//
+// Unlike video there is no keyframe concept — every audio packet stands alone,
+// so a viewer that joins mid-sentence simply starts hearing from that moment.
+func (t *Transport) distributeAudio(mu []byte) {
+	if len(mu) == 0 {
+		return
+	}
+	t.mu.Lock()
+	sessions := make([]*peerSession, 0, len(t.peers))
+	for _, ps := range t.peers {
+		sessions = append(sessions, ps)
+	}
+	t.mu.Unlock()
+
+	for _, ps := range sessions {
+		if ps.peer.AudioTrack == nil || ps.apktz == nil {
+			continue
+		}
+		// One sample per byte in G.711, so the byte count IS the sample count —
+		// which is what advances the RTP timestamp at real-time rate.
+		for _, pkt := range ps.apktz.Packetize(mu, uint32(len(mu))) {
+			_ = ps.peer.AudioTrack.WriteRTP(pkt)
 		}
 	}
 }

@@ -75,8 +75,15 @@ type sessionBar struct {
 	hwnd     uintptr
 	scale    float64
 	rcHangUp cwRect
+	rcTalk   cwRect
+	hotTalk  bool
+	// micOn mirrors whether the host's microphone is currently open. The button
+	// is the ONLY way it turns on: a viewer must never be able to open the
+	// host's microphone remotely, or the tool becomes a listening device.
+	micOn    bool
 	hot      bool
 	onHangUp func()
+	onTalk   func(on bool)
 	mu       sync.Mutex
 	started  bool
 	visible  bool
@@ -111,9 +118,15 @@ func (b *sessionBar) px(v int) int32 { return int32(float64(v) * b.scale) }
 // showHostSessionBar displays the host's session indicator, starting its window on
 // first use. onHangUp runs when the host clicks Disconnect.
 func showHostSessionBar(onHangUp func()) {
+	showHostSessionBarWithVoice(onHangUp, nil)
+}
+
+// showHostSessionBarWithVoice adds a host-controlled microphone toggle.
+func showHostSessionBarWithVoice(onHangUp func(), onTalk func(bool)) {
 	b := theBar
 	b.mu.Lock()
 	b.onHangUp = onHangUp
+	b.onTalk = onTalk
 	already := b.started
 	b.started = true
 	b.mu.Unlock()
@@ -163,7 +176,7 @@ func (b *sessionBar) loop() {
 	// than "Remote session active" renders at some DPI/font combinations, so the
 	// text was clipped and the leading "R" disappeared.
 	h := b.px(38)
-	w := b.px(30) + b.measure(barLabel) + b.px(12) + b.px(76) + b.px(10)
+	w := b.px(30) + b.measure(barLabel) + b.px(12) + b.px(64) + b.px(6) + b.px(76) + b.px(10)
 	sw, _, _ := procGetSystemMetricsSB.Call(cwSMCXScreen)
 	// TOP-centre, as requested. Note this can sit over a maximised app's own
 	// header; it is deliberately short and only visible while a session is live.
@@ -208,13 +221,27 @@ func sessionBarProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		return 1 // painted in full via the back buffer; no system erase flash
 	case cwWMMouseMove:
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
-		if h := ptInRect(b.rcHangUp, x, y); h != b.hot {
-			b.hot = h
+		h := ptInRect(b.rcHangUp, x, y)
+		ht := ptInRect(b.rcTalk, x, y)
+		if h != b.hot || ht != b.hotTalk {
+			b.hot, b.hotTalk = h, ht
 			procInvalidateRectSB.Call(hwnd, 0, 0)
 		}
 		return 0
 	case cwWMLButtonDown:
 		x, y := int32(lparam&0xFFFF), int32((lparam>>16)&0xFFFF)
+		if ptInRect(b.rcTalk, x, y) {
+			b.mu.Lock()
+			b.micOn = !b.micOn
+			on := b.micOn
+			cb := b.onTalk
+			b.mu.Unlock()
+			if cb != nil {
+				go cb(on)
+			}
+			procInvalidateRectSB.Call(hwnd, 0, 0)
+			return 0
+		}
 		if ptInRect(b.rcHangUp, x, y) {
 			b.mu.Lock()
 			cb := b.onHangUp
@@ -331,6 +358,44 @@ func (b *sessionBar) paint(hwnd uintptr) {
 	procDeleteObjectSB.Call(fb)
 	procDeleteObjectSB.Call(fp)
 	b.text(hdc, "Disconnect", b.rcHangUp, font, cwColCard)
+
+	// Talk button — the host's own microphone control, and the only way it can
+	// be opened. Label states the CURRENT state ("Mic on") rather than the
+	// action, so a host glancing at the bar can tell at once whether they are
+	// being heard.
+	tw := b.px(64)
+	b.rcTalk = cwRect{b.rcHangUp.Left - tw - b.px(6), (rc.Bottom - bh) / 2,
+		b.rcHangUp.Left - b.px(6), (rc.Bottom-bh)/2 + bh}
+	b.mu.Lock()
+	micOn := b.micOn
+	b.mu.Unlock()
+	tfill := cwColTint
+	if micOn {
+		tfill = cwColAccent
+	}
+	if b.hotTalk {
+		tfill = cwColAccentDim
+	}
+	tb, _, _ := procCreateSolidBrushSB.Call(tfill)
+	tp, _, _ := procCreatePenSB.Call(5, 0, 0)
+	ob4, _, _ := procSelectObjectSB.Call(hdc, tb)
+	op4, _, _ := procSelectObjectSB.Call(hdc, tp)
+	procRoundRectSB.Call(hdc, uintptr(b.rcTalk.Left), uintptr(b.rcTalk.Top),
+		uintptr(b.rcTalk.Right), uintptr(b.rcTalk.Bottom),
+		uintptr(b.px(7)), uintptr(b.px(7)))
+	procSelectObjectSB.Call(hdc, ob4)
+	procSelectObjectSB.Call(hdc, op4)
+	procDeleteObjectSB.Call(tb)
+	procDeleteObjectSB.Call(tp)
+	tcol := cwColInk
+	if micOn || b.hotTalk {
+		tcol = cwColCard
+	}
+	label := "Mic off"
+	if micOn {
+		label = "Mic on"
+	}
+	b.text(hdc, label, b.rcTalk, font, tcol)
 }
 
 func (b *sessionBar) font(size int, bold bool) uintptr {
