@@ -13,10 +13,10 @@ mkdir -p "$APP/Contents/MacOS"
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
 
 # arm64 + x86_64 so one bundle serves both Apple Silicon and Intel hosts.
-swiftc -O \
+swiftc -O -swift-version 5 \
   -target arm64-apple-macos11.0 \
   -o "$OUT/NeevVoice-arm64" "$HERE/main.swift" "$HERE/sysaudio.swift"
-swiftc -O \
+swiftc -O -swift-version 5 \
   -target x86_64-apple-macos11.0 \
   -o "$OUT/NeevVoice-x86_64" "$HERE/main.swift" "$HERE/sysaudio.swift"
 lipo -create -output "$APP/Contents/MacOS/NeevVoice" \

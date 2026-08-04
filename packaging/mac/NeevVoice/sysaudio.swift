@@ -26,6 +26,26 @@ final class SystemAudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
         super.init()
     }
 
+    /// Callback form of start(). The caller is AppKit code that must touch UI
+    /// state afterwards; wrapping the async work here keeps `self` out of a
+    /// concurrently-executing closure at the call site, which older Swift
+    /// compilers reject outright.
+    func start(_ done: @escaping (Error?) -> Void) {
+        Task { [self] in
+            do {
+                try await start()
+                DispatchQueue.main.async { done(nil) }
+            } catch {
+                DispatchQueue.main.async { done(error) }
+            }
+        }
+    }
+
+    /// Callback form of stop(), for the same reason.
+    func stopAsync() {
+        Task { [self] in await stop() }
+    }
+
     func start() async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: false)

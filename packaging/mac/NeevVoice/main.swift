@@ -175,9 +175,7 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
     @objc private func toggleSound() {
         guard #available(macOS 13.0, *) else { return }
         if soundOn {
-            if let t = tap as? SystemAudioTap {
-                Task { await t.stop() }
-            }
+            (tap as? SystemAudioTap)?.stopAsync()
             tap = nil
             soundOn = false
             rebuildMenu()
@@ -190,24 +188,23 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
             self?.send("a " + Data(frame).base64EncodedString())
         }
         tap = t
-        Task { [weak self] in
-            do {
-                try await t.start()
-                await MainActor.run {
-                    self?.soundOn = true
-                    self?.rebuildMenu()
-                }
-            } catch {
+        // Callback rather than an inline Task: capturing self inside a
+        // concurrently-executing closure compiles on this machine but is an
+        // ERROR on the CI toolchain, and that mismatch silently shipped a
+        // package with no helper at all.
+        t.start { [weak self] error in
+            guard let self else { return }
+            if let error {
                 // Almost always the Screen Recording permission: SCStream needs
                 // it even for audio only. Say so instead of failing silently.
                 NSLog("NeevVoice: could not start system audio: \(error.localizedDescription)")
-                await MainActor.run {
-                    self?.tap = nil
-                    self?.soundOn = false
-                    self?.showSoundPermissionHelp()
-                    self?.rebuildMenu()
-                }
+                self.tap = nil
+                self.soundOn = false
+                self.showSoundPermissionHelp()
+            } else {
+                self.soundOn = true
             }
+            self.rebuildMenu()
         }
     }
 

@@ -39,13 +39,21 @@ if [ -f "$AGENT_BIN" ]; then
   # The host's macOS session controls (menu bar): "Remote session active",
   # a microphone toggle, and End session. Built here rather than checked in so
   # the shipped bundle always matches the source.
-  if bash "$REPO_ROOT/packaging/mac/NeevVoice/build.sh" "$DAEMON_DST" >/dev/null; then
-    echo "   bundled NeevVoice.app (host session controls)"
-  else
-    # Not fatal: the daemon still hosts, it just has no host-side controls.
-    # Silently shipping without them is what must not happen.
-    echo "   WARNING: NeevVoice.app failed to build — macOS hosts will have NO"
-    echo "            session bar and NO microphone control in this package"
+  # FATAL if it fails. This was a warning once, and a Swift error that only
+  # appeared on the CI toolchain shipped a macOS package with no host controls
+  # at all — while the release notes said the feature was in it. A red build is
+  # recoverable in minutes; a package that quietly lacks an advertised feature
+  # is not noticed until a user goes looking for it.
+  if ! bash "$REPO_ROOT/packaging/mac/NeevVoice/build.sh" "$DAEMON_DST"; then
+    echo "ERROR: NeevVoice.app failed to build — refusing to package a macOS"
+    echo "       build with no session bar, microphone, or sound controls."
+    exit 1
+  fi
+  echo "   bundled NeevVoice.app (host session controls)"
+  # Prove it landed, rather than trusting the build script's exit code.
+  if [ ! -x "$DAEMON_DST/NeevVoice.app/Contents/MacOS/NeevVoice" ]; then
+    echo "ERROR: NeevVoice.app built but its binary is missing from the bundle."
+    exit 1
   fi
   cp "$REPO_ROOT/packaging/mac/com.neev.transport.plist" "$DAEMON_DST/"
   cp "$REPO_ROOT/packaging/mac/com.neev.worker.plist" "$DAEMON_DST/"
