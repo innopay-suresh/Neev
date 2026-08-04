@@ -276,6 +276,81 @@ class RemoteService extends ChangeNotifier {
     _sendFileData(jsonEncode({'k': 'ft', 't': 'request'}));
   }
 
+  // ---- Two-way voice -----------------------------------------------------
+  // The product had no audio at all: you fixed someone's machine while talking
+  // to them on a separate phone call. This is a voice channel inside the
+  // session, negotiated up front but SILENT until switched on — the mic is not
+  // opened, and no permission prompt appears, unless the user asks for it.
+  MediaStream? _micStream;
+  bool _voiceOn = false;
+
+  /// Whether this side is currently transmitting microphone audio.
+  bool get voiceOn => _voiceOn;
+
+  /// Whether this session actually HAS a voice channel.
+  ///
+  /// False against a TransportMode host: the Go transport offers video only, so
+  /// there is no audio section to speak over. The UI must show that rather than
+  /// offering a mic button that silently transmits nothing — the exact failure
+  /// this project has already been bitten by.
+  bool get voiceAvailable {
+    if (_viewerPeer != null) return _viewerPeer!.hasVoice;
+    return _hostPeers.values.any((p) => p.hasVoice);
+  }
+
+  /// Turn the microphone on or off for the live session.
+  ///
+  /// Toggling only swaps the track on an already-negotiated sender, so it never
+  /// renegotiates and can never drop the screen share.
+  Future<void> setVoice(bool on) async {
+    if (on == _voiceOn) return;
+    final peers = <WebRTCService>[
+      if (_viewerPeer != null) _viewerPeer!,
+      ..._hostPeers.values,
+    ];
+    if (peers.isEmpty) return;
+
+    if (on) {
+      try {
+        _micStream ??= await navigator.mediaDevices
+            .getUserMedia({'audio': true, 'video': false});
+      } catch (e) {
+        // Denied or no device: report it rather than showing a live mic button
+        // that transmits nothing.
+        DiagLog.log('voice', 'microphone unavailable: $e');
+        return;
+      }
+      final track = _micStream!.getAudioTracks().isEmpty
+          ? null
+          : _micStream!.getAudioTracks().first;
+      if (track == null) return;
+      for (final p in peers) {
+        await p.setMicTrack(track);
+      }
+      _voiceOn = true;
+      DiagLog.log('voice', 'microphone ON');
+    } else {
+      for (final p in peers) {
+        await p.setMicTrack(null);
+      }
+      // Release the device so the OS mic indicator goes out. Leaving it open
+      // while "muted" is how apps end up accused of listening.
+      await _micStream?.dispose();
+      _micStream = null;
+      _voiceOn = false;
+      DiagLog.log('voice', 'microphone OFF');
+    }
+    notifyListeners();
+  }
+
+  /// Stop voice and release the device — session teardown.
+  Future<void> _stopVoice() async {
+    if (_micStream == null && !_voiceOn) return;
+    await _micStream?.dispose();
+    _micStream = null;
+    _voiceOn = false;
+  }
+
   /// VIEWER: whether the host granted control. False means the host is
   /// dropping our input on purpose — the viewer must show that rather than
   /// letting the user click into a void. Defaults true so an older host, which
@@ -549,6 +624,7 @@ class RemoteService extends ChangeNotifier {
       _hostPeers.remove(id)?.close();
     }
     DiagLog.log('host', 'host ended the session (viewers=${ids.length})');
+    await _stopVoice();
     _onHostPeerGone();
   }
 
@@ -1182,6 +1258,10 @@ class RemoteService extends ChangeNotifier {
       isOfferer: true,
     );
     await peer.addLocalStream(stream);
+    // Negotiate a voice channel up front. It carries nothing until someone
+    // turns the mic on — doing it now means enabling voice later is a
+    // replaceTrack rather than a renegotiation that could disturb the screen.
+    await peer.addVoiceTransceiver();
     final offer = await peer.createOffer();
     _hostSignaling?.sendOffer(controllerId, _sdpMap(offer));
     _ensureClipboardSync();
@@ -1438,6 +1518,9 @@ class RemoteService extends ChangeNotifier {
     // Forget the grant: the next host may allow something different, and a
     // stale "view only" would mislabel a session that actually has control.
     _hostGrantedControl = true;
+    // Release the microphone with the session — an open mic outliving the call
+    // it belonged to is the worst possible bug in a voice feature.
+    await _stopVoice();
     // A user-initiated disconnect cancels any pending auto-reconnect.
     if (!keepAutoReconnect) {
       autoReconnect = false;
@@ -1974,6 +2057,9 @@ class RemoteService extends ChangeNotifier {
       isOfferer: false,
     );
     await peer.setRemoteDescription(_sdpFrom(msg.payload));
+    // Adopt the audio section the host offered so we can speak back later
+    // without adding a second media section.
+    await peer.adoptVoiceTransceiver();
     final answer = await peer.createAnswer();
     _viewerSignaling?.sendAnswer(hostId, _sdpMap(answer));
   }

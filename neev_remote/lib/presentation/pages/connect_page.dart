@@ -2636,6 +2636,26 @@ class _SessionToolbar extends ConsumerWidget {
                         .toggleFavorite(id),
                   );
                 }),
+                // Voice. Off by default and the mic is not opened until it is
+                // switched on, so no permission prompt appears for users who
+                // never use it.
+                _ToolButton(
+                  icon: service.voiceOn ? Icons.mic : Icons.mic_off_outlined,
+                  label: service.voiceOn ? 'Mic on' : 'Mic off',
+                  tooltip: !service.voiceAvailable
+                      ? 'Voice is not available in this session — '
+                          'the host is running the service backend, which '
+                          'does not carry audio yet'
+                      : service.voiceOn
+                          ? 'Microphone on — click to mute'
+                          : 'Talk to the person at the other end',
+                  active: service.voiceOn,
+                  // Disabled, not silently inert, when the session has no audio
+                  // section to speak over.
+                  onPressed: service.voiceAvailable
+                      ? () => service.setVoice(!service.voiceOn)
+                      : null,
+                ),
                 // --- Control group ---
                 // When the HOST granted view-only the viewer cannot take
                 // control, so the button says why instead of offering a toggle

@@ -153,6 +153,61 @@ class WebRTCService {
   }
 
   RTCRtpSender? _videoSender;
+  RTCRtpSender? _audioSender;
+
+  /// Whether this peer negotiated a voice channel.
+  bool get hasVoice => _audioSender != null;
+
+  /// Adds a two-way VOICE transceiver. Must be called BEFORE the offer is
+  /// created, because adding a media section later needs renegotiation.
+  ///
+  /// The transceiver is created with NO microphone attached: negotiating the
+  /// channel does not open the mic, so no permission prompt appears and nothing
+  /// is transmitted until the user actually turns voice on. Enabling later is
+  /// then a replaceTrack, which needs no renegotiation — the same trick the
+  /// monitor switch already uses.
+  ///
+  /// Safe alongside the VP8 munging: that only rewrites the m=video section and
+  /// stops at the next m= line, so an m=audio section passes through untouched.
+  Future<void> addVoiceTransceiver() async {
+    if (_pc == null || _audioSender != null) return;
+    try {
+      final t = await _pc!.addTransceiver(
+        kind: RTCRtpMediaType.RTCRtpMediaTypeAudio,
+        init: RTCRtpTransceiverInit(
+            direction: TransceiverDirection.SendRecv),
+      );
+      _audioSender = t.sender;
+    } catch (e) {
+      // Voice is optional; a peer without it must still carry screen + input.
+      _audioSender = null;
+    }
+  }
+
+  /// Answerer side: adopt the audio transceiver the OFFER created, so the
+  /// viewer can speak back without adding a second media section.
+  Future<void> adoptVoiceTransceiver() async {
+    if (_pc == null || _audioSender != null) return;
+    try {
+      // After setRemoteDescription the peer has a transceiver per m-line; the
+      // audio one is identified by its receiver track. Matching on the RECEIVER
+      // (not the sender) matters — our sender has no track yet, because the mic
+      // is deliberately not opened until the user turns voice on.
+      for (final t in await _pc!.getTransceivers()) {
+        if (t.receiver.track?.kind == 'audio') {
+          _audioSender = t.sender;
+          return;
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Attach or detach the microphone. Null detaches, which stops transmitting
+  /// while leaving the negotiated channel in place — so muting never costs a
+  /// renegotiation and can never drop the session.
+  Future<void> setMicTrack(MediaStreamTrack? track) async {
+    await _audioSender?.replaceTrack(track);
+  }
 
   /// Adds the captured screen stream (host side) to the connection, then
   /// restricts the video transceiver to VP8 so the generated offer is VP8-only.
