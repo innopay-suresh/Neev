@@ -2,12 +2,14 @@ package session
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -127,9 +129,23 @@ func acceptVoiceControl(ln net.Listener) {
 func serveVoiceControl(conn net.Conn) {
 	defer conn.Close()
 	sc := bufio.NewScanner(conn)
+	// Audio frames are base64 lines; a 20 ms mu-law frame is ~216 chars, but
+	// give the scanner room so a long line can never silently truncate a frame
+	// into garbage.
+	sc.Buffer(make([]byte, 0, 8192), 64*1024)
 	micOn := false
 	for sc.Scan() {
-		switch sc.Text() {
+		line := sc.Text()
+		// Host system sound, captured by the helper via ScreenCaptureKit.
+		if strings.HasPrefix(line, "a ") {
+			frame, err := base64.StdEncoding.DecodeString(line[2:])
+			if err != nil {
+				continue
+			}
+			feedHostSound(frame)
+			continue
+		}
+		switch line {
 		case "mic-on", "mic-off":
 			on := sc.Text() == "mic-on"
 			macBarMu.Lock()

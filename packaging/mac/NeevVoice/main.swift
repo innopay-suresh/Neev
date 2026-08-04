@@ -22,6 +22,8 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
     private var sock: Int32 = -1
     private var micOn = false
     private var recOn = false
+    private var soundOn = false
+    private var tap: AnyObject?
     private let socketPath: String
 
     init(socketPath: String) {
@@ -56,18 +58,24 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
         mic.state = micOn ? .on : .off
         menu.addItem(mic)
 
-        // Sharing this Mac's system sound needs WASAPI-style loopback capture,
-        // which macOS does not provide without installing a virtual audio
-        // device. Shown DISABLED with the reason rather than hidden: a feature
-        // the host may have seen on Windows should not silently vanish here,
-        // and a control that cannot work must say so.
-        let sound = NSMenuItem(
-            title: "Share this Mac's sound — not available on macOS",
-            action: nil, keyEquivalent: "")
-        sound.isEnabled = false
-        sound.toolTip = "macOS has no built-in way to capture system audio. "
-            + "This works on Windows hosts."
-        menu.addItem(sound)
+        // System sound, captured with ScreenCaptureKit — no virtual audio
+        // device needed. Requires macOS 13; below that the item stays disabled
+        // and says why rather than failing when clicked.
+        if #available(macOS 13.0, *) {
+            let sound = NSMenuItem(
+                title: soundOn ? "Sharing this Mac's sound — click to stop"
+                               : "Share this Mac's sound",
+                action: #selector(toggleSound), keyEquivalent: "")
+            sound.target = self
+            sound.state = soundOn ? .on : .off
+            menu.addItem(sound)
+        } else {
+            let sound = NSMenuItem(
+                title: "Share this Mac's sound — needs macOS 13 or later",
+                action: nil, keyEquivalent: "")
+            sound.isEnabled = false
+            menu.addItem(sound)
+        }
 
         // Recording is offered to the HOST only. A viewer able to silently
         // record this machine's screen would make the product a surveillance
@@ -162,6 +170,59 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
         // Ask, do not assume. The menu updates when the worker confirms, so a
         // failed device open cannot leave the menu showing "on".
         send(micOn ? "mic-off" : "mic-on")
+    }
+
+    @objc private func toggleSound() {
+        guard #available(macOS 13.0, *) else { return }
+        if soundOn {
+            if let t = tap as? SystemAudioTap {
+                Task { await t.stop() }
+            }
+            tap = nil
+            soundOn = false
+            rebuildMenu()
+            return
+        }
+        let t = SystemAudioTap { [weak self] frame in
+            // Base64 over the existing line-based socket. At 8 kHz mu-law this
+            // is ~50 short lines a second — the encoding overhead is nothing
+            // next to adding a second binary channel and its framing bugs.
+            self?.send("a " + Data(frame).base64EncodedString())
+        }
+        tap = t
+        Task { [weak self] in
+            do {
+                try await t.start()
+                await MainActor.run {
+                    self?.soundOn = true
+                    self?.rebuildMenu()
+                }
+            } catch {
+                // Almost always the Screen Recording permission: SCStream needs
+                // it even for audio only. Say so instead of failing silently.
+                NSLog("NeevVoice: could not start system audio: \(error.localizedDescription)")
+                await MainActor.run {
+                    self?.tap = nil
+                    self?.soundOn = false
+                    self?.showSoundPermissionHelp()
+                    self?.rebuildMenu()
+                }
+            }
+        }
+    }
+
+    /// Tells the host what to grant, since the failure is a permission and not
+    /// something they can fix by clicking again.
+    private func showSoundPermissionHelp() {
+        let a = NSAlert()
+        a.messageText = "Neev Remote needs Screen Recording to share this Mac's sound"
+        a.informativeText = "macOS captures system audio through the same "
+            + "permission as screen recording. Open System Settings → Privacy & "
+            + "Security → Screen & System Audio Recording and enable NeevVoice, "
+            + "then try again."
+        a.alertStyle = .informational
+        a.addButton(withTitle: "OK")
+        a.runModal()
     }
 
     @objc private func toggleRec() {

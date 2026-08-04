@@ -236,6 +236,12 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					// off.
 					clearPrivacy()
 				} else {
+					// Register where host audio goes for this session. On macOS
+					// the system-sound frames arrive from the helper app over the
+					// control socket, with no closure to carry the destination.
+					setAudioSink(func(frame []byte) {
+						_ = ic.WriteDroppable(ipc.KindAudioFrame, frame)
+					})
 					showHostSessionBarWithVoice(func() {
 						// Empty payload = drop every viewer.
 						_ = ic.WriteMessage(ipc.KindEndSession, nil)

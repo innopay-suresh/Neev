@@ -394,10 +394,19 @@ hardware-confirmed intact.
 ## Known Problems (open)
 
 - **r129 features (pending hardware verify).** Remote sound + session recording.
-  • Remote sound = WASAPI loopback via miniaudio, so WINDOWS HOSTS ONLY.
-    `audio.LoopbackSupported()` is false on macOS (no system-audio capture
-    without a virtual device like BlackHole); the macOS menu shows the item
-    DISABLED with that reason rather than hiding it. Mic + system sound share
+  • Remote sound = WASAPI loopback via miniaudio on Windows. **CORRECTION
+    (r130): the earlier claim that macOS cannot capture system audio without a
+    virtual device (BlackHole) was WRONG.** ScreenCaptureKit gained audio
+    capture in macOS 13 (`SCStreamConfiguration.capturesAudio`), so no driver is
+    needed. r130 implements it in NeevVoice.app — Swift, because SCStream is an
+    ObjC/Swift framework and TCC attributes capture to the asking bundle — and
+    ships 8 kHz mu-law frames to the worker as base64 lines over the existing
+    control socket. Needs SCREEN RECORDING permission (macOS captures system
+    audio under that grant even for audio-only), and NeevVoice.app needs its own
+    grant separate from neev-agent; the helper shows an alert saying so. macOS
+    12 and older keep the disabled menu item.
+    The Swift mu-law encoder was verified byte-identical to agent/audio's Go one
+    across all 65536 sample values — a mismatch would decode as noise, not fail. Mic + system sound share
     ONE PCMU track and are mixed in the PCM domain (`audio.Mix`) — adding mu-law
     bytes would be noise, since mu-law is logarithmic. Quality is 8 kHz mono
     telephone-grade: fine for an error chime or speech, poor for music.
@@ -441,10 +450,19 @@ hardware-confirmed intact.
   session. Original entry follows.
 
 - **r129 features (pending hardware verify).** Remote sound + session recording.
-  • Remote sound = WASAPI loopback via miniaudio, so WINDOWS HOSTS ONLY.
-    `audio.LoopbackSupported()` is false on macOS (no system-audio capture
-    without a virtual device like BlackHole); the macOS menu shows the item
-    DISABLED with that reason rather than hiding it. Mic + system sound share
+  • Remote sound = WASAPI loopback via miniaudio on Windows. **CORRECTION
+    (r130): the earlier claim that macOS cannot capture system audio without a
+    virtual device (BlackHole) was WRONG.** ScreenCaptureKit gained audio
+    capture in macOS 13 (`SCStreamConfiguration.capturesAudio`), so no driver is
+    needed. r130 implements it in NeevVoice.app — Swift, because SCStream is an
+    ObjC/Swift framework and TCC attributes capture to the asking bundle — and
+    ships 8 kHz mu-law frames to the worker as base64 lines over the existing
+    control socket. Needs SCREEN RECORDING permission (macOS captures system
+    audio under that grant even for audio-only), and NeevVoice.app needs its own
+    grant separate from neev-agent; the helper shows an alert saying so. macOS
+    12 and older keep the disabled menu item.
+    The Swift mu-law encoder was verified byte-identical to agent/audio's Go one
+    across all 65536 sample values — a mismatch would decode as noise, not fail. Mic + system sound share
     ONE PCMU track and are mixed in the PCM domain (`audio.Mix`) — adding mu-law
     bytes would be noise, since mu-law is logarithmic. Quality is 8 kHz mono
     telephone-grade: fine for an error chime or speech, poor for music.

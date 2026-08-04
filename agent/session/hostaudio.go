@@ -161,6 +161,39 @@ func stopHostSound() {
 	}
 }
 
+// setAudioSink registers where outgoing host audio should go for this session.
+//
+// Needed on macOS, where system sound is captured by the helper app rather than
+// by this process: the frames arrive over the control socket with no closure to
+// carry the destination, so the destination is registered once per session.
+func setAudioSink(fn func([]byte)) {
+	hostAudioMu.Lock()
+	sink = fn
+	hostAudioMu.Unlock()
+}
+
+// feedHostSound accepts one mu-law frame of the host's system sound captured
+// outside this process (macOS helper) and puts it on the same path as Windows
+// loopback — including mixing with the microphone.
+func feedHostSound(frame []byte) {
+	if len(frame) == 0 {
+		return
+	}
+	hostAudioMu.Lock()
+	// Mic on: let the microphone callback collect and mix this, so host voice
+	// and host sound leave as one frame rather than fighting for the track.
+	if micOn {
+		pendingSound = frame
+		hostAudioMu.Unlock()
+		return
+	}
+	out := sink
+	hostAudioMu.Unlock()
+	if out != nil {
+		out(frame)
+	}
+}
+
 // playViewerVoice queues one mu-law frame from the viewer for the speakers.
 func playViewerVoice(mu []byte) {
 	hostAudioMu.Lock()
