@@ -20,6 +20,12 @@ import (
 // to a per-user temp dir when the system dir isn't writable keeps local dev runs
 // (no daemon, no root) working — matching the previous os.TempDir() behaviour.
 func dataDir() string {
+	// Test/dev override. Not a supported deployment knob: the transport runs as
+	// a service and does not inherit a user's environment, so this cannot be
+	// used to redirect a real host's state.
+	if d := os.Getenv("NEEV_DATA_DIR"); d != "" {
+		return d
+	}
 	var base string
 	switch runtime.GOOS {
 	case "windows":

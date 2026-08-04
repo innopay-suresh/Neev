@@ -283,6 +283,7 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		// in. Refuse rather than prompt.
 		log.Info().Str("from", m.From).
 			Msg("transport: connection DENIED — interactive access is disabled")
+		t.refuse(m.From, reasonInteractiveOff)
 		return
 	case t.consentRequired():
 		// Interactive request → ask the logged-in user. The session-0 transport
@@ -292,6 +293,7 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 		allow, granted := t.askConsent(ctx, m.From)
 		if !allow {
 			log.Info().Str("from", m.From).Msg("transport: connection DENIED (consent)")
+			t.refuse(m.From, reasonConsentDenied)
 			return
 		}
 		control = granted
@@ -947,6 +949,28 @@ func (t *Transport) distributeFrame(vp8 []byte) {
 			_ = ps.peer.VideoTrack.WriteRTP(pkt)
 		}
 	}
+}
+
+// Refusal reasons sent to the viewer. Without one, a refused viewer sat on a
+// spinner until it timed out and then blamed the network — the host's decision
+// never reached the person it was about.
+const (
+	reasonInteractiveOff = "interactive_disabled"
+	reasonConsentDenied  = "consent_denied"
+)
+
+// refuse tells the viewer its connection was turned down, and why.
+//
+// Sent as a bye rather than left silent so the viewer stops waiting
+// immediately. The reason is a stable token, not prose: the viewer decides the
+// wording, and an older viewer that does not know the token still tears the
+// attempt down instead of hanging.
+func (t *Transport) refuse(viewer, reason string) {
+	_ = t.sigClient.Send(network.Message{
+		Type:  network.MsgBye,
+		To:    viewer,
+		Error: reason,
+	})
 }
 
 // pumpViewerVoice reads the viewer's voice track and forwards each packet to

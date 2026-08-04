@@ -642,6 +642,22 @@ class RemoteService extends ChangeNotifier {
   int _viewerPhase = 0;
   int get viewerPhase => _viewerPhase;
 
+  /// Maps a host refusal token to something a person can act on. Unknown tokens
+  /// return null so an older or newer host cannot make the viewer claim a
+  /// reason it does not actually know.
+  static String? _refusalMessage(String? reason) {
+    switch (reason) {
+      case 'interactive_disabled':
+        return 'That machine is not accepting interactive connections right '
+            'now. It may be set to allow access only while its app is open, '
+            'or to require the unattended password.';
+      case 'consent_denied':
+        return 'The person at that machine declined the connection.';
+      default:
+        return null;
+    }
+  }
+
   void _setPhase(int p) {
     if (p <= _viewerPhase) return; // never go backwards within one attempt
     _viewerPhase = p;
@@ -1953,6 +1969,20 @@ class RemoteService extends ChangeNotifier {
         // A deliberate end ('peer_left', e.g. the host rejected the request)
         // still tears down for good — and rejections also arrive before
         // autoReconnect is armed, so old servers without a reason are safe.
+        // A refusal is a DECISION, not a dropped link. Re-dialling one would
+        // hammer the host with requests it already turned down — and on a host
+        // set to prompt, that means repeated popups at someone who said no.
+        final refusal = _refusalMessage(msg.error);
+        if (refusal != null) {
+          autoReconnect = false;
+          await disconnectViewer();
+          // Set AFTER the teardown: disconnectViewer resets viewer state, so
+          // setting it first would wipe the very message we want shown.
+          _viewerError = refusal;
+          _viewerStatus = ViewerStatus.failed;
+          notifyListeners();
+          break;
+        }
         if (autoReconnect && msg.error != 'peer_left') {
           _onViewerConnectionLost();
         } else {

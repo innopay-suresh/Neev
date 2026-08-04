@@ -3,7 +3,11 @@ package session
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Host-side access policy, modelled on how AnyDesk actually works.
@@ -63,15 +67,61 @@ func interactiveAccessMode() string {
 	return InteractiveAlways
 }
 
+// appHeartbeatTTL is how stale app-open.txt may be before the app counts as
+// closed. The app refreshes it every few seconds; this leaves room for a missed
+// tick under load without holding the door open long after the app quits.
+const appHeartbeatTTL = 15 * time.Second
+
+// appIsOpen reports whether the user's Neev Remote app is running right now.
+//
+// The transport is a headless service with no view of the user's desktop, so
+// the app tells it: while running, the app rewrites app-open.txt with the
+// current unix time. A heartbeat rather than a create/delete flag because a
+// crashed or force-quit app never gets to delete anything, and a stale flag
+// would leave "only while the app is open" permanently open — exactly the
+// failure this is meant to remove.
+func appIsOpen() bool {
+	for _, p := range hostFlagPaths("app-open.txt") {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		secs, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+		if err != nil {
+			continue
+		}
+		if time.Since(time.Unix(secs, 0)) <= appHeartbeatTTL {
+			return true
+		}
+	}
+	return false
+}
+
 // interactiveAllowed reports whether a session-password (interactive) login may
 // be admitted at all.
 //
-// "when-open" is treated as allowed here: the transport is a headless service
-// and cannot see whether the user's app window is open, and the interactive
-// request still has to pass the consent prompt. Refusing on a signal we cannot
-// observe would silently break connections.
+// "when-open" now means what the setting says. It previously behaved exactly
+// like "always" — the transport could not see the app window, so it admitted
+// everything and the UI's promise that "requests are ignored when the app is
+// closed" was simply untrue. The app's heartbeat makes the signal observable.
+//
+// Refusing is the correct failure direction here: the host explicitly chose to
+// be reachable only while sitting in front of the app, so when the signal is
+// missing the answer is no.
 func (t *Transport) interactiveAllowed() bool {
-	return interactiveAccessMode() != InteractiveNever
+	switch interactiveAccessMode() {
+	case InteractiveNever:
+		return false
+	case InteractiveWhenOpen:
+		open := appIsOpen()
+		if !open {
+			log.Info().Msg("transport: interactive login refused — " +
+				"host set access to 'only while the app is open' and the app is not running")
+		}
+		return open
+	default:
+		return true
+	}
 }
 
 // AccessProfile is the permission set granted to a session. Separate profiles

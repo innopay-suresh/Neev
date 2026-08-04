@@ -4,6 +4,7 @@ import 'core/theme/app_theme.dart';
 import 'core/diag_log.dart';
 import 'window_manager.dart' show initWindowManager;
 import 'presentation/pages/connect_page.dart';
+import 'data/services/consent_flag_io.dart' show AppOpenBeacon;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,6 +12,9 @@ void main() async {
   await initWindowManager();
   // Restore the saved theme BEFORE the first frame so there's no flash.
   await restoreAppTheme();
+  // Tell the headless transport this app is running, so Interactive Access =
+  // "only while the app is open" can actually mean that.
+  await AppOpenBeacon.start();
   runApp(const ProviderScope(child: NeevRemoteApp()));
 }
 

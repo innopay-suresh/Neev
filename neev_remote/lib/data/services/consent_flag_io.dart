@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 /// Writes the "Ask before allowing connections" flag where the root/SYSTEM
@@ -38,6 +39,45 @@ Future<void> writeAccessProfile(
     _writeHostText(
         unattended ? 'unattended-profile.json' : 'interactive-profile.json',
         '{"control":$control,"clipboard":$clipboard,"files":$files}');
+
+/// Heartbeat proving the app is running, for Interactive Access = "only while
+/// the app is open".
+///
+/// The transport is a headless service and cannot see this app's window, so
+/// before this it admitted "when-open" connections unconditionally — the
+/// setting behaved exactly like "always" while the UI promised requests would
+/// be ignored with the app closed.
+///
+/// A repeating heartbeat rather than a flag written at launch and deleted at
+/// exit: a crashed or force-quit app never gets to delete anything, and a stale
+/// flag would hold the door open forever. A timestamp that simply stops being
+/// refreshed cannot fail that way.
+class AppOpenBeacon {
+  static Timer? _timer;
+
+  /// Refresh interval — comfortably under the transport's 15s staleness limit
+  /// so one missed tick under load does not lock the host out of its own
+  /// setting.
+  static const _interval = Duration(seconds: 5);
+
+  static Future<void> start() async {
+    if (_timer != null) return;
+    await _beat();
+    _timer = Timer.periodic(_interval, (_) => _beat());
+  }
+
+  static Future<void> stop() async {
+    _timer?.cancel();
+    _timer = null;
+    // Best-effort immediate revocation on a clean exit. The heartbeat's expiry
+    // is the guarantee; this just makes a graceful quit take effect at once
+    // instead of up to 15s later.
+    await _writeHostText('app-open.txt', '0');
+  }
+
+  static Future<void> _beat() => _writeHostText(
+      'app-open.txt', (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString());
+}
 
 Future<void> _writeHostFlag(String name, bool on) =>
     _writeHostText(name, on ? '1' : '0');

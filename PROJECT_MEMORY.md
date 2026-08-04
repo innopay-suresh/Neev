@@ -393,6 +393,21 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **KP-WHENOPEN — FIXED r128 (pending hardware verify).** Interactive Access
+  "Only while the app is open" behaved exactly like "always": the headless
+  transport could not observe the app window, so `interactiveAllowed()` admitted
+  everything while the UI promised "Requests are ignored when the app is
+  closed". The app now writes a HEARTBEAT (`app-open.txt`, refreshed every 5s)
+  and the transport treats anything older than 15s as closed. A heartbeat, not a
+  create/delete flag: a crashed or force-quit app never deletes anything, and a
+  stale flag would hold the door open forever. Refusal is the correct failure
+  direction — the host chose to be reachable only while at the app.
+  Also: refused viewers now receive a bye with a stable reason token
+  (`interactive_disabled`, `consent_denied`) instead of sitting on a spinner
+  until timeout and blaming the network. The viewer stops auto-reconnecting on a
+  refusal — re-dialling a decision means repeated consent popups at someone who
+  already said no.
+
 - **KP-VOICE — PARTLY CLOSED in r126 (pending hardware verify).** The Go
   transport now carries a PCMU audio track, capture/playback live in the worker,
   and the host has a "Mic on/off" button on the Windows session bar. Still open:
@@ -404,6 +419,21 @@ hardware-confirmed intact.
   with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
   Still unverified on hardware: the TCC prompt itself, and audio over a real
   session. Original entry follows.
+
+- **KP-WHENOPEN — FIXED r128 (pending hardware verify).** Interactive Access
+  "Only while the app is open" behaved exactly like "always": the headless
+  transport could not observe the app window, so `interactiveAllowed()` admitted
+  everything while the UI promised "Requests are ignored when the app is
+  closed". The app now writes a HEARTBEAT (`app-open.txt`, refreshed every 5s)
+  and the transport treats anything older than 15s as closed. A heartbeat, not a
+  create/delete flag: a crashed or force-quit app never deletes anything, and a
+  stale flag would hold the door open forever. Refusal is the correct failure
+  direction — the host chose to be reachable only while at the app.
+  Also: refused viewers now receive a bye with a stable reason token
+  (`interactive_disabled`, `consent_denied`) instead of sitting on a spinner
+  until timeout and blaming the network. The viewer stops auto-reconnecting on a
+  refusal — re-dialling a decision means repeated consent popups at someone who
+  already said no.
 
 - **KP-VOICE (as filed at r125) — in-session voice does not work against a
   TransportMode host.** The Flutter host/viewer path carries two-way audio, but a
