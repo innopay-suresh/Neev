@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/gen2brain/malgo"
@@ -38,6 +39,8 @@ type Device struct {
 	playCap  int
 	playing  bool
 	overruns int
+	lastPlay time.Time
+	stopIdle chan struct{}
 }
 
 // NewDevice prepares an audio context without opening any device.
@@ -75,11 +78,10 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 			d.mu.Lock()
 			cb := d.onCaptured
 			d.mu.Unlock()
-			if cb == nil || frames == 0 || len(in) < int(frames)*2 {
+			if cb == nil || frames == 0 || len(in) < 2 {
 				return
 			}
-			pcm := unsafe.Slice((*int16)(unsafe.Pointer(&in[0])), frames)
-			cb(EncodeFrame(pcm))
+			cb(EncodeFrame(downmix(in, int(frames))))
 		},
 	})
 	if err != nil {
@@ -123,11 +125,10 @@ func (d *Device) StartLoopback(fn func([]byte)) error {
 
 	dev, err := malgo.InitDevice(d.ctx.Context, cfg, malgo.DeviceCallbacks{
 		Data: func(_, in []byte, frames uint32) {
-			if frames == 0 || len(in) < int(frames)*2 {
+			if frames == 0 || len(in) < 2 {
 				return
 			}
-			pcm := unsafe.Slice((*int16)(unsafe.Pointer(&in[0])), frames)
-			fn(EncodeFrame(pcm))
+			fn(EncodeFrame(downmix(in, int(frames))))
 		},
 	})
 	if err != nil {
@@ -154,6 +155,33 @@ func (d *Device) StopLoopback() {
 	_ = dev.Stop()
 	dev.Uninit()
 	log.Info().Msg("audio: system sound capture closed")
+}
+
+// downmix converts an interleaved int16 capture buffer to mono samples.
+//
+// Derives the channel count from the buffer itself rather than trusting the
+// requested config: miniaudio may open a device with more channels than asked
+// for, and reading only the first N samples would take one channel's worth of a
+// stereo stream and mangle the timing of everything after it.
+func downmix(in []byte, frames int) []int16 {
+	total := len(in) / 2
+	if total == 0 || frames == 0 {
+		return nil
+	}
+	src := unsafe.Slice((*int16)(unsafe.Pointer(&in[0])), total)
+	ch := total / frames
+	if ch <= 1 {
+		return src[:frames]
+	}
+	out := make([]int16, frames)
+	for f := 0; f < frames; f++ {
+		sum := 0
+		for c := 0; c < ch; c++ {
+			sum += int(src[f*ch+c])
+		}
+		out[f] = int16(sum / ch)
+	}
+	return out
 }
 
 // StopCapture closes the microphone and releases it back to the OS.
@@ -198,7 +226,57 @@ func (d *Device) Play(mu []byte) {
 		}
 	}
 	d.playBuf = append(d.playBuf, mu...)
+	d.lastPlay = time.Now()
 	d.mu.Unlock()
+}
+
+// playIdleTimeout is how long the speakers stay open with nothing to play.
+//
+// Holding an output device open indefinitely means any driver-level artifact
+// keeps sounding long after the audio stopped — which is how a hiss could be
+// heard with the microphone muted and nobody speaking. Releasing it makes
+// silence actually silent.
+const playIdleTimeout = 3 * time.Second
+
+// watchPlaybackIdle closes the output device once nothing has been played for
+// playIdleTimeout. It reopens by itself on the next frame.
+func (d *Device) watchPlaybackIdle(stop chan struct{}) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			d.mu.Lock()
+			idle := d.playing && !d.lastPlay.IsZero() &&
+				time.Since(d.lastPlay) > playIdleTimeout && len(d.playBuf) == 0
+			d.mu.Unlock()
+			if idle {
+				d.stopPlayback()
+				return
+			}
+		}
+	}
+}
+
+// stopPlayback closes the output device, leaving it to reopen on demand.
+func (d *Device) stopPlayback() {
+	d.mu.Lock()
+	dev := d.play
+	d.play = nil
+	d.playing = false
+	d.playBuf = nil
+	if d.stopIdle != nil {
+		close(d.stopIdle)
+		d.stopIdle = nil
+	}
+	d.mu.Unlock()
+	if dev != nil {
+		_ = dev.Stop()
+		dev.Uninit()
+		log.Info().Msg("audio: speakers released (idle)")
+	}
 }
 
 func (d *Device) startPlayback() error {
@@ -218,11 +296,28 @@ func (d *Device) startPlayback() error {
 
 	dev, err := malgo.InitDevice(d.ctx.Context, cfg, malgo.DeviceCallbacks{
 		Data: func(out, _ []byte, frames uint32) {
-			want := int(frames)
-			pcm := unsafe.Slice((*int16)(unsafe.Pointer(&out[0])), want)
+			if len(out) < 2 {
+				return
+			}
+			// Size everything from the ACTUAL buffer, never from an assumed
+			// channel count. This callback used to write frames samples into a
+			// buffer that may hold frames*channels — on a device opened as
+			// stereo that filled half of it and left the rest as whatever was
+			// in memory, played as a continuous static/shutter noise that had
+			// nothing to do with the microphone and did not stop when it was
+			// muted.
+			total := len(out) / 2 // int16 samples across all channels
+			ch := 1
+			if frames > 0 {
+				if c := total / int(frames); c > 0 {
+					ch = c
+				}
+			}
+			pcm := unsafe.Slice((*int16)(unsafe.Pointer(&out[0])), total)
 
+			wantFrames := total / ch
 			d.mu.Lock()
-			n := want
+			n := wantFrames
 			if len(d.playBuf) < n {
 				n = len(d.playBuf)
 			}
@@ -231,13 +326,16 @@ func (d *Device) startPlayback() error {
 			d.playBuf = d.playBuf[n:]
 			d.mu.Unlock()
 
-			for i := 0; i < n; i++ {
-				pcm[i] = DecodeMuLaw(chunk[i])
+			// Decode one mono sample per frame and write it to EVERY channel.
+			for f := 0; f < n; f++ {
+				v := DecodeMuLaw(chunk[f])
+				for c := 0; c < ch; c++ {
+					pcm[f*ch+c] = v
+				}
 			}
-			// Underrun: write SILENCE rather than leaving the buffer as it was.
-			// Stale samples would be replayed as a buzz, which is far more
-			// noticeable than a gap.
-			for i := n; i < want; i++ {
+			// Underrun: silence the REST OF THE BUFFER, all channels. Leaving
+			// any of it untouched replays stale memory as a buzz.
+			for i := n * ch; i < total; i++ {
 				pcm[i] = 0
 			}
 		},
@@ -255,9 +353,13 @@ func (d *Device) startPlayback() error {
 		d.mu.Unlock()
 		return fmt.Errorf("start speakers: %w", err)
 	}
+	stop := make(chan struct{})
 	d.mu.Lock()
 	d.play = dev
+	d.lastPlay = time.Now()
+	d.stopIdle = stop
 	d.mu.Unlock()
+	go d.watchPlaybackIdle(stop)
 	log.Info().Msg("audio: speakers opened")
 	return nil
 }
@@ -266,20 +368,12 @@ func (d *Device) startPlayback() error {
 func (d *Device) Close() {
 	d.StopCapture()
 	d.StopLoopback()
+	d.stopPlayback()
 
 	d.mu.Lock()
-	dev := d.play
-	d.play = nil
-	d.playing = false
-	d.playBuf = nil
 	ctx := d.ctx
 	d.ctx = nil
 	d.mu.Unlock()
-
-	if dev != nil {
-		_ = dev.Stop()
-		dev.Uninit()
-	}
 	if ctx != nil {
 		_ = ctx.Uninit()
 		ctx.Free()
