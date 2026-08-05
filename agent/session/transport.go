@@ -983,8 +983,20 @@ func (t *Transport) refuse(viewer, reason string) {
 // deliberately no jitter buffer here — that belongs next to the output device
 // in the worker, where the playback clock actually lives.
 func (t *Transport) pumpViewerVoice(ctx context.Context, track *webrtc.TrackRemote) {
+	// Only packets in the NEGOTIATED voice codec are audio.
+	//
+	// A browser/libwebrtc sender negotiates more than PCMU on this track: it
+	// also carries CN (comfort noise, PT 13) and telephone-event. When the
+	// viewer's microphone is muted or simply silent, it STOPS sending PCMU and
+	// sends CN instead — a couple of bytes describing a noise level, not audio
+	// samples. Those arrive on the same SSRC and used to be forwarded to the
+	// speakers and decoded as mu-law, which is noise by construction: audible
+	// with the microphone off, on both machines, unrelated to anyone speaking.
+	wantPT := uint8(track.PayloadType())
+
 	buf := make([]byte, 1500)
 	first := true
+	warnedPT := false
 	for {
 		if ctx.Err() != nil {
 			return
@@ -998,7 +1010,18 @@ func (t *Transport) pumpViewerVoice(ctx context.Context, track *webrtc.TrackRemo
 		if err := pkt.Unmarshal(buf[:n]); err != nil {
 			continue
 		}
-		if len(pkt.Payload) == 0 {
+		if pkt.PayloadType != wantPT {
+			// Never decode it, never play it. Logged once so a codec the viewer
+			// starts sending in future is visible rather than silent.
+			if !warnedPT {
+				warnedPT = true
+				log.Info().Uint8("got", pkt.PayloadType).Uint8("want", wantPT).
+					Msg("transport: ignoring non-voice packets on the audio track (comfort noise / events)")
+			}
+			continue
+		}
+		// Padding bytes are not samples either.
+		if pkt.Padding || len(pkt.Payload) == 0 {
 			continue
 		}
 		// Log the FIRST packet only. Viewer→host voice failing silently is hard
@@ -1006,7 +1029,7 @@ func (t *Transport) pumpViewerVoice(ctx context.Context, track *webrtc.TrackRemo
 		// reached the host turns a guessing game into a lookup.
 		if first {
 			first = false
-			log.Info().Str("codec", track.Codec().MimeType).
+			log.Info().Str("codec", track.Codec().MimeType).Uint8("pt", wantPT).
 				Msg("transport: viewer voice is arriving — forwarding to the worker for playback")
 		}
 		t.sendToWorker(ipc.KindAudioPlay, pkt.Payload)

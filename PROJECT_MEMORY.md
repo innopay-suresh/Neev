@@ -31,6 +31,22 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-AUDIO-1 — never decode an RTP packet without checking its PAYLOAD TYPE.**
+  A voice track carries more than the negotiated codec: libwebrtc also sends CN
+  (comfort noise, PT 13) and telephone-event on the SAME SSRC, and switches to
+  CN whenever the microphone is muted or silent. `pumpViewerVoice` forwarded
+  every payload to the speakers as mu-law, so CN bytes were decoded as audio —
+  noise BY CONSTRUCTION, audible with the mic off, on both machines, unrelated
+  to speech. Filter on `track.PayloadType()`; drop padding too.
+- **LD-AUDIO-2 — miniaudio already converts between client and hardware format.**
+  `channels/format/rate` in the "device opened" log are the CLIENT side;
+  `hw_*` are the internal device side, bridged by miniaudio's `ma_data_converter`.
+  A mismatch between them is normal and must NOT be "fixed" with a second
+  conversion layer — that double-converts. The one value that is NOT converted
+  is the rate you request: asking for 8 kHz makes miniaudio run the HARDWARE at
+  8 kHz (see r140). Open devices at a rate hardware supports and convert in code.
+
+
 - **LD-1 — The transport connection lives in a user-session process, so it
   cannot survive a user switch.** A user switch destroys the session and tears
   the Flutter host (and its WebRTC transport) down → disconnect. True seamless

@@ -51,10 +51,12 @@ func NewDevice() (*Device, error) {
 	}
 	return &Device{
 		ctx: ctx,
-		// ~400 ms of mu-law at 8 kHz. Enough to ride out normal jitter, small
-		// enough that a stall is heard as a glitch and not as the whole
-		// conversation sliding out of sync.
-		playCap: SampleRate * 2 / 5,
+		// ~600 ms of mu-law at 8 kHz, a whole number of 20 ms frames. Enough to
+		// ride out normal jitter and a device that opens slowly (the first
+		// packets used to overrun immediately on open), small enough that a
+		// stall is heard as a glitch rather than the whole conversation sliding
+		// out of sync.
+		playCap: SamplesPerFrame * 30,
 	}, nil
 }
 
@@ -255,8 +257,15 @@ func (d *Device) Play(mu []byte) {
 	}
 	// Drop the OLDEST audio on overrun. Keeping the newest is what preserves
 	// conversational timing; keeping the oldest would play an ever-later echo.
+	//
+	// Dropped in WHOLE 20 ms frames: cutting mid-frame leaves a partial packet
+	// whose samples resume halfway through a waveform, which is heard as a click
+	// on top of whatever was already going wrong.
 	if len(d.playBuf)+len(mu) > d.playCap {
 		drop := len(d.playBuf) + len(mu) - d.playCap
+		if r := drop % SamplesPerFrame; r != 0 {
+			drop += SamplesPerFrame - r // round up to a frame boundary
+		}
 		if drop > len(d.playBuf) {
 			drop = len(d.playBuf)
 		}
