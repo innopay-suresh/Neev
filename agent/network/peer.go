@@ -242,7 +242,11 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 			Str("mode", string(p.GetConnectionMode())).
 			Msg("ICE candidate gathered")
 
-		// Forward to remote peer.
+		// Forward to remote peer. Guarded because tests build a Peer with no
+		// signaling client and wire the two ends together directly.
+		if sigClient == nil {
+			return
+		}
 		payload, _ := json.Marshal(c.ToJSON())
 		_ = sigClient.Send(Message{Type: MsgCandidate, To: peerID, Payload: payload})
 	})
@@ -299,15 +303,23 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 		}
 	})
 
-	// Remote track (controller receives video).
-	if role == RoleController {
-		pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-			log.Info().Str("kind", track.Kind().String()).Msg("remote track received")
-			if p.OnTrack != nil {
-				p.OnTrack(track, receiver)
-			}
-		})
-	}
+	// Remote tracks, for BOTH roles.
+	//
+	// This used to be registered only for RoleController, on the assumption
+	// that just the viewer receives media. That stopped being true when voice
+	// was added: the AGENT now has to receive the viewer's microphone. With the
+	// handler gated behind the role, pion never delivered an incoming track to
+	// the agent at all, so the transport's OnTrack callback was dead code and
+	// viewer→host audio could not work no matter what the SDP negotiated —
+	// which is exactly how it presented: host→viewer fine, the reverse silent,
+	// with a healthy-looking sendrecv channel at both ends.
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		log.Info().Str("kind", track.Kind().String()).
+			Str("codec", track.Codec().MimeType).Msg("remote track received")
+		if p.OnTrack != nil {
+			p.OnTrack(track, receiver)
+		}
+	})
 
 	// DataChannel (agent receives control events).
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {

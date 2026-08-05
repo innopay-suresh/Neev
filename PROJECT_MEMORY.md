@@ -393,6 +393,17 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **r137 — the ACTUAL cause of silent viewer→host voice.** `pc.OnTrack` in
+  `agent/network/peer.go` was registered only `if role == RoleController`. The
+  host is RoleAgent, so pion never delivered an incoming track to it and
+  `transport.go`'s `peer.OnTrack` assignment was DEAD CODE. No SDP change could
+  have fixed it. Proven by host logs: `audio track added ... codec=audio/PCMU`
+  present, `viewer opened a voice track` absent. Regression test connects two
+  real pion peers and asserts a RoleAgent peer receives an audio track.
+  r134/r135 (direction + mid matching) were still necessary but were fixes at
+  the wrong layer — the lesson is that "host→viewer works, reverse silent"
+  points at the RECEIVING side, and I spent two releases on the sender.
+
 - **r134 — viewer→host voice was NEVER working (fixed).** Host→viewer worked,
   so voice looked fine. The viewer adopted the offered audio transceiver and
   took its sender, but never set its DIRECTION — with no mic attached at answer
@@ -489,6 +500,17 @@ hardware-confirmed intact.
   with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
   Still unverified on hardware: the TCC prompt itself, and audio over a real
   session. Original entry follows.
+
+- **r137 — the ACTUAL cause of silent viewer→host voice.** `pc.OnTrack` in
+  `agent/network/peer.go` was registered only `if role == RoleController`. The
+  host is RoleAgent, so pion never delivered an incoming track to it and
+  `transport.go`'s `peer.OnTrack` assignment was DEAD CODE. No SDP change could
+  have fixed it. Proven by host logs: `audio track added ... codec=audio/PCMU`
+  present, `viewer opened a voice track` absent. Regression test connects two
+  real pion peers and asserts a RoleAgent peer receives an audio track.
+  r134/r135 (direction + mid matching) were still necessary but were fixes at
+  the wrong layer — the lesson is that "host→viewer works, reverse silent"
+  points at the RECEIVING side, and I spent two releases on the sender.
 
 - **r134 — viewer→host voice was NEVER working (fixed).** Host→viewer worked,
   so voice looked fine. The viewer adopted the offered audio transceiver and
