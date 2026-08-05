@@ -92,7 +92,7 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 		return fmt.Errorf("start microphone: %w", err)
 	}
 	d.capture = dev
-	log.Info().Msg("audio: microphone opened")
+	logDeviceFormat("microphone", dev, false)
 	return nil
 }
 
@@ -139,7 +139,7 @@ func (d *Device) StartLoopback(fn func([]byte)) error {
 		return fmt.Errorf("start system sound: %w", err)
 	}
 	d.loopback = dev
-	log.Info().Msg("audio: system sound capture opened")
+	logDeviceFormat("system-sound", dev, false)
 	return nil
 }
 
@@ -157,6 +157,33 @@ func (d *Device) StopLoopback() {
 	log.Info().Msg("audio: system sound capture closed")
 }
 
+// logDeviceFormat records what the device ACTUALLY opened as, not what was
+// asked for.
+//
+// Every audio bug in this feature so far has come from the gap between the two:
+// a requested mono/8 kHz device that opens as something else makes each
+// callback buffer a different shape than the code assumes, and the result is
+// played as noise with no error anywhere. The INTERNAL rate and channel count
+// are logged too, because that is the hardware side of miniaudio's converter
+// and where a resampler problem would show.
+func logDeviceFormat(what string, dev *malgo.Device, playback bool) {
+	e := log.Info().Str("device", what).Uint32("rate", dev.SampleRate())
+	if playback {
+		e = e.Int("format", int(dev.PlaybackFormat())).
+			Uint32("channels", dev.PlaybackChannels()).
+			Uint32("hw_rate", dev.PlaybackInternalSampleRate()).
+			Uint32("hw_channels", dev.PlaybackInternalChannels()).
+			Int("hw_format", int(dev.PlaybackInternalFormat()))
+	} else {
+		e = e.Int("format", int(dev.CaptureFormat())).
+			Uint32("channels", dev.CaptureChannels()).
+			Uint32("hw_rate", dev.CaptureInternalSampleRate()).
+			Uint32("hw_channels", dev.CaptureInternalChannels()).
+			Int("hw_format", int(dev.CaptureInternalFormat()))
+	}
+	e.Msg("audio: device opened")
+}
+
 // downmix converts an interleaved int16 capture buffer to mono samples.
 //
 // Derives the channel count from the buffer itself rather than trusting the
@@ -171,6 +198,12 @@ func downmix(in []byte, frames int) []int16 {
 	src := unsafe.Slice((*int16)(unsafe.Pointer(&in[0])), total)
 	ch := total / frames
 	if ch <= 1 {
+		// The device reported more frames than the buffer holds. Return only
+		// what is really there — slicing to `frames` would read past the end,
+		// which is unbounded garbage, not merely wrong audio.
+		if frames > total {
+			return src[:total]
+		}
 		return src[:frames]
 	}
 	out := make([]int16, frames)
@@ -360,7 +393,7 @@ func (d *Device) startPlayback() error {
 	d.stopIdle = stop
 	d.mu.Unlock()
 	go d.watchPlaybackIdle(stop)
-	log.Info().Msg("audio: speakers opened")
+	logDeviceFormat("speakers", dev, true)
 	return nil
 }
 
