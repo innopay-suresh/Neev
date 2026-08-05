@@ -393,6 +393,20 @@ hardware-confirmed intact.
 
 ## Known Problems (open)
 
+- **r140 — the static was the DEVICE RATE.** Found from r139's diagnostics:
+  `audio: device opened ... hw_rate=8000` on speakers, microphone AND loopback,
+  on both machines. Setting `cfg.SampleRate = 8000` makes miniaudio run the
+  HARDWARE at 8 kHz; Windows endpoints run at their mix-format rate and almost
+  none support 8 kHz natively, so every device was being driven at a rate it
+  could not do — continuous static regardless of speech or mute state. Devices
+  now open at `DeviceRate` (48 kHz, universally supported) and the 8 kHz wire
+  conversion happens in `audio.Downsample` / `audio.Upsample`. Downsampling
+  AVERAGES (plain decimation aliases into a metallic warble); upsampling
+  INTERPOLATES (sample-and-hold is broadband noise on top of the voice).
+  Earlier attempts r138 (stereo buffer shape, idle release) and the r139
+  overrun guard were real bugs but not this one — guessing failed twice, the
+  log line settled it immediately.
+
 - **r137 — the ACTUAL cause of silent viewer→host voice.** `pc.OnTrack` in
   `agent/network/peer.go` was registered only `if role == RoleController`. The
   host is RoleAgent, so pion never delivered an incoming track to it and
@@ -500,6 +514,20 @@ hardware-confirmed intact.
   with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
   Still unverified on hardware: the TCC prompt itself, and audio over a real
   session. Original entry follows.
+
+- **r140 — the static was the DEVICE RATE.** Found from r139's diagnostics:
+  `audio: device opened ... hw_rate=8000` on speakers, microphone AND loopback,
+  on both machines. Setting `cfg.SampleRate = 8000` makes miniaudio run the
+  HARDWARE at 8 kHz; Windows endpoints run at their mix-format rate and almost
+  none support 8 kHz natively, so every device was being driven at a rate it
+  could not do — continuous static regardless of speech or mute state. Devices
+  now open at `DeviceRate` (48 kHz, universally supported) and the 8 kHz wire
+  conversion happens in `audio.Downsample` / `audio.Upsample`. Downsampling
+  AVERAGES (plain decimation aliases into a metallic warble); upsampling
+  INTERPOLATES (sample-and-hold is broadband noise on top of the voice).
+  Earlier attempts r138 (stereo buffer shape, idle release) and the r139
+  overrun guard were real bugs but not this one — guessing failed twice, the
+  log line settled it immediately.
 
 - **r137 — the ACTUAL cause of silent viewer→host voice.** `pc.OnTrack` in
   `agent/network/peer.go` was registered only `if role == RoleController`. The

@@ -70,8 +70,9 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 	cfg := malgo.DefaultDeviceConfig(malgo.Capture)
 	cfg.Capture.Format = malgo.FormatS16
 	cfg.Capture.Channels = Channels
-	cfg.SampleRate = SampleRate
-	cfg.PeriodSizeInFrames = SamplesPerFrame
+	// Open the hardware at a rate it actually supports; convert to 8 kHz below.
+	cfg.SampleRate = DeviceRate
+	cfg.PeriodSizeInFrames = DeviceFrames
 
 	dev, err := malgo.InitDevice(d.ctx.Context, cfg, malgo.DeviceCallbacks{
 		Data: func(_, in []byte, frames uint32) {
@@ -81,7 +82,11 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 			if cb == nil || frames == 0 || len(in) < 2 {
 				return
 			}
-			cb(EncodeFrame(downmix(in, int(frames))))
+			mono := Downsample(downmix(in, int(frames)))
+			if len(mono) == 0 {
+				return
+			}
+			cb(EncodeFrame(mono))
 		},
 	})
 	if err != nil {
@@ -120,15 +125,19 @@ func (d *Device) StartLoopback(fn func([]byte)) error {
 	cfg := malgo.DefaultDeviceConfig(malgo.Loopback)
 	cfg.Capture.Format = malgo.FormatS16
 	cfg.Capture.Channels = Channels
-	cfg.SampleRate = SampleRate
-	cfg.PeriodSizeInFrames = SamplesPerFrame
+	cfg.SampleRate = DeviceRate
+	cfg.PeriodSizeInFrames = DeviceFrames
 
 	dev, err := malgo.InitDevice(d.ctx.Context, cfg, malgo.DeviceCallbacks{
 		Data: func(_, in []byte, frames uint32) {
 			if frames == 0 || len(in) < 2 {
 				return
 			}
-			fn(EncodeFrame(downmix(in, int(frames))))
+			mono := Downsample(downmix(in, int(frames)))
+			if len(mono) == 0 {
+				return
+			}
+			fn(EncodeFrame(mono))
 		},
 	})
 	if err != nil {
@@ -324,8 +333,8 @@ func (d *Device) startPlayback() error {
 	cfg := malgo.DefaultDeviceConfig(malgo.Playback)
 	cfg.Playback.Format = malgo.FormatS16
 	cfg.Playback.Channels = Channels
-	cfg.SampleRate = SampleRate
-	cfg.PeriodSizeInFrames = SamplesPerFrame
+	cfg.SampleRate = DeviceRate
+	cfg.PeriodSizeInFrames = DeviceFrames
 
 	dev, err := malgo.InitDevice(d.ctx.Context, cfg, malgo.DeviceCallbacks{
 		Data: func(out, _ []byte, frames uint32) {
@@ -349,8 +358,11 @@ func (d *Device) startPlayback() error {
 			pcm := unsafe.Slice((*int16)(unsafe.Pointer(&out[0])), total)
 
 			wantFrames := total / ch
+			// The device runs at DeviceRate; the buffer holds 8 kHz mu-law.
+			wantWire := wantFrames / Decim
+
 			d.mu.Lock()
-			n := wantFrames
+			n := wantWire
 			if len(d.playBuf) < n {
 				n = len(d.playBuf)
 			}
@@ -359,16 +371,23 @@ func (d *Device) startPlayback() error {
 			d.playBuf = d.playBuf[n:]
 			d.mu.Unlock()
 
-			// Decode one mono sample per frame and write it to EVERY channel.
-			for f := 0; f < n; f++ {
-				v := DecodeMuLaw(chunk[f])
+			// Decode to 8 kHz PCM, interpolate up to the device rate, then
+			// write each sample to EVERY channel.
+			wire := make([]int16, n)
+			for i := 0; i < n; i++ {
+				wire[i] = DecodeMuLaw(chunk[i])
+			}
+			up := Upsample(wire)
+			written := 0
+			for f := 0; f < len(up) && f < wantFrames; f++ {
 				for c := 0; c < ch; c++ {
-					pcm[f*ch+c] = v
+					pcm[f*ch+c] = up[f]
 				}
+				written = f + 1
 			}
 			// Underrun: silence the REST OF THE BUFFER, all channels. Leaving
 			// any of it untouched replays stale memory as a buzz.
-			for i := n * ch; i < total; i++ {
+			for i := written * ch; i < total; i++ {
 				pcm[i] = 0
 			}
 		},

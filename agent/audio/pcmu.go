@@ -27,7 +27,72 @@ const (
 	FrameMillis = 20
 	// SamplesPerFrame is how many PCM samples make up one RTP packet.
 	SamplesPerFrame = SampleRate * FrameMillis / 1000 // 160
+
+	// DeviceRate is the rate the audio HARDWARE is opened at.
+	//
+	// NOT SampleRate. Asking a device for 8 kHz makes miniaudio run the device
+	// itself at 8 kHz — the logs showed hw_rate=8000 on speakers, microphone and
+	// loopback alike — and Windows endpoints run at their mix-format rate, with
+	// almost none supporting 8 kHz natively. Driving them at a rate they cannot
+	// really do produced continuous static on every device on both machines.
+	//
+	// 48 kHz is supported everywhere, so the device runs where it is happy and
+	// the 8 kHz conversion happens here, in code we control and can test.
+	DeviceRate = 48000
+
+	// DeviceFrames is one 20 ms period at DeviceRate.
+	DeviceFrames = DeviceRate * FrameMillis / 1000 // 960
+
+	// Decim is how many device samples make one wire sample.
+	Decim = DeviceRate / SampleRate // 6
 )
+
+// Downsample converts DeviceRate mono PCM to SampleRate by averaging each group
+// of Decim samples.
+//
+// Averaged rather than picking every Nth sample: plain decimation folds
+// everything above 4 kHz back into the audible band as aliasing, heard as a
+// metallic warble on speech. The same reasoning as the macOS helper's
+// ScreenCaptureKit path, which does this in Swift.
+func Downsample(pcm []int16) []int16 {
+	n := len(pcm) / Decim
+	if n == 0 {
+		return nil
+	}
+	out := make([]int16, n)
+	for i := 0; i < n; i++ {
+		sum := 0
+		for j := 0; j < Decim; j++ {
+			sum += int(pcm[i*Decim+j])
+		}
+		out[i] = int16(sum / Decim)
+	}
+	return out
+}
+
+// Upsample converts SampleRate mono PCM up to DeviceRate by linear
+// interpolation between neighbouring samples.
+//
+// Interpolated rather than each sample repeated Decim times: sample-and-hold
+// creates hard steps between values, which is broadband noise sitting right on
+// top of the voice.
+func Upsample(pcm []int16) []int16 {
+	if len(pcm) == 0 {
+		return nil
+	}
+	out := make([]int16, len(pcm)*Decim)
+	for i := range pcm {
+		cur := int(pcm[i])
+		next := cur
+		if i+1 < len(pcm) {
+			next = int(pcm[i+1])
+		}
+		for j := 0; j < Decim; j++ {
+			out[i*Decim+j] = int16(cur + (next-cur)*j/Decim)
+		}
+	}
+	return out
+}
 
 // muLawBias and muLawClip come from the G.711 definition.
 const (
