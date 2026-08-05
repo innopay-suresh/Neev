@@ -41,12 +41,12 @@ const (
 	MsgCandidate MessageType = "candidate" // ICE candidate (either direction)
 
 	// Server → client (control messages)
-	MsgRegistered MessageType = "registered"  // response to register, carries assigned ID
-	MsgClientCert MessageType = "client_cert" // server pushes a new client cert bundle
-	MsgPeers      MessageType = "peers"       // response to discover: same-network hosts
+	MsgRegistered     MessageType = "registered"      // response to register, carries assigned ID
+	MsgClientCert     MessageType = "client_cert"     // server pushes a new client cert bundle
+	MsgPeers          MessageType = "peers"           // response to discover: same-network hosts
 	MsgPresenceResult MessageType = "presence_result" // which of the asked-for ids are online
-	MsgError      MessageType = "error"
-	MsgBye        MessageType = "bye" // session ended
+	MsgError          MessageType = "error"
+	MsgBye            MessageType = "bye" // session ended
 
 	// Custom alias / namespace (roadmap Phase 3)
 	MsgSetAlias      MessageType = "set_alias"      // agent claims a human-readable name
@@ -140,7 +140,7 @@ type Hub struct {
 	clientCA *serverauth.ClientCA
 
 	// Brute-force protection: TargetID -> failed attempts
-	failCount map[string]int
+	failCount map[string]failRecord
 	failMutex sync.Mutex
 }
 
@@ -151,7 +151,7 @@ func NewHub(registry *session.Registry, cfg *config.Config, clientCA *serverauth
 		registry:  registry,
 		cfg:       cfg,
 		clientCA:  clientCA,
-		failCount: make(map[string]int),
+		failCount: make(map[string]failRecord),
 	}
 }
 
@@ -551,10 +551,20 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	}
 
 	h.failMutex.Lock()
-	fails := h.failCount[payload.TargetID]
+	rec := h.failCount[payload.TargetID]
+	// Failures EXPIRE. Without this the counter only ever reset on a correct
+	// password — but the check below runs BEFORE the password is verified, so
+	// once a target reached 5 failures nothing could ever clear it and that
+	// machine became permanently unreachable until the relay restarted. A stale
+	// saved password was enough to brick a device for good.
+	if !rec.last.IsZero() && time.Since(rec.last) > failWindow {
+		rec = failRecord{}
+		delete(h.failCount, payload.TargetID)
+	}
+	locked := rec.count >= maxConnectFails && time.Since(rec.last) < lockoutFor
 	h.failMutex.Unlock()
 
-	if fails >= 5 {
+	if locked {
 		_ = h.registry.AddAuditEvent(ctx, &session.AuditEvent{
 			Type:    "session.connect",
 			Actor:   cli.agentID,
@@ -563,9 +573,11 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 			IP:      cli.conn.RemoteAddr().String(),
 			Details: map[string]any{"reason": "too_many_failed_attempts"},
 		})
-		_ = cli.send(errMsg("too many failed attempts. Try again later."))
-		// Exponential backoff or simple lockout could be added here
-		time.Sleep(2 * time.Second)
+		wait := int((lockoutFor - time.Since(rec.last)).Seconds()) + 1
+		// Say HOW LONG. "Try again later" with no number, on a lockout that in
+		// practice never ended, gave the user nothing to act on.
+		_ = cli.send(errMsg(fmt.Sprintf(
+			"too many failed attempts — try again in %d seconds", wait)))
 		return
 	}
 
@@ -601,7 +613,10 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	}
 	if err != nil || !ok {
 		h.failMutex.Lock()
-		h.failCount[payload.TargetID]++
+		r := h.failCount[payload.TargetID]
+		r.count++
+		r.last = time.Now()
+		h.failCount[payload.TargetID] = r
 		h.failMutex.Unlock()
 		log.Warn().Str("target", payload.TargetID).Str("ip", cli.conn.RemoteAddr().String()).Msg("invalid password attempt")
 		_ = h.registry.AddAuditEvent(ctx, &session.AuditEvent{
@@ -753,6 +768,25 @@ func (h *Hub) handleDiscover(cli *client) {
 // so an uncapped query would let a caller sweep the id space for live machines;
 // this keeps a request to the size of a real address book.
 const maxPresenceIDs = 200
+
+// Connect rate limiting.
+const (
+	// maxConnectFails is how many bad passwords trip the lockout.
+	maxConnectFails = 5
+	// lockoutFor is how long a tripped target refuses connects. Long enough to
+	// make guessing impractical, short enough that a user who fixed their
+	// password is not stuck waiting.
+	lockoutFor = 60 * time.Second
+	// failWindow forgets old failures entirely, so occasional typos spread over
+	// a long session never accumulate into a lockout.
+	failWindow = 10 * time.Minute
+)
+
+// failRecord tracks failed connect attempts for one target.
+type failRecord struct {
+	count int
+	last  time.Time
+}
 
 // handlePresence answers "which of these ids are online?" for ids the caller
 // already knows. Unlike discovery it is not limited to the caller's public IP —

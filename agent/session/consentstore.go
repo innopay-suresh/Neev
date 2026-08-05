@@ -71,14 +71,42 @@ func loadConsentDecisions() map[string]consentDecision {
 	if err != nil {
 		return consentCache // no file yet — nothing remembered
 	}
-	var m map[string]consentDecision
-	if err := json.Unmarshal(data, &m); err != nil {
-		// A corrupt file must not wedge every future connection behind a parse
-		// error; start clean and let the next decision rewrite it.
+	// Decode leniently, because an older build wrote a DIFFERENT shape here.
+	//
+	// Before access levels existed this file was {"id": true} — a bare bool. The
+	// struct decode fails on that whole-file, so every remembered decision was
+	// thrown away on upgrade: a host that chose "remember Accept" got prompted
+	// again on every single connection, with only a warning in a log to say why.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		// Genuinely corrupt: start clean rather than wedge every future
+		// connection behind a parse error.
 		log.Warn().Err(err).Msg("worker: consent decisions file unreadable — ignoring it")
 		return consentCache
 	}
-	consentCache = m
+	migrated := 0
+	for id, entry := range raw {
+		var d consentDecision
+		if err := json.Unmarshal(entry, &d); err == nil {
+			consentCache[id] = d
+			continue
+		}
+		var legacy bool
+		if err := json.Unmarshal(entry, &legacy); err == nil {
+			// A remembered decision from before access levels. Grant control:
+			// that is what it meant at the time it was made, and quietly
+			// downgrading someone's remembered Accept to view-only would look
+			// like the product forgetting a setting.
+			consentCache[id] = consentDecision{Allow: legacy, Control: true}
+			migrated++
+			continue
+		}
+		log.Warn().Str("device", id).Msg("worker: skipping an unreadable remembered decision")
+	}
+	if migrated > 0 {
+		log.Info().Int("devices", migrated).
+			Msg("worker: migrated remembered consent decisions from the older format")
+	}
 	return consentCache
 }
 
