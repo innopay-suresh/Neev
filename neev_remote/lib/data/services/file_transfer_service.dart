@@ -56,6 +56,12 @@ class _Incoming {
   // Bytes at the last {t:'prog'} ack we sent back to the sender, so we ack the
   // sender's flow-control window about once per _progInterval (not per chunk).
   int lastProg = 0;
+  /// The sender said it was finished while bytes were still outstanding — its
+  /// control message overtook its own data. Set so the arriving tail knows to
+  /// finalise rather than wait for an 'end' that has already been and gone.
+  bool endSeen = false;
+  /// Bounds that wait, so a genuinely truncated transfer still fails.
+  Timer? tailTimer;
   // Unique destination path, reserved (atomically created) the MOMENT the offer
   // arrives — keyed off this transfer, never a shared/reused path. Because the
   // placeholder exists on disk before the next offer is handled, two rapid
@@ -114,6 +120,13 @@ class FileTransferManager {
   /// clipboard-file cap. Chunks are base64'd per-slice on send, so only the raw
   /// bytes sit in memory; multi-GB streaming-to-disk is a later refinement.
   static const int maxFile = 2 * 1024 * 1024 * 1024;
+
+  /// How long to wait for outstanding bytes after the sender says it finished.
+  ///
+  /// Only reached when the sender's 'end' overtook its own data. Generous
+  /// enough to cover a slow tail on a large file, bounded so a genuinely
+  /// truncated transfer still fails rather than hanging as "receiving" forever.
+  static const Duration _tailGrace = Duration(seconds: 20);
 
   final _uuid = const Uuid();
   final List<FileTransfer> transfers = [];
@@ -312,6 +325,16 @@ class FileTransferManager {
         final bytes = base64Decode(d);
         inc.buf.add(bytes);
         inc.ft.transferred += bytes.length;
+        // The tail of a transfer whose 'end' already overtook it. Finalise as
+        // soon as the offered byte count is complete, rather than waiting out
+        // the grace timer for a file that has fully arrived.
+        if (inc.endSeen && inc.ft.size > 0 && inc.buf.length >= inc.ft.size) {
+          _incoming.remove(id);
+          inc.tailTimer?.cancel();
+          DiagLog.log('ft', 'tail completed id=$id — finishing');
+          _finishIncoming(inc);
+          return;
+        }
         // Drive the SENDER's flow control: ack bytes-received every ~1 MB so it
         // paces to our drain rate instead of dumping the whole file (which
         // overflowed SCTP and killed the session). Cheap control message.
@@ -333,12 +356,38 @@ class FileTransferManager {
         break;
       case 'end':
         DiagLog.log('ft', 'recv end id=$id');
-        final inc = _incoming.remove(id);
-        if (inc != null) {
-          _finishIncoming(inc);
-        } else {
+        final inc = _incoming[id];
+        if (inc == null) {
           DiagLog.log('ft', 'recv end id=$id but NO pending incoming (dropped)');
+          break;
         }
+        // Do NOT finalise on 'end' alone when bytes are still outstanding.
+        //
+        // The sender's control messages and its data can travel independent
+        // priority lanes, so 'end' could arrive ahead of the tail of a large
+        // file. Finalising here wrote a short file and reported an incomplete
+        // transfer — which is how a screen recording, the biggest thing this
+        // moves, failed as a transfer error. Hosts now order 'end' behind the
+        // data, but an older host does not, so wait for the offered byte count
+        // before giving up.
+        if (inc.ft.size > 0 && inc.buf.length < inc.ft.size) {
+          inc.endSeen = true;
+          DiagLog.log('ft',
+              'end arrived early id=$id (${inc.buf.length}/${inc.ft.size}) — '
+              'waiting for the tail');
+          inc.tailTimer?.cancel();
+          inc.tailTimer = Timer(_tailGrace, () {
+            final still = _incoming.remove(id);
+            if (still != null) {
+              DiagLog.log('ft', 'tail never arrived id=$id');
+              _finishIncoming(still); // reports the real shortfall
+            }
+          });
+          break;
+        }
+        _incoming.remove(id);
+        inc.tailTimer?.cancel();
+        _finishIncoming(inc);
         break;
       case 'saved':
         // RECEIVER confirmed a distinct file was fully written. Flip the matching

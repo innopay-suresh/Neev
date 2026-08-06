@@ -31,6 +31,21 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-FT-3 — a transfer ends when its BYTES arrive, not when "end" does.**
+  Control messages and bulk data ride independent IPC priority lanes, so an
+  "end" sent on the hi lane could overtake the tail of a large file still queued
+  on the bulk lane. The receiver finalised early, found fewer bytes than the
+  offer promised, and reported "Incomplete transfer" — which is how a screen
+  RECORDING (the biggest thing this moves, delivered over the same path) failed
+  as a transfer error. Fixed at both ends: the host sends "end" on the BULK lane
+  so it is ordered behind its own data, and the receiver waits for the offered
+  byte count before finalising, with a bounded grace period so a genuinely
+  truncated transfer still fails rather than hanging.
+  NOTE: transfer code is ONE shared Dart implementation with no platform
+  branching — per-transfer-ID tracking already applied to every platform pair.
+  There is no separate Mac path to "extend"; do not build one.
+
+
 - **LD-AUDIO-8 — capture buffers must be REFRAMED before encoding; never
   assume a device period.** Opus encodes an exact frame (960 samples at 48 kHz)
   and rejects anything else. miniaudio's PeriodSizeInFrames is a HINT, and

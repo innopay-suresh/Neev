@@ -2223,12 +2223,57 @@ class _ErrorText extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 
-class _ConnectedSession extends ConsumerWidget {
+class _ConnectedSession extends ConsumerStatefulWidget {
   final RemoteService service;
   const _ConnectedSession({required this.service});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ConnectedSession> createState() => _ConnectedSessionState();
+}
+
+class _ConnectedSessionState extends ConsumerState<_ConnectedSession> {
+  /// The toolbar hides itself so it stops covering the top of the remote
+  /// screen, and comes back when the pointer reaches the top edge — the
+  /// behaviour people already expect from remote-desktop tools.
+  bool _toolbarVisible = true;
+  Timer? _hideTimer;
+
+  /// Long enough to use the toolbar without it vanishing mid-reach, short
+  /// enough that it is out of the way while actually working.
+  static const _idleBeforeHide = Duration(seconds: 4);
+
+  /// The strip at the very top that brings it back. Thin enough not to be hit
+  /// by accident, deep enough to catch a deliberate move to the edge.
+  static const _revealStripHeight = 6.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleHide();
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(_idleBeforeHide, () {
+      if (mounted && _toolbarVisible) setState(() => _toolbarVisible = false);
+    });
+  }
+
+  void _revealToolbar() {
+    if (!mounted) return;
+    if (!_toolbarVisible) setState(() => _toolbarVisible = true);
+    _scheduleHide();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = widget.service;
     // Three ways to end up watching without control, and the HOST's refusal is
     // the one the viewer could not see before: it just clicked into a void.
     final viewOnly = ref.watch(settingsProvider).viewOnly ||
@@ -2241,7 +2286,21 @@ class _ConnectedSession extends ConsumerWidget {
       // taskbar, and the video fills everything below it.
       body: Column(
         children: [
-          _SessionToolbar(service: service),
+          // Collapsed to zero height rather than moved off-screen or faded:
+          // at zero height it occupies no space and cannot intercept a click
+          // meant for the remote screen underneath.
+          MouseRegion(
+            onEnter: (_) => _revealToolbar(),
+            onHover: (_) => _revealToolbar(),
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOut,
+              alignment: Alignment.topCenter,
+              child: _toolbarVisible
+                  ? _SessionToolbar(service: service)
+                  : const SizedBox(width: double.infinity, height: 0),
+            ),
+          ),
           Expanded(
             child: Stack(
               children: [
@@ -2302,6 +2361,22 @@ class _ConnectedSession extends ConsumerWidget {
                       },
                     ),
                   ),
+                // Bring the toolbar back when the pointer reaches the very
+                // top. HitTestBehavior.translucent matters: the strip senses
+                // the pointer but never consumes a click, so dragging or
+                // clicking near the top of the remote screen still reaches it.
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: _revealStripHeight,
+                  child: MouseRegion(
+                    opaque: false,
+                    hitTestBehavior: HitTestBehavior.translucent,
+                    onEnter: (_) => _revealToolbar(),
+                    child: const SizedBox.shrink(),
+                  ),
+                ),
               ],
             ),
           ),

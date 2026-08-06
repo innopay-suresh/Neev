@@ -239,7 +239,15 @@ func (f *fileReceiver) ExportFileStreaming(path string) error {
 			"err": name + " was truncated while sending"})
 		return fmt.Errorf("%s: sent %d of %d bytes", name, sent, size)
 	}
-	f.sendFT(map[string]interface{}{"k": "ft", "t": "end", "id": id})
+	// "end" goes on the BULK lane, with the data — not the hi lane.
+	//
+	// The lanes are independent, so an "end" sent on the hi lane could overtake
+	// the tail of a large file still queued on the bulk lane. The receiver then
+	// finalised early, found fewer bytes than the offer promised, and reported
+	// an incomplete transfer. A session recording is the biggest thing this
+	// sends, so it lost that race most often — a recording failure surfacing as
+	// a transfer error. Ordering it behind the data removes the race at source.
+	f.sendFTBulk(map[string]interface{}{"k": "ft", "t": "end", "id": id})
 	log.Info().Str("name", name).Int64("bytes", sent).
 		Msg("worker: streamed file to viewer")
 	return nil
@@ -296,7 +304,15 @@ func (f *fileReceiver) serveExport() {
 		})
 		seq++
 	}
-	f.sendFT(map[string]interface{}{"k": "ft", "t": "end", "id": id})
+	// "end" goes on the BULK lane, with the data — not the hi lane.
+	//
+	// The lanes are independent, so an "end" sent on the hi lane could overtake
+	// the tail of a large file still queued on the bulk lane. The receiver then
+	// finalised early, found fewer bytes than the offer promised, and reported
+	// an incomplete transfer. A session recording is the biggest thing this
+	// sends, so it lost that race most often — a recording failure surfacing as
+	// a transfer error. Ordering it behind the data removes the race at source.
+	f.sendFTBulk(map[string]interface{}{"k": "ft", "t": "end", "id": id})
 	log.Info().Str("name", name).Int("bytes", len(data)).Msg("worker: sent file to viewer")
 }
 
