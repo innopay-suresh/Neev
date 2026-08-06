@@ -2768,6 +2768,15 @@ class _LiveSessionBanner extends StatelessWidget {
   const _LiveSessionBanner({required this.service});
   final RemoteService service;
 
+  /// Recording and system-sound sharing live in the background service, not in
+  /// this app: the WebM muxer and the loopback/ScreenCaptureKit capture are
+  /// both host-side native code. Shown DISABLED with the reason rather than
+  /// omitted — a host who has seen those controls elsewhere should be told why
+  /// they are missing here, not left to conclude the feature does not exist.
+  static const _needsService =
+      'Needs the background service — install with the .pkg, '
+      'or Settings → Security → Install lock-screen daemon';
+
   @override
   Widget build(BuildContext context) {
     final n = service.connectedViewers;
@@ -2803,7 +2812,38 @@ class _LiveSessionBanner extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
+          // Voice works from this app: setVoice already covers host peers, so
+          // it needs no service. A host being talked through a problem can
+          // answer without installing anything.
+          Tooltip(
+            message: service.voiceOn
+                ? 'Voice on — click to turn off talking and listening'
+                : 'Turn on voice to talk to and hear the viewer',
+            child: IconButton(
+              onPressed: () => service.setVoice(!service.voiceOn),
+              icon: Icon(
+                service.voiceOn ? Icons.mic_rounded : Icons.mic_off_outlined,
+                size: 18,
+              ),
+              color: service.voiceOn ? AppColors.primary : null,
+            ),
+          ),
+          Tooltip(
+            message: 'Record this session — $_needsService',
+            child: IconButton(
+              onPressed: null,
+              icon: const Icon(Icons.fiber_manual_record_outlined, size: 18),
+            ),
+          ),
+          Tooltip(
+            message: "Share this computer's sound — $_needsService",
+            child: IconButton(
+              onPressed: null,
+              icon: const Icon(Icons.volume_up_outlined, size: 18),
+            ),
+          ),
+          const SizedBox(width: 8),
           FilledButton.icon(
             onPressed: () => service.endHostSession(),
             icon: const Icon(Icons.call_end_rounded, size: 16),

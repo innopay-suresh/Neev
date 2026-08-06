@@ -31,6 +31,19 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-HOST-UI-1 — the host's session controls come from the SERVICE, not the
+  app.** Record (VP8→WebM mux) and system-sound sharing (WASAPI loopback /
+  ScreenCaptureKit) are host-side native code in the Go worker and NeevVoice.app.
+  An app-hosted machine — macOS without the daemon, or Windows with
+  TransportMode off — therefore has no Record or Sound, and NO menu-bar/session
+  toolbar at all, which is why a Mac host appeared to be missing every control.
+  Voice and End session DO work app-side (`setVoice` covers `_hostPeers`,
+  `endHostSession` exists), so r152 puts those in the live-session banner and
+  shows Record/Sound DISABLED with the reason rather than omitting them.
+  The real fix for full parity is installing the service, which r150 now does
+  automatically from the .pkg. Do NOT reimplement the recorder or loopback in
+  Dart to close this — that duplicates working native code.
+
 - **LD-CONSENT-1 — a host consent prompt must not depend on the app's own
   window being visible.** A machine being used as a HOST normally has the app
   backgrounded or minimised, and this app CANNOT raise its own window
