@@ -6,6 +6,10 @@
 #
 # Run on macOS with full Xcode + CocoaPods installed.
 set -euo pipefail
+# Resolved BEFORE the cd below: $0 is relative to the caller's working
+# directory, so re-deriving it later silently points at the wrong place. That
+# broke the macOS build for two releases.
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)/macos_scripts"
 cd "$(dirname "$0")/.."
 
 APP="Neev Remote"
@@ -87,7 +91,6 @@ rm -f "$OUT/NeevRemote-macos.pkg"
 # TransportMode — user-switch and login-window hosting, and the host's session
 # controls — to be found by hand in Settings. Anyone who missed it had an app
 # that looked installed and silently lacked half its features.
-SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)/macos_scripts"
 if [ ! -x "$SCRIPTS_DIR/postinstall" ]; then
   echo "ERROR: $SCRIPTS_DIR/postinstall missing or not executable" >&2
   exit 1
