@@ -31,6 +31,22 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-CONSENT-1 — a host consent prompt must not depend on the app's own
+  window being visible.** A machine being used as a HOST normally has the app
+  backgrounded or minimised, and this app CANNOT raise its own window
+  (`window_manager` is commented out in pubspec — `lib/window_manager.dart` is a
+  stub). On macOS the in-window Accept/Deny dialog therefore rendered where
+  nobody could see it: the request timed out, and connecting to a Mac looked
+  broken unless the user turned "ask before allowing" OFF — trading the security
+  prompt away to get a working product. r151 adds a NATIVE osascript alert
+  (`native_consent_io.dart`, conditional-import so web still builds) that floats
+  above everything and needs no window of ours. It resolves through the SAME
+  acceptConnection/rejectConnection, so there is one consent path — a different
+  way to ASK, not a second way to ANSWER. Deny, dismissed and timed-out all read
+  as refusal.
+  Windows is unaffected: its app dialog is reliably visible and TransportMode
+  draws its own always-on-top card.
+
 - **LD-PKG-1 — the package installs everything; never leave a feature behind a
   setting the user must find.** The macOS .pkg had no postinstall at all: it
   dropped NeevRemote.app in /Applications and stopped, leaving TransportMode

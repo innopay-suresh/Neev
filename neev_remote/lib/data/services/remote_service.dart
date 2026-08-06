@@ -19,6 +19,7 @@ import 'clipboard_writer.dart';
 import 'consent_store.dart';
 import 'discovery_model.dart';
 import 'file_store.dart';
+import 'native_consent.dart';
 import 'file_transfer_service.dart';
 import 'host_mode.dart';
 import 'host_name.dart' as host_name;
@@ -665,6 +666,33 @@ class RemoteService extends ChangeNotifier {
     await _startHostOffer(req.controllerId);
   }
 
+  /// Asks natively when the in-window dialog cannot be relied on.
+  ///
+  /// Resolved through acceptConnection/rejectConnection so there is ONE consent
+  /// path: this is a different way to ASK the same question, not a second
+  /// implementation of answering it.
+  Future<void> _showNativeConsentIfNeeded(String controllerId) async {
+    final allow = await showNativeConsent(controllerId);
+    if (allow == null) return; // no native prompt here — in-app dialog stands
+    // A viewer that gave up, or a second request arriving meanwhile, must not
+    // have this answer applied to it.
+    if (_pendingConsent?.controllerId != controllerId) {
+      DiagLog.log('host', 'native consent answered a request that moved on');
+      return;
+    }
+    if (allow) {
+      DiagLog.log('host', 'native consent ACCEPTED for $controllerId');
+      await acceptConnection(
+        control: _hostAllowsControl,
+        clipboard: defaultPermClipboard,
+        files: defaultPermFiles,
+      );
+    } else {
+      DiagLog.log('host', 'native consent DECLINED/timed out for $controllerId');
+      rejectConnection();
+    }
+  }
+
   /// Host: decline the pending incoming connection.
   void rejectConnection() {
     final req = _pendingConsent;
@@ -1184,6 +1212,17 @@ class RemoteService extends ChangeNotifier {
               'cannot be accepted; enable unattended access');
           _pendingConsent = ConsentRequest(controllerId);
           notifyListeners();
+          // On macOS the in-window dialog is not enough.
+          //
+          // A machine being used as a HOST normally has this app in the
+          // background or minimised, and the app cannot raise its own window
+          // (window_manager is not built in). So the dialog rendered somewhere
+          // nobody could see, the request timed out, and connecting to a Mac
+          // appeared to fail entirely unless "ask before allowing" was turned
+          // off — trading the security prompt away to get a working product.
+          //
+          // A native alert floats above everything and needs no window of ours.
+          unawaited(_showNativeConsentIfNeeded(controllerId));
         } else {
           // Silent accept (unattended / never-ask) uses the default
           // permissions — but the host's own "View only mode" still wins. It
