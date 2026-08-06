@@ -1,0 +1,49 @@
+#!/bin/bash
+# Install the host daemon as part of the package — never as a step the user has
+# to find.
+#
+# Before this, the .pkg dropped NeevRemote.app in /Applications and stopped.
+# TransportMode (the service that hosts across a user switch and at the login
+# window, and that shows the host's session controls) had to be installed by
+# hand from Settings. Anyone who missed it got an app that looked installed and
+# silently lacked half its features — including any host-side session UI, which
+# is exactly how "the app isn't working" reports start.
+#
+# The installer already runs as root, so this needs no extra prompt.
+set -uo pipefail
+
+APP="/Applications/NeevRemote.app"
+DAEMON_DIR="$APP/Contents/Resources/daemon"
+AGENT="$DAEMON_DIR/neev-agent"
+INSTALLER="$DAEMON_DIR/install-daemon.sh"
+LOG="/var/log/neev-remote-install.log"
+
+log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >>"$LOG" 2>/dev/null || true; }
+
+log "postinstall starting"
+
+# Gatekeeper quarantine on a freshly copied bundle stops launchd running it.
+if command -v xattr >/dev/null 2>&1; then
+  xattr -dr com.apple.quarantine "$APP" >/dev/null 2>&1 || true
+fi
+
+if [ ! -f "$AGENT" ] || [ ! -f "$INSTALLER" ]; then
+  # An app-only build (no Go agent bundled). Not fatal: the viewer works, and
+  # failing the whole install would be worse than lacking the host daemon.
+  log "no daemon payload in the app bundle — skipping daemon install"
+  exit 0
+fi
+
+chmod 755 "$AGENT" "$INSTALLER" 2>/dev/null || true
+
+# Hand off to the SAME installer the Settings action uses, rather than a second
+# copy of its logic that could drift from it.
+if bash "$INSTALLER" "$AGENT" >>"$LOG" 2>&1; then
+  log "daemon installed"
+else
+  # Never fail the package for this: the app itself is installed and usable as a
+  # viewer, and a failed install is far more confusing than a missing daemon.
+  log "daemon install FAILED (see above) — app still installed"
+fi
+
+exit 0

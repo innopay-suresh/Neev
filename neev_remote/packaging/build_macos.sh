@@ -82,9 +82,20 @@ rm -rf "$STAGE"
 
 echo "==> pkg installer"
 rm -f "$OUT/NeevRemote-macos.pkg"
+# --scripts wires in a postinstall that installs the host daemon automatically.
+# Without it the package dropped the app in /Applications and stopped, leaving
+# TransportMode — user-switch and login-window hosting, and the host's session
+# controls — to be found by hand in Settings. Anyone who missed it had an app
+# that looked installed and silently lacked half its features.
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)/macos_scripts"
+if [ ! -x "$SCRIPTS_DIR/postinstall" ]; then
+  echo "ERROR: $SCRIPTS_DIR/postinstall missing or not executable" >&2
+  exit 1
+fi
 pkgbuild --install-location /Applications \
   --identifier com.neev.neev_remote \
   --version 1.0.0 \
+  --scripts "$SCRIPTS_DIR" \
   --component "$APP_PATH" \
   "$OUT/NeevRemote-macos.pkg"
 

@@ -128,6 +128,21 @@ def verify_macos(path, tag):
                       info.file_size > 200 * 1024)
             check("neev-agent (daemon) present",
                   any(n.endswith("Resources/daemon/neev-agent") for n in names))
+            check("install-daemon.sh present (postinstall calls it)",
+                  any(n.endswith("Resources/daemon/install-daemon.sh") for n in names))
+
+    # The .pkg must carry a postinstall, or installing it drops the app and
+    # nothing else — no host daemon, no session controls, and an app that looks
+    # installed while silently lacking half its features. This is the same class
+    # of silent gap that shipped a macOS package with no NeevVoice.app.
+    with zipfile.ZipFile(path) as outer:
+        pkg = next((n for n in outer.namelist() if n.endswith("NeevRemote-macos.pkg")), None)
+        check("macOS .pkg present in artifact", pkg is not None)
+        if pkg:
+            blob = outer.read(pkg)
+            # A pkg is a xar archive; the scripts payload is a gzipped cpio, so
+            # the filename appears in the (uncompressed) xar table of contents.
+            check("pkg carries a postinstall script", b"postinstall" in blob)
 
 
 def verify_windows(path, tag):

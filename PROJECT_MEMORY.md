@@ -31,6 +31,24 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-PKG-1 — the package installs everything; never leave a feature behind a
+  setting the user must find.** The macOS .pkg had no postinstall at all: it
+  dropped NeevRemote.app in /Applications and stopped, leaving TransportMode
+  (user-switch and login-window hosting, AND the host's session controls —
+  NeevVoice.app) to be installed by hand from Settings. Anyone who missed it had
+  an app that looked installed and silently lacked half its features. The pkg
+  now runs `postinstall`, which hands off to the SAME `install-daemon.sh` the
+  Settings action uses (not a second copy that could drift). Same reasoning as
+  the pre-ticked Windows installer tasks.
+  It never fails the install: an app-only build, or a daemon install error,
+  leaves a working viewer rather than a failed package.
+  LIMIT — macOS TCC (Screen Recording, Accessibility, Microphone) CANNOT be
+  granted by an installer; the OS forbids it. Those remain user actions on a
+  macOS HOST, and no packaging change can remove them.
+  NOTE — the DMG is drag-install and runs no scripts, so only the .pkg
+  auto-installs the daemon. Ship the .pkg where hosting matters.
+
+
 - **LD-FT-3 — a transfer ends when its BYTES arrive, not when "end" does.**
   Control messages and bulk data ride independent IPC priority lanes, so an
   "end" sent on the hi lane could overtake the tail of a large file still queued
