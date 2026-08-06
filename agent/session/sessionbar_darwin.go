@@ -153,10 +153,24 @@ func serveVoiceControl(conn net.Conn) {
 		line := sc.Text()
 		// Host system sound, captured by the helper via ScreenCaptureKit.
 		//
-		// The helper sends 8 kHz mu-law (it predates the move to Opus). Expand
-		// it here to the device-rate PCM the rest of the path now speaks,
-		// rather than changing the helper's wire format and breaking older
-		// bundles that are already installed.
+		// "p" is 48 kHz little-endian Int16 PCM — what the current helper
+		// sends, and what the rest of the audio path speaks, so it goes
+		// straight through at full quality.
+		if strings.HasPrefix(line, "p ") {
+			raw, err := base64.StdEncoding.DecodeString(line[2:])
+			if err != nil || len(raw) < 2 {
+				continue
+			}
+			pcm := make([]int16, len(raw)/2)
+			for i := range pcm {
+				pcm[i] = int16(uint16(raw[i*2]) | uint16(raw[i*2+1])<<8)
+			}
+			feedHostSound(pcm)
+			continue
+		}
+		// "a" is the OLD 8 kHz mu-law format. Still accepted so a helper bundle
+		// installed before the move to Opus keeps working rather than going
+		// silent after an agent-only update.
 		if strings.HasPrefix(line, "a ") {
 			raw, err := base64.StdEncoding.DecodeString(line[2:])
 			if err != nil || len(raw) == 0 {

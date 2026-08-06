@@ -185,10 +185,10 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
             return
         }
         let t = SystemAudioTap { [weak self] frame in
-            // Base64 over the existing line-based socket. At 8 kHz mu-law this
-            // is ~50 short lines a second — the encoding overhead is nothing
-            // next to adding a second binary channel and its framing bugs.
-            self?.send("a " + Data(frame).base64EncodedString())
+            // "p" marks 48 kHz little-endian Int16 PCM. The old "a" prefix
+            // meant 8 kHz mu-law and the worker still accepts it, so a bundle
+            // installed before this change keeps working.
+            self?.send("p " + Data(frame).base64EncodedString())
         }
         tap = t
         // Callback rather than an inline Task: capturing self inside a

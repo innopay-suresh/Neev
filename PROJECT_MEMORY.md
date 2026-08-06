@@ -31,6 +31,18 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-AUDIO-8 — capture buffers must be REFRAMED before encoding; never
+  assume a device period.** Opus encodes an exact frame (960 samples at 48 kHz)
+  and rejects anything else. miniaudio's PeriodSizeInFrames is a HINT, and
+  ScreenCaptureKit varies freely, so encoding each callback directly failed for
+  any buffer that was not exactly one frame — quietly, one warning then
+  nothing, which is how macOS system sound could be silent with every log line
+  looking healthy. `encodeAndSend` now accumulates and emits whole frames, with
+  a bounded backlog that drops the OLDEST so audio stays current.
+  Also: the NeevVoice helper now sends 48 kHz Int16 PCM (prefix "p ") instead of
+  8 kHz mu-law ("a ", still accepted for older bundles), so macOS system sound
+  is full-band rather than telephone quality.
+
 - **LD-AUDIO-7 — the voice toggle gates BOTH directions, and each must be
   enforced separately.** WebRTC does not link a local sender's mute state to a
   remote track being received: they are independent streams. Playback was

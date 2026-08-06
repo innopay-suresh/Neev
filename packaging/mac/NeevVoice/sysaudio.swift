@@ -86,18 +86,21 @@ final class SystemAudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
         guard type == .audio, CMSampleBufferIsValid(sb) else { return }
         guard let samples = Self.floatSamples(from: sb) else { return }
 
-        // Average each group of 6 rather than taking every 6th. Plain decimation
-        // folds everything above 4 kHz back into the audible band as aliasing,
-        // which is heard as a metallic warble on music and speech alike.
+        // Send 48 kHz PCM, not 8 kHz mu-law.
+        //
+        // The worker now speaks Opus at 48 kHz, so downsampling here threw away
+        // most of the audio only for it to be padded back out on receipt —
+        // system sound arrived at telephone quality while voice was full band.
+        // Converting Float32 to Int16 and sending it as-is keeps the whole
+        // signal; this is a local socket, so the extra bytes cost nothing.
         var out = [UInt8]()
-        out.reserveCapacity(samples.count / Self.decim + 1)
-        var i = 0
-        while i + Self.decim <= samples.count {
-            var acc: Float = 0
-            for j in 0..<Self.decim { acc += samples[i + j] }
-            let avg = acc / Float(Self.decim)
-            out.append(Self.muLaw(Int16(max(-32768, min(32767, avg * 32767)))))
-            i += Self.decim
+        out.reserveCapacity(samples.count * 2)
+        for s in samples {
+            let clamped = max(-1.0, min(1.0, s))
+            let v = Int16(clamped * 32767)
+            // Little-endian, matching how the Go side reads it back.
+            out.append(UInt8(truncatingIfNeeded: v))
+            out.append(UInt8(truncatingIfNeeded: v >> 8))
         }
         if !out.isEmpty { onFrame(out) }
     }

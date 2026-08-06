@@ -42,7 +42,17 @@ var (
 	opusDec *audio.OpusDecoder
 )
 
-// encodeAndSend compresses one device-rate PCM frame and hands it to the sink.
+// encPending accumulates capture PCM until whole Opus frames can be formed.
+//
+// Opus encodes an EXACT frame size and nothing else. Capture callbacks hand
+// over whatever the device felt like delivering — miniaudio's period size is a
+// hint, not a promise, and ScreenCaptureKit on macOS varies freely — so
+// encoding each callback directly failed on any buffer that was not exactly
+// 960 samples. It failed quietly (one warning, then nothing), which is why
+// macOS system sound could be silent while every log line looked healthy.
+var encPending []int16
+
+// encodeAndSend buffers device-rate PCM and emits every whole frame it can.
 func encodeAndSend(pcm []int16, out func([]byte)) {
 	if out == nil || len(pcm) == 0 {
 		return
@@ -60,16 +70,32 @@ func encodeAndSend(pcm []int16, out func([]byte)) {
 	enc := opusEnc
 	hostAudioMu.Unlock()
 
-	pkt, err := enc.Encode(pcm)
-	if err != nil {
-		// A wrong-sized frame is a bug, not a transient: log once rather than
-		// on every 20 ms.
-		if !encWarned.Swap(true) {
-			log.Warn().Err(err).Int("samples", len(pcm)).Msg("worker: Opus encode failed")
-		}
-		return
+	hostAudioMu.Lock()
+	encPending = append(encPending, pcm...)
+	// Never let a stalled sink grow this without bound: drop the oldest whole
+	// frames, keeping the newest, so audio stays current rather than delayed.
+	if max := audio.OpusFrameSamples * 25; len(encPending) > max {
+		encPending = encPending[len(encPending)-max:]
 	}
-	out(pkt)
+	var frames [][]int16
+	for len(encPending) >= audio.OpusFrameSamples {
+		f := make([]int16, audio.OpusFrameSamples)
+		copy(f, encPending[:audio.OpusFrameSamples])
+		encPending = encPending[audio.OpusFrameSamples:]
+		frames = append(frames, f)
+	}
+	hostAudioMu.Unlock()
+
+	for _, f := range frames {
+		pkt, err := enc.Encode(f)
+		if err != nil {
+			if !encWarned.Swap(true) {
+				log.Warn().Err(err).Int("samples", len(f)).Msg("worker: Opus encode failed")
+			}
+			return
+		}
+		out(pkt)
+	}
 }
 
 var encWarned atomic.Bool
@@ -301,9 +327,11 @@ func closeHostAudio() {
 	soundOn = false
 	sink = nil
 	pendingSound = nil
-	// Opus is stateful; a new session must start from a clean codec.
+	// Opus is stateful; a new session must start from a clean codec, and with
+	// no half-frame left over from the last one.
 	opusEnc = nil
 	opusDec = nil
+	encPending = nil
 	hostAudioMu.Unlock()
 	if d != nil {
 		d.Close()
