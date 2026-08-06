@@ -38,6 +38,28 @@ def check(label, ok):
         failures.append(label)
 
 
+def _pkg_has_scripts(blob):
+    """True if a .pkg carries an installer Scripts payload.
+
+    A .pkg is a xar archive. The scripts live in a COMPRESSED cpio entry, so the
+    filename "postinstall" never appears in the raw bytes or in the table of
+    contents — checking for it reported a correctly built package as broken.
+    What pkgbuild --scripts does add, and what is therefore checkable, is a file
+    entry named "Scripts" in the TOC.
+    """
+    import struct
+    import zlib
+    try:
+        if blob[:4] != b"xar!":
+            return False
+        header_size = struct.unpack(">H", blob[4:6])[0]
+        toc_len = struct.unpack(">Q", blob[8:16])[0]
+        toc = zlib.decompress(blob[header_size:header_size + toc_len])
+        return b"<name>Scripts</name>" in toc
+    except Exception:
+        return False
+
+
 def _encodings(needle):
     """Every byte form a string may take in a shipped binary.
 
@@ -139,10 +161,7 @@ def verify_macos(path, tag):
         pkg = next((n for n in outer.namelist() if n.endswith("NeevRemote-macos.pkg")), None)
         check("macOS .pkg present in artifact", pkg is not None)
         if pkg:
-            blob = outer.read(pkg)
-            # A pkg is a xar archive; the scripts payload is a gzipped cpio, so
-            # the filename appears in the (uncompressed) xar table of contents.
-            check("pkg carries a postinstall script", b"postinstall" in blob)
+            check("pkg carries a postinstall script", _pkg_has_scripts(outer.read(pkg)))
 
 
 def verify_windows(path, tag):
