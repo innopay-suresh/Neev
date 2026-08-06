@@ -53,6 +53,29 @@ type Device struct {
 // 25 frames of 20 ms = half a second.
 const gateHangFrames = 25
 
+// echoHangover is how long after playing far-end audio this machine still
+// treats its own capture as contaminated by it.
+//
+// Speakers do not stop the instant the last sample is written — the room
+// reverberates and the driver has its own buffer — so cutting suppression the
+// moment playback pauses lets the tail back in.
+const echoHangover = 250 * time.Millisecond
+
+// echoSuppressGain is how far the microphone is attenuated while far-end audio
+// is playing. Not zero: at roughly -16 dB the host can still cut in and be
+// heard, so the call stays two-way instead of becoming walkie-talkie.
+const echoSuppressGain = 0.15
+
+// playingFarEnd reports whether this machine is currently playing audio from
+// the other end — meaning anything it captures right now contains that audio.
+func (d *Device) playingFarEnd() bool {
+	d.mu.Lock()
+	last := d.lastPlay
+	playing := d.playing
+	d.mu.Unlock()
+	return playing && !last.IsZero() && time.Since(last) < echoHangover
+}
+
 // NewDevice prepares an audio context without opening any device.
 func NewDevice() (*Device, error) {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
@@ -100,6 +123,20 @@ func (d *Device) StartCapture(fn func([]int16)) error {
 			mono := downmix(in, int(frames))
 			if len(mono) == 0 {
 				return
+			}
+			// Echo suppression. The microphone hears this machine's own
+			// speakers, so while far-end audio is playing anything captured
+			// contains it, and sending it back is the viewer hearing itself.
+			//
+			// Attenuated rather than muted: proper cancellation needs an
+			// adaptive filter (pion has no audio processing module, and
+			// hand-rolled DSP would be worse than this), but ducking removes
+			// the echo while still letting a raised voice cut through, so the
+			// call stays two-way.
+			if d.playingFarEnd() {
+				for i := range mono {
+					mono[i] = int16(float64(mono[i]) * echoSuppressGain)
+				}
 			}
 			// Noise gate. A capture device produces a hiss of its own with
 			// nobody speaking; encoding and sending it makes that hiss the far
@@ -162,6 +199,14 @@ func (d *Device) StartLoopback(fn func([]int16)) error {
 			}
 			mono := downmix(in, int(frames))
 			if len(mono) == 0 {
+				return
+			}
+			// While the far end's voice is coming out of these speakers, the
+			// loopback IS that voice. Sending it back is a guaranteed digital
+			// echo — the viewer hears itself — so drop it outright rather than
+			// attenuate: there is nothing of the host's own desktop in it worth
+			// keeping.
+			if d.playingFarEnd() {
 				return
 			}
 			// Same gate: a silent desktop should send nothing at all rather

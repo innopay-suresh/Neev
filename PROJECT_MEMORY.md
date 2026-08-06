@@ -31,6 +31,18 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-AUDIO-5 — echo must be suppressed on the HOST; nothing else can.**
+  The viewer's libwebrtc AEC only cancels echo created on the VIEWER's machine.
+  When the host plays the viewer's voice, its microphone (acoustic) and its
+  system-sound loopback (digital, guaranteed) both re-capture it and send it
+  back, so the viewer hears itself. Only the host knows when it is playing
+  far-end audio. r144: loopback is DROPPED outright while far-end audio plays
+  (it is literally our own output), the microphone is DUCKED to ~-16 dB rather
+  than muted (so the host can still interrupt and the call stays two-way), with
+  a 250 ms hangover because speakers and rooms do not stop instantly.
+  This is suppression, not cancellation — proper AEC needs an adaptive filter,
+  pion has no audio processing module, and hand-rolled DSP would be worse.
+
 - **LD-AUDIO-4 — voice codec is OPUS at 48 kHz, via layeh.com/gopus.**
   Replaces PCMU 8 kHz: ~79 bytes per 20 ms frame vs 160, at six times the audio
   bandwidth. gopus VENDORS the Opus C sources and compiles them on amd64
