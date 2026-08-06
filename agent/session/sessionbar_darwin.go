@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/neev/remote-agent/agent/audio"
+
 	"github.com/rs/zerolog/log"
 )
 
@@ -150,12 +152,21 @@ func serveVoiceControl(conn net.Conn) {
 	for sc.Scan() {
 		line := sc.Text()
 		// Host system sound, captured by the helper via ScreenCaptureKit.
+		//
+		// The helper sends 8 kHz mu-law (it predates the move to Opus). Expand
+		// it here to the device-rate PCM the rest of the path now speaks,
+		// rather than changing the helper's wire format and breaking older
+		// bundles that are already installed.
 		if strings.HasPrefix(line, "a ") {
-			frame, err := base64.StdEncoding.DecodeString(line[2:])
-			if err != nil {
+			raw, err := base64.StdEncoding.DecodeString(line[2:])
+			if err != nil || len(raw) == 0 {
 				continue
 			}
-			feedHostSound(frame)
+			wire := make([]int16, len(raw))
+			for i, b := range raw {
+				wire[i] = audio.DecodeMuLaw(b)
+			}
+			feedHostSound(audio.Upsample(wire))
 			continue
 		}
 		switch line {

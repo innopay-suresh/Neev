@@ -161,32 +161,31 @@ func DecodeFrame(mu []byte) []int16 {
 	return out
 }
 
-// Mix sums two mu-law frames into one.
+// Mix sums two PCM frames into one, clamping rather than wrapping.
 //
-// Summed in the PCM domain, not the mu-law domain: mu-law is a logarithmic
-// encoding, so adding the bytes produces noise rather than a mixture. Clipping
-// is handled by EncodeMuLaw, so a loud voice over loud system sound distorts
-// instead of wrapping into a crackle.
-func Mix(a, b []byte) []byte {
+// Clamped, not wrapped: a loud voice over loud system sound must distort, and
+// an overflow flips the sign, which is heard as a crack rather than as
+// loudness.
+func Mix(a, b []int16) []int16 {
 	n := len(a)
 	if len(b) > n {
 		n = len(b)
 	}
-	out := make([]byte, n)
+	out := make([]int16, n)
 	for i := 0; i < n; i++ {
-		var sum int
+		sum := 0
 		if i < len(a) {
-			sum += int(DecodeMuLaw(a[i]))
+			sum += int(a[i])
 		}
 		if i < len(b) {
-			sum += int(DecodeMuLaw(b[i]))
+			sum += int(b[i])
 		}
 		if sum > 32767 {
 			sum = 32767
 		} else if sum < -32768 {
 			sum = -32768
 		}
-		out[i] = EncodeMuLaw(int16(sum))
+		out[i] = int16(sum)
 	}
 	return out
 }
@@ -212,3 +211,20 @@ func IsSilent(pcm []int16) bool {
 	}
 	return true
 }
+
+const (
+	// OpusRate is Opus's native rate and the rate the devices already open at.
+	OpusRate = DeviceRate
+
+	// OpusFrameSamples is one 20 ms frame at OpusRate: the standard WebRTC
+	// packetisation, and exactly one device period.
+	OpusFrameSamples = DeviceFrames
+
+	// opusMaxPacket bounds a compressed frame. 20 ms of speech is a few hundred
+	// bytes; this is generous headroom, not an expected size.
+	opusMaxPacket = 4000
+
+	// opusBitrate — 32 kbit/s mono is transparent for speech and half of what
+	// PCMU spent to sound far worse.
+	opusBitrate = 32000
+)

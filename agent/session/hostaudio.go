@@ -33,8 +33,46 @@ var (
 	// on independent device clocks, and queueing would let system sound drift
 	// steadily behind the voice describing it. Dropping to the newest keeps them
 	// aligned.
-	pendingSound []byte
+	pendingSound []int16
+
+	// One encoder and one decoder per worker. Opus is stateful — it predicts
+	// from previous frames — so a fresh codec per frame would both cost more and
+	// sound worse.
+	opusEnc *audio.OpusEncoder
+	opusDec *audio.OpusDecoder
 )
+
+// encodeAndSend compresses one device-rate PCM frame and hands it to the sink.
+func encodeAndSend(pcm []int16, out func([]byte)) {
+	if out == nil || len(pcm) == 0 {
+		return
+	}
+	hostAudioMu.Lock()
+	if opusEnc == nil {
+		e, err := audio.NewOpusEncoder()
+		if err != nil {
+			hostAudioMu.Unlock()
+			log.Warn().Err(err).Msg("worker: no Opus encoder — voice unavailable")
+			return
+		}
+		opusEnc = e
+	}
+	enc := opusEnc
+	hostAudioMu.Unlock()
+
+	pkt, err := enc.Encode(pcm)
+	if err != nil {
+		// A wrong-sized frame is a bug, not a transient: log once rather than
+		// on every 20 ms.
+		if !encWarned.Swap(true) {
+			log.Warn().Err(err).Int("samples", len(pcm)).Msg("worker: Opus encode failed")
+		}
+		return
+	}
+	out(pkt)
+}
+
+var encWarned atomic.Bool
 
 // ensureDeviceLocked returns the shared device, creating it on first use.
 // Caller holds hostAudioMu.
@@ -71,7 +109,7 @@ func startHostMic(fn func([]byte)) {
 		return
 	}
 	sink = fn
-	if err := d.StartCapture(func(frame []byte) {
+	if err := d.StartCapture(func(frame []int16) {
 		hostAudioMu.Lock()
 		other := pendingSound
 		pendingSound = nil
@@ -83,7 +121,7 @@ func startHostMic(fn func([]byte)) {
 		if other != nil {
 			frame = audio.Mix(frame, other)
 		}
-		out(frame)
+		encodeAndSend(frame, out)
 	}); err != nil {
 		log.Warn().Err(err).Msg("worker: microphone could not be opened")
 		return
@@ -128,7 +166,7 @@ func startHostSound(fn func([]byte)) bool {
 	if sink == nil {
 		sink = fn
 	}
-	if err := d.StartLoopback(func(frame []byte) {
+	if err := d.StartLoopback(func(frame []int16) {
 		hostAudioMu.Lock()
 		// With the microphone on, the mic callback does the sending so the two
 		// arrive as one mixed frame. Park this one for it to collect.
@@ -139,9 +177,7 @@ func startHostSound(fn func([]byte)) bool {
 		}
 		out := sink
 		hostAudioMu.Unlock()
-		if out != nil {
-			out(frame)
-		}
+		encodeAndSend(frame, out)
 	}); err != nil {
 		log.Warn().Err(err).Msg("worker: system sound could not be captured")
 		return false
@@ -173,10 +209,10 @@ func setAudioSink(fn func([]byte)) {
 	hostAudioMu.Unlock()
 }
 
-// feedHostSound accepts one mu-law frame of the host's system sound captured
-// outside this process (macOS helper) and puts it on the same path as Windows
-// loopback — including mixing with the microphone.
-func feedHostSound(frame []byte) {
+// feedHostSound accepts one device-rate PCM frame of the host's system sound
+// captured outside this process (macOS helper) and puts it on the same path as
+// Windows loopback — including mixing with the microphone.
+func feedHostSound(frame []int16) {
 	if len(frame) == 0 {
 		return
 	}
@@ -190,20 +226,35 @@ func feedHostSound(frame []byte) {
 	}
 	out := sink
 	hostAudioMu.Unlock()
-	if out != nil {
-		out(frame)
-	}
+	encodeAndSend(frame, out)
 }
 
-// playViewerVoice queues one mu-law frame from the viewer for the speakers.
-func playViewerVoice(mu []byte) {
-	if len(mu) == 0 {
+// playViewerVoice decodes one Opus packet from the viewer and queues it.
+func playViewerVoice(pkt []byte) {
+	if len(pkt) == 0 {
 		return
 	}
 	hostAudioMu.Lock()
 	d := ensureDeviceLocked()
+	if d != nil && opusDec == nil {
+		dec, err := audio.NewOpusDecoder()
+		if err != nil {
+			hostAudioMu.Unlock()
+			log.Warn().Err(err).Msg("worker: no Opus decoder — cannot play viewer voice")
+			return
+		}
+		opusDec = dec
+	}
+	dec := opusDec
 	hostAudioMu.Unlock()
-	if d == nil {
+	if d == nil || dec == nil {
+		return
+	}
+	mu, err := dec.Decode(pkt)
+	if err != nil || len(mu) == 0 {
+		if err != nil && !decWarned.Swap(true) {
+			log.Warn().Err(err).Msg("worker: Opus decode failed")
+		}
 		return
 	}
 	// One line the first time audio actually reaches the speakers. Without it,
@@ -214,6 +265,8 @@ func playViewerVoice(mu []byte) {
 	}
 	d.Play(mu)
 }
+
+var decWarned atomic.Bool
 
 // playedViewerVoice makes the log above fire once per worker, not per frame.
 var playedViewerVoice atomic.Bool
@@ -228,6 +281,9 @@ func closeHostAudio() {
 	soundOn = false
 	sink = nil
 	pendingSound = nil
+	// Opus is stateful; a new session must start from a clean codec.
+	opusEnc = nil
+	opusDec = nil
 	hostAudioMu.Unlock()
 	if d != nil {
 		d.Close()

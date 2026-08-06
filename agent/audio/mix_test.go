@@ -2,41 +2,41 @@ package audio
 
 import "testing"
 
-// Mixing is where host voice and host system sound become one track. Getting it
-// wrong is audible immediately, so the failure modes are pinned here.
+// Mixing is where host voice and host system sound become one stream. It works
+// on PCM now — Opus decodes to and encodes from PCM, so there is no longer a
+// lossy codec sitting between the two sources being combined.
 
-func TestMixSumsInPCMNotMuLaw(t *testing.T) {
-	// mu-law is logarithmic: adding the BYTES produces noise, not a mixture.
-	// Two copies of the same tone must come back roughly twice as loud.
-	one := EncodeFrame([]int16{4000, 4000, 4000})
-	mixed := DecodeFrame(Mix(one, one))
-	for _, s := range mixed {
-		if s < 7000 || s > 9000 {
-			t.Fatalf("mixing a signal with itself gave %d, want ~8000", s)
+func TestMixSumsBothSources(t *testing.T) {
+	got := Mix([]int16{4000, 4000, 4000}, []int16{4000, 4000, 4000})
+	for _, s := range got {
+		if s != 8000 {
+			t.Fatalf("mixing 4000+4000 gave %d, want 8000", s)
 		}
 	}
 }
 
-func TestMixClipsInsteadOfWrapping(t *testing.T) {
-	// Loud voice over loud system sound must distort, not invert. A wrap flips
-	// the sign and is heard as a crack, which is far worse than clipping.
-	loud := EncodeFrame([]int16{30000, 30000})
-	for _, s := range DecodeFrame(Mix(loud, loud)) {
-		if s < 25000 {
-			t.Fatalf("loud mix collapsed or inverted: %d", s)
+func TestMixClampsInsteadOfWrapping(t *testing.T) {
+	// Loud voice over loud system sound must distort, not invert. An overflow
+	// flips the sign and is heard as a crack rather than as loudness.
+	for _, s := range Mix([]int16{30000, 30000}, []int16{30000, 30000}) {
+		if s != 32767 {
+			t.Fatalf("loud mix gave %d, want a clamp at 32767", s)
+		}
+	}
+	for _, s := range Mix([]int16{-30000}, []int16{-30000}) {
+		if s != -32768 {
+			t.Fatalf("loud negative mix gave %d, want a clamp at -32768", s)
 		}
 	}
 }
 
 func TestMixWithSilenceIsUnchanged(t *testing.T) {
 	// System sound off must not colour the voice going out.
-	voice := EncodeFrame([]int16{1000, -2000, 3000})
-	silence := EncodeFrame([]int16{0, 0, 0})
-	got := DecodeFrame(Mix(voice, silence))
-	want := DecodeFrame(voice)
-	for i := range want {
-		if diff := int(got[i]) - int(want[i]); diff > 200 || diff < -200 {
-			t.Fatalf("silence altered the voice at %d: %d vs %d", i, got[i], want[i])
+	voice := []int16{1000, -2000, 3000}
+	got := Mix(voice, []int16{0, 0, 0})
+	for i := range voice {
+		if got[i] != voice[i] {
+			t.Fatalf("silence altered the voice at %d: %d vs %d", i, got[i], voice[i])
 		}
 	}
 }
@@ -44,10 +44,10 @@ func TestMixWithSilenceIsUnchanged(t *testing.T) {
 func TestMixHandlesUnevenLengths(t *testing.T) {
 	// The two devices have independent clocks, so a short frame must not panic
 	// or truncate the longer source.
-	if n := len(Mix(make([]byte, 160), make([]byte, 80))); n != 160 {
-		t.Fatalf("mixed length %d, want 160", n)
+	if n := len(Mix(make([]int16, 960), make([]int16, 480))); n != 960 {
+		t.Fatalf("mixed length %d, want 960", n)
 	}
-	if n := len(Mix(make([]byte, 80), make([]byte, 160))); n != 160 {
-		t.Fatalf("mixed length %d, want 160", n)
+	if n := len(Mix(make([]int16, 480), make([]int16, 960))); n != 960 {
+		t.Fatalf("mixed length %d, want 960", n)
 	}
 }

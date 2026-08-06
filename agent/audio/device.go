@@ -29,13 +29,13 @@ type Device struct {
 	loopback *malgo.Device
 
 	// onCaptured receives each mu-law encoded frame from the microphone.
-	onCaptured func([]byte)
+	onCaptured func([]int16)
 
 	// playBuf holds mu-law audio waiting to go to the speakers. Bounded: if the
 	// network delivers faster than the sound card drains (or the device stalls),
 	// old audio is dropped rather than queued. In a conversation, late audio is
 	// worthless — better a short gap than a growing delay that never recovers.
-	playBuf  []byte
+	playBuf  []int16
 	playCap  int
 	playing  bool
 	overruns int
@@ -61,17 +61,17 @@ func NewDevice() (*Device, error) {
 	}
 	return &Device{
 		ctx: ctx,
-		// ~600 ms of mu-law at 8 kHz, a whole number of 20 ms frames. Enough to
-		// ride out normal jitter and a device that opens slowly (the first
-		// packets used to overrun immediately on open), small enough that a
-		// stall is heard as a glitch rather than the whole conversation sliding
-		// out of sync.
-		playCap: SamplesPerFrame * 30,
+		// ~600 ms of PCM at the device rate, a whole number of 20 ms frames.
+		// Enough to ride out normal jitter and a device that opens slowly (the
+		// first packets used to overrun immediately on open), small enough that
+		// a stall is heard as a glitch rather than the whole conversation
+		// sliding out of sync.
+		playCap: DeviceFrames * 30,
 	}, nil
 }
 
 // StartCapture opens the microphone and calls fn with each 20 ms mu-law frame.
-func (d *Device) StartCapture(fn func([]byte)) error {
+func (d *Device) StartCapture(fn func([]int16)) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.capture != nil {
@@ -94,7 +94,10 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 			if cb == nil || frames == 0 || len(in) < 2 {
 				return
 			}
-			mono := Downsample(downmix(in, int(frames)))
+			// Hand out PCM at the DEVICE rate. Opus is natively 48 kHz, so
+			// there is no resampling between the microphone and the encoder —
+			// one less place for the arithmetic to be wrong.
+			mono := downmix(in, int(frames))
 			if len(mono) == 0 {
 				return
 			}
@@ -110,7 +113,7 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 			} else {
 				d.micSpeech = gateHangFrames
 			}
-			cb(EncodeFrame(mono))
+			cb(mono)
 		},
 	})
 	if err != nil {
@@ -136,7 +139,7 @@ func LoopbackSupported() bool { return runtime.GOOS == "windows" }
 
 // StartLoopback captures what the host is PLAYING and calls fn with each 20 ms
 // mu-law frame, so the viewer hears the host's system sound.
-func (d *Device) StartLoopback(fn func([]byte)) error {
+func (d *Device) StartLoopback(fn func([]int16)) error {
 	if !LoopbackSupported() {
 		return fmt.Errorf("audio: system sound capture needs Windows (WASAPI loopback)")
 	}
@@ -157,7 +160,7 @@ func (d *Device) StartLoopback(fn func([]byte)) error {
 			if frames == 0 || len(in) < 2 {
 				return
 			}
-			mono := Downsample(downmix(in, int(frames)))
+			mono := downmix(in, int(frames))
 			if len(mono) == 0 {
 				return
 			}
@@ -171,7 +174,7 @@ func (d *Device) StartLoopback(fn func([]byte)) error {
 			} else {
 				d.sndSpeech = gateHangFrames
 			}
-			fn(EncodeFrame(mono))
+			fn(mono)
 		},
 	})
 	if err != nil {
@@ -275,9 +278,9 @@ func (d *Device) StopCapture() {
 	log.Info().Msg("audio: microphone closed")
 }
 
-// Play queues one mu-law frame for the speakers, opening the output device on
-// first use.
-func (d *Device) Play(mu []byte) {
+// Play queues one frame of DEVICE-RATE PCM for the speakers, opening the
+// output device on first use.
+func (d *Device) Play(mu []int16) {
 	d.mu.Lock()
 	if !d.playing {
 		d.mu.Unlock()
@@ -295,8 +298,8 @@ func (d *Device) Play(mu []byte) {
 	// on top of whatever was already going wrong.
 	if len(d.playBuf)+len(mu) > d.playCap {
 		drop := len(d.playBuf) + len(mu) - d.playCap
-		if r := drop % SamplesPerFrame; r != 0 {
-			drop += SamplesPerFrame - r // round up to a frame boundary
+		if r := drop % DeviceFrames; r != 0 {
+			drop += DeviceFrames - r // round up to a frame boundary
 		}
 		if drop > len(d.playBuf) {
 			drop = len(d.playBuf)
@@ -399,30 +402,23 @@ func (d *Device) startPlayback() error {
 			pcm := unsafe.Slice((*int16)(unsafe.Pointer(&out[0])), total)
 
 			wantFrames := total / ch
-			// The device runs at DeviceRate; the buffer holds 8 kHz mu-law.
-			wantWire := wantFrames / Decim
 
 			d.mu.Lock()
-			n := wantWire
+			n := wantFrames
 			if len(d.playBuf) < n {
 				n = len(d.playBuf)
 			}
-			chunk := make([]byte, n)
+			chunk := make([]int16, n)
 			copy(chunk, d.playBuf[:n])
 			d.playBuf = d.playBuf[n:]
 			d.mu.Unlock()
 
-			// Decode to 8 kHz PCM, interpolate up to the device rate, then
-			// write each sample to EVERY channel.
-			wire := make([]int16, n)
-			for i := 0; i < n; i++ {
-				wire[i] = DecodeMuLaw(chunk[i])
-			}
-			up := Upsample(wire)
+			// The buffer already holds device-rate PCM (Opus decodes straight
+			// to 48 kHz), so this only spreads mono across the channels.
 			written := 0
-			for f := 0; f < len(up) && f < wantFrames; f++ {
+			for f := 0; f < n; f++ {
 				for c := 0; c < ch; c++ {
-					pcm[f*ch+c] = up[f]
+					pcm[f*ch+c] = chunk[f]
 				}
 				written = f + 1
 			}

@@ -31,6 +31,22 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-AUDIO-4 — voice codec is OPUS at 48 kHz, via layeh.com/gopus.**
+  Replaces PCMU 8 kHz: ~79 bytes per 20 ms frame vs 160, at six times the audio
+  bandwidth. gopus VENDORS the Opus C sources and compiles them on amd64
+  (Windows + Linux), so there is NO system libopus, no MSYS2 package and no DLL
+  to ship — deliberately chosen over hraban/opus, which needs libopus AND
+  opusfile via pkg-config on every runner. Adding a native dep to the Windows
+  toolchain is exactly what has broken this build before.
+  Devices already open at 48 kHz (r140) and Opus is natively 48 kHz, so the
+  resampling PCMU forced on every frame is gone. Opus is STATEFUL — one encoder
+  and one decoder per worker, reset on teardown; a codec per frame would cost
+  more and sound worse. RTP: payload type 111, 48 kHz clock, and the timestamp
+  advances by one FRAME of samples per packet — NOT by byte count, which means
+  nothing for a compressed codec and would drift the jitter buffer.
+  The macOS NeevVoice helper still sends 8 kHz mu-law and is bridged up to PCM
+  on receipt, so already-installed bundles keep working.
+
 - **LD-AUDIO-3 — voice IS a WebRTC track on the existing peer connection.**
   One `RTCPeerConnection` carries VP8 video and PCMU audio in one SDP. The raw
   PCM only crosses the worker↔transport IPC, mirroring video exactly

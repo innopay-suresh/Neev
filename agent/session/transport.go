@@ -326,9 +326,9 @@ func (t *Transport) onConnect(ctx context.Context, m network.Message) {
 	// capture-worker swaps (the whole point: the viewer never sees a disconnect).
 	pktz := rtp.NewPacketizer(1200, 96, 0x1234ABCD,
 		&codecs.VP8Payloader{}, rtp.NewRandomSequencer(), vp8ClockRate)
-	// Payload type 0 and clock 8000 are fixed by the G.711 spec, not a choice.
-	apktz := rtp.NewPacketizer(1200, 0, 0x1234ABCE,
-		&codecs.G711Payloader{}, rtp.NewRandomSequencer(), audio.SampleRate)
+	// Opus: payload type 111 and a 48 kHz clock are the WebRTC convention.
+	apktz := rtp.NewPacketizer(1200, 111, 0x1234ABCE,
+		&codecs.OpusPayloader{}, rtp.NewRandomSequencer(), audio.OpusRate)
 
 	ps := &peerSession{peer: peer, pktz: pktz, apktz: apktz}
 	t.mu.Lock()
@@ -1036,13 +1036,13 @@ func (t *Transport) pumpViewerVoice(ctx context.Context, track *webrtc.TrackRemo
 	}
 }
 
-// distributeAudio packetizes one 20 ms mu-law frame onto every viewer's voice
+// distributeAudio packetizes one 20 ms Opus packet onto every viewer's voice
 // track.
 //
 // Unlike video there is no keyframe concept — every audio packet stands alone,
 // so a viewer that joins mid-sentence simply starts hearing from that moment.
-func (t *Transport) distributeAudio(mu []byte) {
-	if len(mu) == 0 {
+func (t *Transport) distributeAudio(pkt []byte) {
+	if len(pkt) == 0 {
 		return
 	}
 	t.mu.Lock()
@@ -1056,10 +1056,11 @@ func (t *Transport) distributeAudio(mu []byte) {
 		if ps.peer.AudioTrack == nil || ps.apktz == nil {
 			continue
 		}
-		// One sample per byte in G.711, so the byte count IS the sample count —
-		// which is what advances the RTP timestamp at real-time rate.
-		for _, pkt := range ps.apktz.Packetize(mu, uint32(len(mu))) {
-			_ = ps.peer.AudioTrack.WriteRTP(pkt)
+		// Opus is compressed, so the byte count says nothing about duration:
+		// the timestamp must advance by one FRAME of samples per packet, or the
+		// receiver's jitter buffer drifts against real time.
+		for _, p := range ps.apktz.Packetize(pkt, uint32(audio.OpusFrameSamples)) {
+			_ = ps.peer.AudioTrack.WriteRTP(p)
 		}
 	}
 }

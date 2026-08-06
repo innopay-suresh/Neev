@@ -161,9 +161,9 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 		p.VideoTrack = track
 		log.Info().Str("codec", videoCodec.MimeType).Msg("video track added to peer connection")
 
-		// Voice. PCMU rather than Opus — see agent/audio for why (no libopus
-		// means no new native dependency on the Windows build, which is the
-		// baseline that must not wobble).
+		// Voice. Opus at 48 kHz: what every WebRTC stack prefers, so the
+		// viewer's libwebrtc handles it natively, and better audio for roughly
+		// half the bytes PCMU spent (~79 vs 160 per 20 ms frame).
 		//
 		// Added as SENDRECV in one transceiver so both directions share a single
 		// m=audio section: the host is heard on the sender, the viewer is heard
@@ -176,9 +176,9 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 		// plain state change later instead of a renegotiation mid-session.
 		audioTrack, err := webrtc.NewTrackLocalStaticRTP(
 			webrtc.RTPCodecCapability{
-				MimeType:  webrtc.MimeTypePCMU,
-				ClockRate: 8000,
-				Channels:  1,
+				MimeType:  webrtc.MimeTypeOpus,
+				ClockRate: 48000,
+				Channels:  2, // WebRTC always declares Opus stereo; payload may be mono
 			},
 			AudioTrackID,
 			"remote-agent-stream",
@@ -195,7 +195,7 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 			return nil, fmt.Errorf("add audio transceiver: %w", err)
 		}
 		p.AudioTrack = audioTrack
-		log.Info().Str("codec", webrtc.MimeTypePCMU).Msg("audio track added (silent until voice is enabled)")
+		log.Info().Str("codec", webrtc.MimeTypeOpus).Msg("audio track added (silent until voice is enabled)")
 	}
 
 	// ICE candidate handling — both forwards to peer and detects connection mode.
