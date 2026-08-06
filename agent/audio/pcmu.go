@@ -190,3 +190,25 @@ func Mix(a, b []byte) []byte {
 	}
 	return out
 }
+
+// SilenceFloor is the peak amplitude below which a frame counts as silence.
+//
+// About -48 dBFS. Low enough that quiet speech and room tone still pass, high
+// enough to stop the electrical hiss a capture device produces when nobody is
+// talking — which is otherwise encoded, sent, and played at the far end as a
+// constant background noise.
+const SilenceFloor = 128
+
+// IsSilent reports whether a frame is below the silence floor.
+//
+// RustDesk does the same thing (a zero-amplitude gate before the encoder) and
+// for the same two reasons: bandwidth, and not transmitting a device's own
+// noise floor to the other end.
+func IsSilent(pcm []int16) bool {
+	for _, s := range pcm {
+		if s > SilenceFloor || s < -SilenceFloor {
+			return false
+		}
+	}
+	return true
+}

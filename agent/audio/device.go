@@ -41,7 +41,17 @@ type Device struct {
 	overruns int
 	lastPlay time.Time
 	stopIdle chan struct{}
+
+	// Frames still to send after the signal drops below the silence floor.
+	// Cutting the instant a frame goes quiet clips word endings; this holds the
+	// gate open briefly so speech tails through.
+	micSpeech int
+	sndSpeech int
 }
+
+// gateHangFrames is how long the noise gate stays open after speech stops:
+// 25 frames of 20 ms = half a second.
+const gateHangFrames = 25
 
 // NewDevice prepares an audio context without opening any device.
 func NewDevice() (*Device, error) {
@@ -87,6 +97,18 @@ func (d *Device) StartCapture(fn func([]byte)) error {
 			mono := Downsample(downmix(in, int(frames)))
 			if len(mono) == 0 {
 				return
+			}
+			// Noise gate. A capture device produces a hiss of its own with
+			// nobody speaking; encoding and sending it makes that hiss the far
+			// end's constant background. Held open briefly after speech so word
+			// endings and breaths are not clipped.
+			if IsSilent(mono) {
+				if d.micSpeech == 0 {
+					return
+				}
+				d.micSpeech--
+			} else {
+				d.micSpeech = gateHangFrames
 			}
 			cb(EncodeFrame(mono))
 		},
@@ -138,6 +160,16 @@ func (d *Device) StartLoopback(fn func([]byte)) error {
 			mono := Downsample(downmix(in, int(frames)))
 			if len(mono) == 0 {
 				return
+			}
+			// Same gate: a silent desktop should send nothing at all rather
+			// than a stream of near-zero samples.
+			if IsSilent(mono) {
+				if d.sndSpeech == 0 {
+					return
+				}
+				d.sndSpeech--
+			} else {
+				d.sndSpeech = gateHangFrames
 			}
 			fn(EncodeFrame(mono))
 		},

@@ -312,8 +312,22 @@ class RemoteService extends ChangeNotifier {
 
     if (on) {
       try {
-        _micStream ??= await navigator.mediaDevices
-            .getUserMedia({'audio': true, 'video': false});
+        // Ask for the audio processing explicitly rather than relying on the
+        // implementation's defaults.
+        //
+        // This is where echo cancellation, noise suppression and gain control
+        // come from: libwebrtc's audio engine, tuned over years, applied at
+        // capture. Hand-writing any of it would be strictly worse. The host
+        // side has no equivalent — pion has no audio processing module — so
+        // the viewer doing this properly is what keeps a two-way call clean.
+        _micStream ??= await navigator.mediaDevices.getUserMedia({
+          'audio': {
+            'echoCancellation': true,
+            'noiseSuppression': true,
+            'autoGainControl': true,
+          },
+          'video': false,
+        });
       } catch (e) {
         // Denied or no device: report it rather than showing a live mic button
         // that transmits nothing.

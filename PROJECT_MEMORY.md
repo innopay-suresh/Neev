@@ -31,6 +31,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-AUDIO-3 — voice IS a WebRTC track on the existing peer connection.**
+  One `RTCPeerConnection` carries VP8 video and PCMU audio in one SDP. The raw
+  PCM only crosses the worker↔transport IPC, mirroring video exactly
+  (`KindVideoFrame` / `KindAudioFrame`+`KindAudioPlay`, same droppable lane),
+  because the session-0 transport has no audio device — the same constraint
+  that puts capture and input in the worker. It follows a user switch via
+  `sendToWorker` targeting the current worker, like input does.
+  Checked against RustDesk (closest comparator: Rust core, Flutter UI, same
+  session-0 problem): same shape — capture in the session process, resample in
+  code, encode, relay. Differences: they use OPUS where this uses PCMU 8 kHz,
+  and they gate silence (r142 adds the gate). Notably RustDesk has NO AEC/NS/AGC
+  either; on this product the viewer gets it from libwebrtc's audio engine and
+  the host has none, since pion has no audio processing module.
+
 - **LD-AUDIO-1 — never decode an RTP packet without checking its PAYLOAD TYPE.**
   A voice track carries more than the negotiated codec: libwebrtc also sends CN
   (comfort noise, PT 13) and telephone-event on the SAME SSRC, and switches to
