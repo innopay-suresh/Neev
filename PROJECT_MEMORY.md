@@ -1968,6 +1968,33 @@ Guardrail: shipping Flutter host (r30) stays default + untouched through 1–3.
 
 ---
 
+## Releasing
+
+Publish with ONE command; do not hand-copy files.
+
+    # resolve the (short-lived, tokenless) artifact URLs locally, then:
+    ssh neev@172.17.17.77 "/tmp/publish_release.sh <tag> '<mac-url>' '<win-url>'"
+
+`scripts/publish_release.sh` runs ON THE PORTAL and does the whole release:
+download (resumed, size-checked), zip-integrity check, the 28 content checks in
+`scripts/verify_release.py`, backup, fan-out to all 8 canonical names, and
+`version.json` LAST so the update check never advertises a build that is not
+fully served.
+
+Why the portal and not CI: GitHub-hosted runners have no route to this
+machine's private address. Why not a developer laptop: that link failed
+repeatedly — truncated files, stalled transfers, signed URLs expiring
+mid-download — and the size check caught THREE corrupt artifacts in one day
+that would otherwise have shipped. The portal fetches the same files in seconds.
+No GitHub credential is stored on the portal; the caller passes resolved URLs.
+
+Artifact-download gotchas, learned the hard way:
+- Signed artifact URLs EXPIRE. A retry loop must re-resolve the URL each
+  attempt; `curl --retry` re-requests the same dead URL and overwrites good data
+  with a 544-byte error page.
+- Always verify by EXACT byte size against the artifact API, then test the zip.
+  A short read reports success.
+
 ## Notes for future changes
 
 - Never mark a feature "working" until confirmed on hardware (user request).
