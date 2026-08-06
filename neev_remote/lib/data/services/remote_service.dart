@@ -352,10 +352,7 @@ class RemoteService extends ChangeNotifier {
       for (final p in peers) {
         await p.setMicTrack(null);
       }
-      // Release the device so the OS mic indicator goes out. Leaving it open
-      // while "muted" is how apps end up accused of listening.
-      await _micStream?.dispose();
-      _micStream = null;
+      await _releaseMic();
       _voiceOn = false;
       DiagLog.log('voice', 'microphone OFF');
     }
@@ -365,9 +362,43 @@ class RemoteService extends ChangeNotifier {
   /// Stop voice and release the device — session teardown.
   Future<void> _stopVoice() async {
     if (_micStream == null && !_voiceOn) return;
-    await _micStream?.dispose();
-    _micStream = null;
+    // Detach from every sender first, so nothing holds a track that is about
+    // to be stopped.
+    for (final p in <WebRTCService>[
+      if (_viewerPeer != null) _viewerPeer!,
+      ..._hostPeers.values,
+    ]) {
+      await p.setMicTrack(null);
+    }
+    await _releaseMic();
     _voiceOn = false;
+  }
+
+  /// Hands the microphone back to the operating system.
+  ///
+  /// STOPPING each track is what actually closes the device. MediaStream's
+  /// dispose() only tears down the Dart/native stream object — it does not stop
+  /// the tracks, so the capture device stayed open and the OS went on treating
+  /// the app as listening after the user had switched the microphone off. That
+  /// is the single worst bug a voice feature can have, and it is silent: the
+  /// app shows "off", the mic indicator says otherwise.
+  Future<void> _releaseMic() async {
+    final stream = _micStream;
+    _micStream = null;
+    if (stream == null) return;
+    for (final t in stream.getTracks()) {
+      try {
+        await t.stop();
+      } catch (e) {
+        DiagLog.log('voice', 'stopping a mic track failed: $e');
+      }
+    }
+    try {
+      await stream.dispose();
+    } catch (e) {
+      DiagLog.log('voice', 'disposing the mic stream failed: $e');
+    }
+    DiagLog.log('voice', 'microphone released to the OS');
   }
 
   /// VIEWER: whether the host granted control. False means the host is

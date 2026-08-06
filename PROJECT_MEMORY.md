@@ -31,6 +31,15 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-AUDIO-6 — stop() each track to release the microphone; dispose() is not
+  enough.** `MediaStream.dispose()` only calls `streamDispose` on the native
+  side and does NOT stop the tracks, so the capture device stayed open and the
+  OS kept showing the app as listening after the user switched the microphone
+  off. Silent failure: the app said off, the mic indicator said otherwise.
+  Every mute path (`setVoice(false)`, `_stopVoice`, disconnect) now stops each
+  track before disposing. The host side already did the equivalent —
+  `StopCapture` uninits the device rather than pausing it.
+
 - **LD-AUDIO-5 — echo must be suppressed on the HOST; nothing else can.**
   The viewer's libwebrtc AEC only cancels echo created on the VIEWER's machine.
   When the host plays the viewer's voice, its microphone (acoustic) and its
