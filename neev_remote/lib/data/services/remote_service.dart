@@ -303,11 +303,32 @@ class RemoteService extends ChangeNotifier {
   /// Toggling only swaps the track on an already-negotiated sender, so it never
   /// renegotiates and can never drop the screen share.
   Future<void> setVoice(bool on) async {
-    if (on == _voiceOn) return;
     final peers = <WebRTCService>[
       if (_viewerPeer != null) _viewerPeer!,
       ..._hostPeers.values,
     ];
+
+    // Turning OFF always runs, even when the flag already says off.
+    //
+    // The flag and the device could disagree: if getUserMedia succeeded but
+    // anything after it bailed out, the microphone was open while _voiceOn
+    // stayed false — and the old early return meant nothing ever closed it. The
+    // app said off and the OS mic indicator said otherwise, with no way back
+    // short of quitting.
+    if (!on) {
+      for (final p in peers) {
+        await p.setMicTrack(null);
+      }
+      await _releaseMic();
+      if (_voiceOn) {
+        _voiceOn = false;
+        DiagLog.log('voice', 'microphone OFF');
+      }
+      notifyListeners();
+      return;
+    }
+
+    if (_voiceOn) return;
     if (peers.isEmpty) return;
 
     if (on) {
@@ -337,9 +358,23 @@ class RemoteService extends ChangeNotifier {
       final track = _micStream!.getAudioTracks().isEmpty
           ? null
           : _micStream!.getAudioTracks().first;
-      if (track == null) return;
-      for (final p in peers) {
-        await p.setMicTrack(track);
+      if (track == null) {
+        // Device opened but gave us nothing to send. Hand it straight back
+        // rather than leaving it held open for a feature that is not running.
+        DiagLog.log('voice', 'microphone opened but exposed no audio track');
+        await _releaseMic();
+        return;
+      }
+      try {
+        for (final p in peers) {
+          await p.setMicTrack(track);
+        }
+      } catch (e) {
+        // Attaching failed, so nothing is being transmitted — the device must
+        // not stay open regardless.
+        DiagLog.log('voice', 'attaching the microphone failed: $e');
+        await _releaseMic();
+        return;
       }
       _voiceOn = true;
       // Log the NEGOTIATED direction, not just "on". If this ever reads
@@ -349,12 +384,9 @@ class RemoteService extends ChangeNotifier {
         DiagLog.log('voice', 'microphone ON — channel is ${await p.voiceDirection()}');
       }
     } else {
-      for (final p in peers) {
-        await p.setMicTrack(null);
-      }
+      // unreachable — turning off is handled above, before any device work
       await _releaseMic();
       _voiceOn = false;
-      DiagLog.log('voice', 'microphone OFF');
     }
     notifyListeners();
   }
@@ -734,6 +766,11 @@ class RemoteService extends ChangeNotifier {
   /// has a single monitor). Each entry: {'id':..., 'n': name}.
   List<Map<String, String>> hostMonitors = const [];
   String? _remoteHostOs;
+
+  /// The remote machine's own name, announced by the host once connected.
+  /// Null until it arrives, or against a host too old to send it — callers
+  /// fall back to the id rather than showing a blank where a name should be.
+  String? _remoteHostName;
   MediaStream? _remoteStream;
   SessionStats _stats = const SessionStats();
   Timer? _statsTimer;
@@ -897,6 +934,9 @@ class RemoteService extends ChangeNotifier {
   /// control channel. Null until the host announces it. Used by the viewer to
   /// translate the primary command modifier across platforms.
   String? get remoteHostOs => _remoteHostOs;
+
+  /// The remote machine's name, or null if the host has not announced one.
+  String? get remoteHostName => _remoteHostName;
   MediaStream? get remoteStream => _remoteStream;
   SessionStats get stats => _stats;
 
@@ -1409,6 +1449,7 @@ class RemoteService extends ChangeNotifier {
     _targetId = targetId;
     _viewerStatus = ViewerStatus.connecting;
     _viewerPhase = 0; // new attempt — start the progress over
+    _remoteHostName = null; // never label a new machine with the last one's name
     _viewerError = null;
     DiagLog.log('viewer', 'connectToHost target=$targetId relay=$relayUrl '
         'autoReconnect=$autoReconnect tries=$_reconnectTries');
@@ -2260,6 +2301,20 @@ class RemoteService extends ChangeNotifier {
       _remoteHostOs = m['v'] as String?;
       if (kRemoteVerboseLog) debugPrint('[os] remote host is $_remoteHostOs');
       notifyListeners();
+      return;
+    }
+
+    // Host announces its machine name, so a session can be labelled with
+    // something a person recognises instead of a nine-digit id. Especially
+    // worth it across an organisation, where the id says nothing about which
+    // desk the machine is on.
+    if (m['k'] == 'hostname') {
+      final name = (m['v'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) {
+        _remoteHostName = name;
+        DiagLog.log('viewer', 'remote machine name is $name');
+        notifyListeners();
+      }
       return;
     }
 

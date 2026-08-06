@@ -185,6 +185,28 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       return _ConnectedSession(service: service);
     }
 
+    // Once the host announces its machine name, remember it against the recent
+    // entry — a nine-digit id says nothing about which desk a machine is on,
+    // and across an organisation that is the difference between a usable list
+    // and a wall of numbers.
+    final announced = service.remoteHostName;
+    if (announced != null && announced.isNotEmpty) {
+      final target = _idController.text.trim();
+      if (target.isNotEmpty) {
+        final existing = ref.read(recentConnectionsProvider);
+        final known = existing.where((c) => c.id == target).firstOrNull;
+        if (known == null || known.name != announced) {
+          ref.read(recentConnectionsProvider.notifier).addConnection(
+                RecentConnection(
+                  id: target,
+                  name: announced,
+                  lastConnected: DateTime.now(),
+                ),
+              );
+        }
+      }
+    }
+
     // Connecting: full-screen animated sequence (locating → securing → …) with a
     // glowing encrypted path, instead of a bare spinner on the Home shell.
     if (service.viewerStatus == ViewerStatus.connecting) {

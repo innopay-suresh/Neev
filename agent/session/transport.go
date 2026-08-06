@@ -638,9 +638,20 @@ func (t *Transport) announceGrant(peer *network.Peer, control bool) {
 // returns an error while the channel isn't open, so err==nil means it landed;
 // sends are idempotent on the viewer regardless.
 func (t *Transport) announceHostOS(peer *network.Peer) {
+	// The machine's own name, so the viewer can label the session with
+	// something a person recognises instead of a nine-digit id. Sent with the
+	// OS announce because it rides the same channel and has the same "retry
+	// until the data channel is actually open" problem.
+	name, _ := os.Hostname()
+	nameJSON, _ := json.Marshal(name)
+
 	for i := 0; i < 15; i++ {
 		if err := peer.SendControlText(`{"k":"os","v":"windows"}`); err == nil {
 			log.Info().Msg("transport: announced host OS to viewer")
+			if name != "" {
+				_ = peer.SendControlText(`{"k":"hostname","v":` + string(nameJSON) + `}`)
+				log.Info().Str("hostname", name).Msg("transport: announced hostname to viewer")
+			}
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -756,12 +767,25 @@ func (t *Transport) dropPeer(id string) {
 // handleWorker drains one capture worker's frame stream and distributes frames
 // to all connected viewers. A new worker (after a session switch) simply
 // replaces the old one; the peers/tracks are untouched.
+//
+// It must also be TOLD the current session state. A worker spawned after a user
+// switch starts with no idea a viewer is connected: it never showed its session
+// bar and never registered its audio sink, so the microphone and system-sound
+// controls were missing or dead until the next viewer connect/disconnect
+// happened to re-announce it.
 func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 	defer conn.Close()
 	t.workerMu.Lock()
 	t.worker = conn
 	t.workerMu.Unlock()
 	log.Info().Msg("transport: capture worker attached")
+
+	// Tell the fresh worker what is already happening. Without this a worker
+	// spawned by a user switch never learns a viewer is connected, so it never
+	// shows its session bar and never registers its audio sink — the mic and
+	// system-sound controls end up missing or inert until some later
+	// connect/disconnect happens to re-announce.
+	t.announceSessionState()
 
 	for {
 		select {

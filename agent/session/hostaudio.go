@@ -133,9 +133,14 @@ func startHostMic(fn func([]byte)) {
 func stopHostMic() {
 	hostAudioMu.Lock()
 	defer hostAudioMu.Unlock()
-	if !micOn || hostAudio == nil {
+	if hostAudio == nil {
 		return
 	}
+	// Stop unconditionally rather than only when micOn is set. If that flag
+	// ever disagrees with the device — a failed start, a worker that inherited
+	// state, a toggle handled twice — the guard would skip the stop and leave a
+	// live microphone behind a UI that says off. Stopping an already-stopped
+	// device is harmless; the reverse is not.
 	hostAudio.StopCapture()
 	micOn = false
 	pendingSound = nil
@@ -192,7 +197,11 @@ func stopHostSound() {
 	d := hostAudio
 	soundOn = false
 	pendingSound = nil
+	if !micOn {
+		sink = nil
+	}
 	hostAudioMu.Unlock()
+	// Same reasoning as stopHostMic: stop the device regardless of the flag.
 	if d != nil {
 		d.StopLoopback()
 	}

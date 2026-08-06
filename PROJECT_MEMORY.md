@@ -31,6 +31,14 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-SESSION-1 — a NEW worker must be told the current session state.**
+  `handleWorker` set `t.worker = conn` without calling `announceSessionState()`,
+  so a worker spawned by a user switch never learned a viewer was connected: no
+  session bar, and `setAudioSink` never ran, leaving mic/system-sound controls
+  missing or inert until some later connect/disconnect re-announced. Any
+  per-session state the worker needs must be (re)sent on ATTACH, not only on
+  change — a fresh process starts knowing nothing.
+
 - **LD-AUDIO-6 — stop() each track to release the microphone; dispose() is not
   enough.** `MediaStream.dispose()` only calls `streamDispose` on the native
   side and does NOT stop the tracks, so the capture device stayed open and the
