@@ -51,8 +51,11 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
 
         // Label states the CURRENT state, not the action, so a glance answers
         // "am I being heard right now?" — the only question that matters here.
+        // "Voice", not "Microphone": the toggle governs both what this Mac
+        // sends and what it plays, so naming only the microphone would promise
+        // less than it does.
         let mic = NSMenuItem(
-            title: micOn ? "Microphone on — click to mute" : "Microphone off",
+            title: micOn ? "Voice on — click to turn off" : "Voice off",
             action: #selector(toggleMic), keyEquivalent: "")
         mic.target = self
         mic.state = micOn ? .on : .off

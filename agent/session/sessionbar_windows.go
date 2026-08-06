@@ -441,9 +441,12 @@ func (b *sessionBar) paint(hwnd uintptr) {
 	if micOn || b.hotTalk {
 		tcol = cwColCard
 	}
-	label := "Mic off"
+	// "Voice", not "Mic": this toggle governs both what this machine sends and
+	// what it plays, so a label naming only the microphone would promise less
+	// than it does.
+	label := "Voice off"
 	if micOn {
-		label = "Mic on"
+		label = "Voice on"
 	}
 	b.text(hdc, label, b.rcTalk, font, tcol)
 

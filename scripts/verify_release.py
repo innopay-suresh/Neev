@@ -148,7 +148,7 @@ def verify_windows(path, tag):
             for label, needle in [
                 ("host: Record button", b"Record"),
                 ("host: Sound button", b"Sound off"),
-                ("host: Mic button", b"Mic off"),
+                ("host: Voice button", b"Voice off"),
                 ("host: Disconnect button", b"Disconnect"),
                 ("host: WebM muxer", b"V_VP8"),
                 ("host: recordings folder", b"Neev Recordings"),

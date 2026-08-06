@@ -318,6 +318,10 @@ class RemoteService extends ChangeNotifier {
     if (!on) {
       for (final p in peers) {
         await p.setMicTrack(null);
+        // Voice off silences BOTH directions on this side. WebRTC does not
+        // link them, so the incoming track has to be silenced explicitly or
+        // the far end is still heard while the UI says off.
+        p.setRemoteAudioEnabled(false);
       }
       await _releaseMic();
       if (_voiceOn) {
@@ -375,6 +379,9 @@ class RemoteService extends ChangeNotifier {
         DiagLog.log('voice', 'attaching the microphone failed: $e');
         await _releaseMic();
         return;
+      }
+      for (final p in peers) {
+        p.setRemoteAudioEnabled(true);
       }
       _voiceOn = true;
       // Log the NEGOTIATED direction, not just "on". If this ever reads

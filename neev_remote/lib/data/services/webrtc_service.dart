@@ -88,6 +88,10 @@ class WebRTCService {
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
         _remoteStream = event.streams.first;
+        // Apply the current voice state to a track that has only just arrived.
+        // Without this, connecting with voice already off would play the far
+        // end's audio until the toggle was touched.
+        _applyRemoteAudioEnabled();
         onRemoteStream?.call(_remoteStream!);
       }
     };
@@ -254,6 +258,29 @@ class WebRTCService {
       }
     }
     return null;
+  }
+
+  /// Whether incoming voice may be played on this side.
+  ///
+  /// Separate from the outgoing track on purpose: WebRTC does not link a local
+  /// sender's mute state to a remote track it happens to be receiving, so
+  /// silencing playback has to be done explicitly or the far end is still heard
+  /// while the UI says voice is off.
+  bool _playRemoteAudio = false;
+
+  /// Enables or silences incoming voice. Local and immediate — no
+  /// renegotiation, so it cannot disturb the screen share or drop the call.
+  void setRemoteAudioEnabled(bool on) {
+    _playRemoteAudio = on;
+    _applyRemoteAudioEnabled();
+  }
+
+  void _applyRemoteAudioEnabled() {
+    final stream = _remoteStream;
+    if (stream == null) return;
+    for (final t in stream.getAudioTracks()) {
+      t.enabled = _playRemoteAudio;
+    }
   }
 
   /// The negotiated direction of the voice channel, for diagnosis.

@@ -2663,13 +2663,17 @@ class _SessionToolbar extends ConsumerWidget {
                 // never use it.
                 _ToolButton(
                   icon: service.voiceOn ? Icons.mic : Icons.mic_off_outlined,
-                  label: service.voiceOn ? 'Mic on' : 'Mic off',
+                  // "Voice", not "Mic": this toggle governs what you send AND
+                  // what you hear, so naming only the microphone would promise
+                  // less than it does — and someone who muted to cut background
+                  // noise would be left wondering why the other side went quiet.
+                  label: service.voiceOn ? 'Voice on' : 'Voice off',
                   tooltip: !service.voiceAvailable
                       ? 'Voice is not available in this session — the host is '
                           'on a build older than r126, which carries no audio'
                       : service.voiceOn
-                          ? 'Microphone on — click to mute'
-                          : 'Talk to the person at the other end',
+                          ? 'Voice on — click to turn off talking and listening'
+                          : 'Turn on voice to talk to and hear the other end',
                   active: service.voiceOn,
                   // Disabled, not silently inert, when the session has no audio
                   // section to speak over.

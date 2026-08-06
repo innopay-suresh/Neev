@@ -31,6 +31,21 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-AUDIO-7 — the voice toggle gates BOTH directions, and each must be
+  enforced separately.** WebRTC does not link a local sender's mute state to a
+  remote track being received: they are independent streams. Playback was
+  therefore unconditional — `playViewerVoice` had no reference to any local
+  state — so a side with voice off still HEARD the far end while its own UI
+  said off. Each side now checks its own toggle twice: never send when off
+  (StopCapture / replaceTrack+stop) and never play when off (gate before the
+  output device is opened, and `track.enabled=false` on the viewer's remote
+  audio, reapplied when a track first arrives). Both checks are local and
+  instant — no signalling, no renegotiation.
+  The control is therefore labelled **Voice**, not Mic, on every surface
+  (viewer toolbar, Windows session bar, macOS menu): it governs talking AND
+  listening, and a "Mic" label would leave someone who muted to cut background
+  noise wondering why the other side went quiet.
+
 - **LD-SESSION-1 — a NEW worker must be told the current session state.**
   `handleWorker` set `t.worker = conn` without calling `announceSessionState()`,
   so a worker spawned by a user switch never learned a viewer was connected: no

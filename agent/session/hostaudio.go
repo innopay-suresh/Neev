@@ -243,7 +243,18 @@ func playViewerVoice(pkt []byte) {
 	if len(pkt) == 0 {
 		return
 	}
+	// Voice OFF on this side means this side is silent in BOTH directions.
+	//
+	// WebRTC does not link these: a local sender's mute state has no effect on
+	// a separately received remote track, so playback carried on regardless of
+	// the toggle and the host heard the viewer while showing "off". The check
+	// sits BEFORE the device is opened, so turning voice off also stops the
+	// speakers being held open for audio that will not be played.
 	hostAudioMu.Lock()
+	if !micOn {
+		hostAudioMu.Unlock()
+		return
+	}
 	d := ensureDeviceLocked()
 	if d != nil && opusDec == nil {
 		dec, err := audio.NewOpusDecoder()
