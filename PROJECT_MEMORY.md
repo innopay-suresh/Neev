@@ -44,6 +44,15 @@ moves to **Working Features** after it is confirmed working on real hardware.
   automatically from the .pkg. Do NOT reimplement the recorder or loopback in
   Dart to close this — that duplicates working native code.
 
+- **LD-CONSENT-2 — a macOS prompt from a backgrounded app MUST call
+  `activateIgnoringOtherApps`.** r151 used `osascript -e 'display dialog ...'`,
+  which opens BEHIND everything when the calling app is not frontmost — so the
+  consent prompt was still invisible and "ask before allowing" still looked
+  broken. The daemon's JXA had always done this correctly (NSAlert +
+  `app.activateIgnoringOtherApps(true)`); r154 reuses that same script in the
+  app instead of a weaker second prompt. If a native prompt is ever added
+  elsewhere, copy the daemon's, do not write a new one.
+
 - **LD-CONSENT-1 — a host consent prompt must not depend on the app's own
   window being visible.** A machine being used as a HOST normally has the app
   backgrounded or minimised, and this app CANNOT raise its own window
