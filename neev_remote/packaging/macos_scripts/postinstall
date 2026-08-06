@@ -12,15 +12,40 @@
 # The installer already runs as root, so this needs no extra prompt.
 set -uo pipefail
 
-APP="/Applications/NeevRemote.app"
+LOG="/var/log/neev-remote-install.log"
+log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >>"$LOG" 2>/dev/null || true; }
+
+log "postinstall starting (target=${2:-unset})"
+
+# Find the installed app rather than assuming where it landed.
+#
+# This used to hardcode /Applications/NeevRemote.app and reported "no daemon
+# payload" on a package that demonstrably contained one — the lookup was wrong,
+# not the build. Installer scripts receive the install location in $2, and the
+# bundle name can change, so search for the bundle that actually carries the
+# daemon instead of guessing its path.
+DEST="${2:-/Applications}"
+APP=""
+for candidate in \
+  "$DEST/NeevRemote.app" \
+  "/Applications/NeevRemote.app" \
+  $(find "$DEST" -maxdepth 2 -name "*.app" -type d 2>/dev/null) \
+  $(find /Applications -maxdepth 2 -name "*.app" -type d 2>/dev/null); do
+  [ -d "$candidate/Contents/Resources/daemon" ] || continue
+  APP="$candidate"
+  break
+done
+
+if [ -z "$APP" ]; then
+  log "could not find an installed app bundle containing Contents/Resources/daemon"
+  log "  looked under: $DEST and /Applications"
+  exit 0
+fi
+log "found app bundle: $APP"
+
 DAEMON_DIR="$APP/Contents/Resources/daemon"
 AGENT="$DAEMON_DIR/neev-agent"
 INSTALLER="$DAEMON_DIR/install-daemon.sh"
-LOG="/var/log/neev-remote-install.log"
-
-log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >>"$LOG" 2>/dev/null || true; }
-
-log "postinstall starting"
 
 # Gatekeeper quarantine on a freshly copied bundle stops launchd running it.
 if command -v xattr >/dev/null 2>&1; then
@@ -30,7 +55,7 @@ fi
 if [ ! -f "$AGENT" ] || [ ! -f "$INSTALLER" ]; then
   # An app-only build (no Go agent bundled). Not fatal: the viewer works, and
   # failing the whole install would be worse than lacking the host daemon.
-  log "no daemon payload in the app bundle — skipping daemon install"
+  log "daemon dir exists but is incomplete: agent=$([ -f "$AGENT" ] && echo yes || echo no) installer=$([ -f "$INSTALLER" ] && echo yes || echo no)"
   exit 0
 fi
 
