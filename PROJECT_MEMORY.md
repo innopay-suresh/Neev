@@ -44,6 +44,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
   automatically from the .pkg. Do NOT reimplement the recorder or loopback in
   Dart to close this — that duplicates working native code.
 
+- **LD-MAC-WORKER-1 — a LaunchAgent must not redirect its logs into a
+  root-owned directory.** `com.neev.worker.plist` set StandardOut/ErrorPath to
+  /Library/Application Support/NeevRemote, which the installer creates as ROOT.
+  The worker runs as the LOGGED-IN USER (Aqua), so launchd could not create
+  those files and failed the job during setup with EX_CONFIG — visible only as
+  `-  78  com.neev.worker` in `launchctl list`. The binary never ran: no
+  capture, and a session stalled immediately after the host accepted it. The
+  transport masked it by working fine, because it runs as root.
+  Diagnosing this needs `launchctl list` WITHOUT sudo — a LaunchAgent lives in
+  the user's gui/<uid> domain and does not appear in the root domain listing.
+
 - **LD-CONSENT-2 — a macOS prompt from a backgrounded app MUST call
   `activateIgnoringOtherApps`.** r151 used `osascript -e 'display dialog ...'`,
   which opens BEHIND everything when the calling app is not frontmost — so the
