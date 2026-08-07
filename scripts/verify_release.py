@@ -60,30 +60,64 @@ def _pkg_has_scripts(blob):
         return False
 
 
-def _pkg_installs_unconditionally(blob):
-    """True if the .pkg is NOT an upgrade-only package.
+def _pkg_package_info(blob):
+    """The .pkg's PackageInfo XML, decompressed, or None.
 
-    pkgbuild --component lists the app inside <upgrade-bundle>, which makes the
-    installer expect an existing copy and silently install nothing when there
-    is none. pkgbuild --root leaves that element empty.
+    Every earlier version of this check regex-searched the raw .pkg bytes for
+    PackageInfo elements. That can never match: PackageInfo is a zlib-compressed
+    heap entry inside the xar, so the check silently passed on every package it
+    was ever run against — including one whose PackageInfo held the exact
+    element it was meant to reject. Locating the entry through the TOC is the
+    only way to read it.
     """
     import re
     import struct
+    import xml.etree.ElementTree as ET
     import zlib
     try:
         if blob[:4] != b"xar!":
-            return False
+            return None
         header_size = struct.unpack(">H", blob[4:6])[0]
         toc_len = struct.unpack(">Q", blob[8:16])[0]
-        toc = zlib.decompress(blob[header_size:header_size + toc_len])
-        # PackageInfo lives in the payload, so read it from the file entry.
-        m = re.search(rb"<upgrade-bundle\s*/>", blob)
-        if m:
-            return True
-        # Any populated upgrade-bundle is the failing shape.
-        return b"<upgrade-bundle>" not in blob
+        heap = header_size + toc_len
+        toc = ET.fromstring(
+            zlib.decompress(blob[header_size:header_size + toc_len]))
+        for f in toc.iter("file"):
+            name = f.findtext("name")
+            data = f.find("data")
+            if name != "PackageInfo" or data is None:
+                continue
+            off = int(data.findtext("offset"))
+            length = int(data.findtext("length"))
+            raw = blob[heap + off:heap + off + length]
+            style = data.findtext("encoding/{*}style") or \
+                (data.find("encoding").get("style") if data.find("encoding") is not None else "")
+            if "gzip" in (style or ""):
+                raw = zlib.decompress(raw)
+            return raw
+        return None
     except Exception:
+        return None
+
+
+def _pkg_installs_at_fixed_location(blob):
+    """True if the .pkg cannot be relocated away from --install-location.
+
+    pkgbuild marks app bundles relocatable by default, emitting
+    <relocate><bundle id="…"/></relocate>. The installer then asks
+    LaunchServices where that bundle id already lives and writes the payload
+    THERE, ignoring --install-location entirely. On a Mac that had ever held an
+    older copy — one in the Trash was enough — /Applications stayed empty and
+    the postinstall failed on a package whose payload was perfectly intact,
+    while a never-seen-it Mac installed fine. Only BundleIsRelocatable=false in
+    a component plist removes the element.
+    """
+    info = _pkg_package_info(blob)
+    if info is None:
         return False
+    import re
+    # <relocate/> (self-closing, i.e. empty) is the shape we want.
+    return re.search(rb"<relocate>\s*<bundle", info) is None
 
 
 def _encodings(needle):
@@ -206,12 +240,28 @@ def verify_macos(path, tag):
         if pkg:
             pkg_blob = outer.read(pkg)
             check("pkg carries a postinstall script", _pkg_has_scripts(pkg_blob))
-            # An upgrade-bundle entry means the installer only UPDATES an
-            # existing copy. On a machine without one it writes nothing — which
-            # shipped once and looked machine-specific, because a fresh Mac
-            # installs fine.
-            check("pkg installs unconditionally (no upgrade-bundle)",
-                  _pkg_installs_unconditionally(pkg_blob))
+            # A relocatable bundle lets the installer follow LaunchServices to
+            # wherever an old copy was last seen and write there instead of
+            # /Applications, so the app never lands where the postinstall looks.
+            check("pkg is non-relocatable (installs at /Applications)",
+                  _pkg_installs_at_fixed_location(pkg_blob))
+
+    # The .dmg is the fallback install route, and the one that has never failed
+    # on a user's machine: drag-to-Applications runs no installer logic, so
+    # there is nothing to relocate or silently no-op. It has to actually be in
+    # the artifact for that to be true.
+    #
+    # Size is the only property checkable here — a UDZO image is compressed, so
+    # the app bundle's contents are not greppable. The daemon payload inside the
+    # app is covered by the .zip checks above, and the .dmg is built from the
+    # same bundle in the same run.
+    with zipfile.ZipFile(path) as outer:
+        dmg = next((n for n in outer.namelist()
+                    if n.endswith("NeevRemote-macos.dmg")), None)
+        check("macOS .dmg present in artifact", dmg is not None)
+        if dmg:
+            check("dmg is a full image (>20 MB)",
+                  outer.getinfo(dmg).file_size > 20 * 1024 * 1024)
 
 
 def verify_windows(path, tag):

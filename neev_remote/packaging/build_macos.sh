@@ -115,26 +115,46 @@ if [ ! -x "$SCRIPTS_DIR/postinstall" ]; then
   echo "ERROR: $SCRIPTS_DIR/postinstall missing or not executable" >&2
   exit 1
 fi
-# --root, NOT --component.
+# Relocation MUST be off, and only a component plist turns it off.
 #
-# --component records the app as an UPGRADE-BUNDLE: the installer expects a copy
-# to already exist and merely updates it. On a machine where the app had been
-# deleted there was nothing to upgrade, so installer wrote NOTHING while
-# reporting success — and once the postinstall was made strict, it failed
-# outright. A fresh Mac worked, which is what made this look machine-specific.
+# By default pkgbuild marks every app bundle it finds as relocatable, which
+# emits <relocate><bundle id="com.neev.neevRemote"/></relocate> in PackageInfo.
+# At install time the installer then asks LaunchServices where that bundle id
+# already lives and writes the payload THERE, ignoring --install-location. On a
+# machine that had ever held an older copy — including one sitting in the Trash —
+# the app was written to that stale path, so /Applications stayed empty and the
+# postinstall could not find what it had just installed. A Mac that had never
+# seen the app before installed fine, which is exactly what made this look
+# machine-specific for several releases.
 #
-# --root produces a plain payload with an empty <upgrade-bundle/>, so the app is
-# installed unconditionally whether or not a previous copy is present. Verified
-# by comparing the PackageInfo both ways.
+# --analyze produces the component plist; forcing BundleIsRelocatable=false in
+# it drops the <relocate> element, so --install-location is honoured
+# unconditionally. Note that --root vs --component was never the deciding
+# factor: both emit <upgrade-bundle>, and that element alone is harmless.
 PKG_ROOT="$(mktemp -d)"
 cp -R "$APP_PATH" "$PKG_ROOT/"
+COMPONENT_PLIST="$(mktemp -t neev-component).plist"
+pkgbuild --analyze --root "$PKG_ROOT" "$COMPONENT_PLIST"
+/usr/bin/python3 - "$COMPONENT_PLIST" <<'PY'
+import plistlib
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as fh:
+    comps = plistlib.load(fh)
+for comp in comps:
+    comp["BundleIsRelocatable"] = False
+with open(path, "wb") as fh:
+    plistlib.dump(comps, fh)
+PY
 pkgbuild --root "$PKG_ROOT" \
+  --component-plist "$COMPONENT_PLIST" \
   --install-location /Applications \
   --identifier com.neev.neev_remote \
   --version "$PKG_VERSION" \
   --scripts "$SCRIPTS_DIR" \
   "$OUT/NeevRemote-macos.pkg"
-rm -rf "$PKG_ROOT"
+rm -rf "$PKG_ROOT" "$COMPONENT_PLIST"
 
 echo "==> done:"
 ls -lh "$OUT"/NeevRemote-macos.*

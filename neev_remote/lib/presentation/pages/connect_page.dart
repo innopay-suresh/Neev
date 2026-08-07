@@ -11,6 +11,7 @@ import '../../core/diag_log.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/discovery_service.dart';
 import '../../data/services/host_mode.dart';
+import '../../data/services/mac_daemon.dart';
 import '../../data/services/audit_log.dart';
 import '../../data/services/consent_store.dart';
 import '../../data/services/remote_service.dart';
@@ -48,8 +49,26 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     // machine is immediately reachable (service-like). The browser web build
     // stays manual (each visitor shouldn't auto-share their screen).
     if (!kIsWeb) {
-      Future.delayed(const Duration(milliseconds: 600), _autoStartHost);
+      Future.delayed(const Duration(milliseconds: 600), _bootstrapHost);
     }
+  }
+
+  /// Make sure the machine can host before deciding who hosts.
+  ///
+  /// On macOS the daemon has to exist before [HostMode.shouldAutoHost] runs —
+  /// it is the thing that decides whether this window hosts or defers to the
+  /// service — so installing it afterwards would leave the first launch in the
+  /// wrong mode until the app was restarted.
+  Future<void> _bootstrapHost() async {
+    if (MacDaemon.supported) {
+      final relayUrl = ref.read(settingsProvider).relayUrl;
+      final err = await MacDaemon.ensureInstalled(
+        relayUrl: relayUrl.isEmpty ? null : relayUrl,
+      );
+      if (err != null) DiagLog.log('daemon', 'first-launch install: $err');
+    }
+    if (!mounted) return;
+    await _autoStartHost();
   }
 
   Future<void> _autoStartHost() async {

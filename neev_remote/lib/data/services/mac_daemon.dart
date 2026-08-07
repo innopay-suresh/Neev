@@ -66,6 +66,56 @@ class MacDaemon {
     return _runPrivileged(shell);
   }
 
+  /// Marker recording that the user dismissed the first-launch install prompt,
+  /// so [ensureInstalled] asks once per app version instead of every launch.
+  static File? _declinedMarker() {
+    final home = Platform.environment['HOME'];
+    if (home == null || home.isEmpty) return null;
+    return File('$home/Library/Application Support/NeevRemote/'
+        'daemon-install-declined');
+  }
+
+  /// Installs the daemon at app launch if it isn't there yet.
+  ///
+  /// The .pkg does this in its postinstall with no prompt at all, but the .dmg
+  /// cannot: dragging an app to /Applications runs no scripts, so a .dmg user
+  /// used to end up with a viewer-only install and no TransportMode — no
+  /// hosting across a user switch, no login-window access, and none of the
+  /// host-side session controls. Writing /Library/LaunchDaemons needs root, so
+  /// this shows the standard macOS auth prompt once; after that the daemon is
+  /// installed for good and no later launch asks again.
+  ///
+  /// Also acts as the safety net for a .pkg whose postinstall didn't run.
+  /// Returns null when nothing was needed or the install succeeded.
+  static Future<String?> ensureInstalled({String? relayUrl}) async {
+    if (!canInstall || isInstalled) return null;
+    final marker = _declinedMarker();
+    final stamp = '${Platform.resolvedExecutable}\n$_installPromptVersion';
+    try {
+      if (marker != null &&
+          marker.existsSync() &&
+          marker.readAsStringSync() == stamp) {
+        return 'declined';
+      }
+    } catch (_) {
+      // An unreadable marker must not block the install.
+    }
+    final err = await install(relayUrl: relayUrl);
+    if (err == 'cancelled') {
+      try {
+        marker?.parent.createSync(recursive: true);
+        marker?.writeAsStringSync(stamp);
+      } catch (_) {
+        // Worst case we ask again next launch — better than not installing.
+      }
+    }
+    return err;
+  }
+
+  /// Bump to re-ask users who previously cancelled (e.g. when the install
+  /// itself gains a fix that makes it worth prompting for again).
+  static const int _installPromptVersion = 1;
+
   /// Stops + removes the daemon set (admin prompt).
   static Future<String?> uninstall() async {
     if (!supported) return 'not macOS';
