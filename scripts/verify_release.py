@@ -60,6 +60,32 @@ def _pkg_has_scripts(blob):
         return False
 
 
+def _pkg_installs_unconditionally(blob):
+    """True if the .pkg is NOT an upgrade-only package.
+
+    pkgbuild --component lists the app inside <upgrade-bundle>, which makes the
+    installer expect an existing copy and silently install nothing when there
+    is none. pkgbuild --root leaves that element empty.
+    """
+    import re
+    import struct
+    import zlib
+    try:
+        if blob[:4] != b"xar!":
+            return False
+        header_size = struct.unpack(">H", blob[4:6])[0]
+        toc_len = struct.unpack(">Q", blob[8:16])[0]
+        toc = zlib.decompress(blob[header_size:header_size + toc_len])
+        # PackageInfo lives in the payload, so read it from the file entry.
+        m = re.search(rb"<upgrade-bundle\s*/>", blob)
+        if m:
+            return True
+        # Any populated upgrade-bundle is the failing shape.
+        return b"<upgrade-bundle>" not in blob
+    except Exception:
+        return False
+
+
 def _encodings(needle):
     """Every byte form a string may take in a shipped binary.
 
@@ -178,7 +204,14 @@ def verify_macos(path, tag):
         pkg = next((n for n in outer.namelist() if n.endswith("NeevRemote-macos.pkg")), None)
         check("macOS .pkg present in artifact", pkg is not None)
         if pkg:
-            check("pkg carries a postinstall script", _pkg_has_scripts(outer.read(pkg)))
+            pkg_blob = outer.read(pkg)
+            check("pkg carries a postinstall script", _pkg_has_scripts(pkg_blob))
+            # An upgrade-bundle entry means the installer only UPDATES an
+            # existing copy. On a machine without one it writes nothing — which
+            # shipped once and looked machine-specific, because a fresh Mac
+            # installs fine.
+            check("pkg installs unconditionally (no upgrade-bundle)",
+                  _pkg_installs_unconditionally(pkg_blob))
 
 
 def verify_windows(path, tag):

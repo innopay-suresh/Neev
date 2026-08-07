@@ -115,12 +115,26 @@ if [ ! -x "$SCRIPTS_DIR/postinstall" ]; then
   echo "ERROR: $SCRIPTS_DIR/postinstall missing or not executable" >&2
   exit 1
 fi
-pkgbuild --install-location /Applications \
+# --root, NOT --component.
+#
+# --component records the app as an UPGRADE-BUNDLE: the installer expects a copy
+# to already exist and merely updates it. On a machine where the app had been
+# deleted there was nothing to upgrade, so installer wrote NOTHING while
+# reporting success — and once the postinstall was made strict, it failed
+# outright. A fresh Mac worked, which is what made this look machine-specific.
+#
+# --root produces a plain payload with an empty <upgrade-bundle/>, so the app is
+# installed unconditionally whether or not a previous copy is present. Verified
+# by comparing the PackageInfo both ways.
+PKG_ROOT="$(mktemp -d)"
+cp -R "$APP_PATH" "$PKG_ROOT/"
+pkgbuild --root "$PKG_ROOT" \
+  --install-location /Applications \
   --identifier com.neev.neev_remote \
   --version "$PKG_VERSION" \
   --scripts "$SCRIPTS_DIR" \
-  --component "$APP_PATH" \
   "$OUT/NeevRemote-macos.pkg"
+rm -rf "$PKG_ROOT"
 
 echo "==> done:"
 ls -lh "$OUT"/NeevRemote-macos.*

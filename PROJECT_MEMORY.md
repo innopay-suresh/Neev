@@ -31,6 +31,16 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-PKG-3 — build the macOS pkg with `--root`, never `--component`.**
+  `--component` records the app inside `<upgrade-bundle>`, which makes installer
+  expect an existing copy and merely update it. On a Mac where the app had been
+  deleted there was nothing to upgrade, so it wrote NOTHING while reporting
+  success; a FRESH Mac installed fine, which made the fault look
+  machine-specific. `--root` produces a plain payload with an empty
+  `<upgrade-bundle/>` and installs unconditionally. Verified by diffing the
+  PackageInfo produced both ways. The release gate now rejects a package whose
+  upgrade-bundle is populated.
+
 - **LD-PKG-2 — the macOS pkg version MUST change every release.** It was
   hardcoded `--version 1.0.0`, so every build claimed the same version. With a
   receipt already present, `installer` treated an install as a no-op upgrade:
