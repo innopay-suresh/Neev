@@ -4,7 +4,7 @@ class AppConstants {
   static const String appVersion = '1.0.0';
   // Human-visible build stamp — bump every release so we can confirm at a glance
   // which build is actually running (shown in the top bar + Settings → About).
-  static const String buildTag = 'build 2026-07-31 · r157-capture-retry';
+  static const String buildTag = 'build 2026-07-31 · r158-capture-hint';
 
   // WebRTC ICE Servers
   static const List<Map<String, dynamic>> iceServers = [

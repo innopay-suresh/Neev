@@ -358,11 +358,15 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		c, err := capture.NewPlatformCapture(0)
 		if err == nil {
 			capturer = c
+			clearCaptureBlocked()
 			if attempt > 1 {
 				log.Info().Int("attempt", attempt).Msg("worker: screen capture started")
 			}
 			break
 		}
+		// Tell the app, so it can show the user what to fix rather than leaving
+		// them with a session that connects and then does nothing.
+		markCaptureBlocked()
 		// Loud on the first failure and then occasionally: a permission problem
 		// must be visible in the log without drowning it.
 		if attempt == 1 || attempt%12 == 0 {

@@ -44,6 +44,17 @@ moves to **Working Features** after it is confirmed working on real hardware.
   automatically from the .pkg. Do NOT reimplement the recorder or loopback in
   Dart to close this — that duplicates working native code.
 
+- **LD-MAC-TCC-2 — an MDM PPPC profile can pin the grant to the IDENTIFIER,
+  which survives updates even ad-hoc signed.** VERIFIED: a binary ad-hoc signed
+  with `--identifier com.neev.agent` satisfies the code requirement
+  `identifier "com.neev.agent"`, and a REBUILT (different) binary signed the
+  same way still satisfies it. So MDM-delivered PPPC with that requirement
+  avoids the per-update re-grant without a Developer ID. Needs user-approved
+  MDM, and Screen Recording specifically is restricted in some macOS versions —
+  test on one machine first. Accessibility is reliably grantable this way.
+  Alternative without MDM: a self-signed code-signing cert trusted on the fleet
+  (stable identity, but does not fix Gatekeeper). Developer ID fixes both.
+
 - **LD-MAC-TCC-1 — an ad-hoc signed build LOSES its Screen Recording grant on
   every update.** macOS ties a TCC grant to the binary's code hash when there is
   no Developer ID, so replacing neev-agent leaves the entry visibly ENABLED in

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../data/services/capture_status.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/audit_log.dart';
 import '../../data/services/discovery_model.dart';
@@ -1116,6 +1117,7 @@ class _HomeCommandCenterState extends ConsumerState<HomeCommandCenter> {
         // appear no matter what. Someone watching your screen must be
         // impossible to miss, and ending it must be one click away.
         if (service.connectedViewers > 0) ...[
+          const _CaptureBlockedCard(),
           _LiveSessionBanner(service: service),
           const SizedBox(height: 18),
         ],
@@ -2764,6 +2766,115 @@ class _SecurityBadges extends StatelessWidget {
 
 /// Shown on the HOST while someone is connected: who is watching, and the
 /// control to end it. Until this existed only the VIEWER could hang up.
+/// Shown when the capture worker reports it cannot record the screen.
+///
+/// Without this, a macOS host connects, the viewer accepts, and then nothing
+/// happens — the permission is missing but the only evidence is a line in a log
+/// nobody reads. Worse, the grant is tied to the binary and an ad-hoc signed
+/// build gets a NEW identity on every update, so an entry that still looks
+/// enabled in System Settings has silently stopped applying. This turns that
+/// into one button.
+class _CaptureBlockedCard extends StatefulWidget {
+  const _CaptureBlockedCard();
+
+  @override
+  State<_CaptureBlockedCard> createState() => _CaptureBlockedCardState();
+}
+
+class _CaptureBlockedCardState extends State<_CaptureBlockedCard> {
+  bool _blocked = false;
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+    // The worker rewrites its marker every retry, so this only has to notice
+    // within a few seconds.
+    _poll = Timer.periodic(const Duration(seconds: 5), (_) => _check());
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _check() async {
+    final b = await isCaptureBlocked();
+    if (mounted && b != _blocked) setState(() => _blocked = b);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_blocked) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.10),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.45)),
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, size: 19, color: AppColors.error),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('This computer cannot be viewed remotely',
+                    style: AppTypography.body.copyWith(
+                        fontWeight: FontWeight.w700, fontSize: 13.5)),
+                const SizedBox(height: 1),
+                Text(
+                  'Screen Recording is not granted to the helper. A connection '
+                  'will be accepted and then show nothing. If it looks enabled '
+                  'already, remove and re-add it — an update replaces the '
+                  'helper and the permission does not carry over.',
+                  style: AppTypography.caption,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FilledButton.icon(
+                onPressed: () => openScreenRecordingSettings(),
+                icon: const Icon(Icons.settings_rounded, size: 16),
+                label: const Text('Open Settings'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.error,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.md)),
+                ),
+              ),
+              const SizedBox(height: 4),
+              TextButton(
+                onPressed: () {
+                  // The folder is hidden in the Settings file picker, so the
+                  // path has to be pasteable — press Cmd+Shift+G and paste.
+                  Clipboard.setData(
+                      const ClipboardData(text: captureBinaryPath));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Path copied — in the file picker press '
+                          '⌘⇧G and paste it')));
+                },
+                child: const Text('Copy path'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _LiveSessionBanner extends StatelessWidget {
   const _LiveSessionBanner({required this.service});
   final RemoteService service;
