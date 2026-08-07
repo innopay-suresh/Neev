@@ -29,11 +29,21 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 # reports success is how a corrupt package reaches users.
 fetch() {
   local url="$1" out="$2"
-  for _ in 1 2 3 4 5 6; do
+  for attempt in 1 2 3 4 5 6; do
     curl -sL -C - --max-time 300 -o "$out" "$url" >/dev/null 2>&1 || true
-    [ -s "$out" ] && return 0
+    # Judge by VALIDITY, not size. A non-empty file proves nothing: an expired
+    # signed URL returns a few hundred bytes of XML that satisfied the old
+    # "is it non-empty" test and was then handed to the unzip step as if it
+    # were a package.
+    if [ -s "$out" ] && python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).testzip()" "$out" 2>/dev/null; then
+      return 0
+    fi
+    # A partial file poisons the next attempt's resume, so start clean.
+    rm -f "$out"
+    echo "   download attempt $attempt for $(basename "$out") was not a valid zip; retrying" >&2
+    sleep 2
   done
-  echo "ERROR: could not download $out" >&2
+  echo "ERROR: could not download a valid $out — the signed URL has probably expired, re-resolve it" >&2
   return 1
 }
 
