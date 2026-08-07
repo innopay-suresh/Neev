@@ -157,7 +157,12 @@ def verify_macos(path, tag):
             agent = [n for n in names if n.endswith("Resources/daemon/neev-agent")]
             if agent:
                 blob = z.read(agent[0])
-                stable = b"certificate leaf" in blob
+                # Look for the signing certificate's common name, which IS
+                # embedded verbatim. The designated requirement is stored
+                # binary-encoded, so searching for the text "certificate leaf"
+                # reported a correctly signed build as ad-hoc — the third time a
+                # check in this file has failed by assuming an encoding.
+                stable = b"Neev Remote Code Signing" in blob
                 print("  " + ("INFO  " if stable else "WARN  ") +
                       ("agent has a STABLE signing identity — TCC grants survive updates"
                        if stable else
