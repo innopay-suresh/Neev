@@ -44,6 +44,18 @@ moves to **Working Features** after it is confirmed working on real hardware.
   automatically from the .pkg. Do NOT reimplement the recorder or loopback in
   Dart to close this — that duplicates working native code.
 
+- **LD-MAC-TCC-1 — an ad-hoc signed build LOSES its Screen Recording grant on
+  every update.** macOS ties a TCC grant to the binary's code hash when there is
+  no Developer ID, so replacing neev-agent leaves the entry visibly ENABLED in
+  System Settings while no longer applying. Symptom: `launchctl list` shows
+  com.neev.worker with a live PID and a non-zero last exit, capture fails, and a
+  session stalls right after the host accepts. The user must remove and re-add
+  the entry after an update. The only real fix is a stable Developer ID
+  certificate; packaging cannot work around it.
+  r157: the worker RETRIES capture every 5s instead of exiting. Exiting made
+  main log.Fatal, launchd's KeepAlive restart it, and the loop was invisible —
+  a fixable-while-running condition must never kill the process.
+
 - **LD-MAC-WORKER-1 — a LaunchAgent must not redirect its logs into a
   root-owned directory.** `com.neev.worker.plist` set StandardOut/ErrorPath to
   /Library/Application Support/NeevRemote, which the installer creates as ROOT.

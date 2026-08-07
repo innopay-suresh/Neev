@@ -345,9 +345,37 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		}
 	}()
 
-	capturer, err := capture.NewPlatformCapture(0)
-	if err != nil {
-		return err
+	// Retry rather than die.
+	//
+	// Returning here made main log.Fatal, launchd's KeepAlive restart the
+	// worker, and the whole thing loop invisibly — `launchctl list` showed a
+	// live PID with a non-zero last exit and nothing else explained why a
+	// session stalled. On macOS the usual cause is Screen Recording not being
+	// in effect, and that is a state which can be FIXED while the process runs,
+	// so exiting is exactly wrong: it throws away the session and tells nobody.
+	var capturer capture.Capturer
+	for attempt := 1; ; attempt++ {
+		c, err := capture.NewPlatformCapture(0)
+		if err == nil {
+			capturer = c
+			if attempt > 1 {
+				log.Info().Int("attempt", attempt).Msg("worker: screen capture started")
+			}
+			break
+		}
+		// Loud on the first failure and then occasionally: a permission problem
+		// must be visible in the log without drowning it.
+		if attempt == 1 || attempt%12 == 0 {
+			log.Error().Err(err).Int("attempt", attempt).
+				Msg("worker: CANNOT CAPTURE THE SCREEN — on macOS grant Screen Recording to " +
+					"/Library/Application Support/NeevRemote/neev-agent (re-add it after an " +
+					"update: the grant is tied to the binary, which the update replaced)")
+		}
+		select {
+		case <-runCtx.Done():
+			return runCtx.Err()
+		case <-time.After(5 * time.Second):
+		}
 	}
 	defer capturer.Close()
 
