@@ -30,14 +30,39 @@ class HostMode {
       '/Library/Application Support/NeevRemote/transport.ready';
   static const Duration _macReadyMaxAge = Duration(seconds: 15);
 
+  /// Heartbeat the transport refreshes while REGISTERED, whether or not anyone
+  /// is connected.
+  static const String _macAliveFile =
+      '/Library/Application Support/NeevRemote/transport.alive';
+
+  /// Generous against the transport's ~10s heartbeat, so a slow write does not
+  /// briefly hand hosting back and register a second identity for this machine.
+  static const Duration _macAliveMaxAge = Duration(seconds: 45);
+
   static bool _macDaemonHosting() {
     if (defaultTargetPlatform != TargetPlatform.macOS) return false;
     try {
       if (!File(_macTransportPlist).existsSync()) return false;
+      // ALIVE, not READY.
+      //
+      // transport.ready is only written while frames are FLOWING, which cannot
+      // happen until a viewer connects. Deciding on it meant that with no
+      // session the daemon always looked idle, so the app registered its own id
+      // as a second host for this machine — and a viewer reaching that id got an
+      // app-hosted session with no recording and no system sound. The question
+      // "does the service own hosting?" has to be answerable before any session
+      // exists, so it is answered by the transport's heartbeat instead.
+      final alive = File(_macAliveFile);
+      if (alive.existsSync()) {
+        final age = DateTime.now().difference(alive.lastModifiedSync());
+        if (age <= _macAliveMaxAge) return true;
+      }
+      // Fall back to the old signal, so a transport too old to write a
+      // heartbeat is still detected while it is actively streaming.
       final ready = File(_macReadyFile);
       if (!ready.existsSync()) return false;
       final age = DateTime.now().difference(ready.lastModifiedSync());
-      return age <= _macReadyMaxAge; // fresh ⇒ worker is really producing video
+      return age <= _macReadyMaxAge;
     } catch (_) {
       return false;
     }

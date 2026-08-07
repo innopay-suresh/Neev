@@ -31,6 +31,21 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-MAC-HOST-1 — "does the service own hosting?" must be answerable with NO
+  session running.** The app decided via `transport.ready`, which the transport
+  only writes while FRAMES ARE FLOWING — and frames only flow once a viewer
+  connects. So with no session the daemon always looked idle, the app registered
+  its OWN id as a second host for the machine, and a viewer reaching that id got
+  an app-hosted session: no recording, no system sound, and the "needs the
+  background service" tooltips. The transport now writes `transport.alive` every
+  10s while REGISTERED, and the app decides on that (falling back to ready for
+  older transports). Any future "is the service active?" check must use a signal
+  that exists before a session does.
+  Also: TCC grants are PER-USER. On a Mac with two accounts, each needs its own
+  Screen Recording grant — `launchctl list` showed the worker healthy for one
+  user and SIGABRT (-6) for the other.
+
+
 - **LD-HOST-UI-1 — the host's session controls come from the SERVICE, not the
   app.** Record (VP8→WebM mux) and system-sound sharing (WASAPI loopback /
   ScreenCaptureKit) are host-side native code in the Go worker and NeevVoice.app.

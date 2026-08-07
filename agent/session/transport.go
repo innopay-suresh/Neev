@@ -209,6 +209,8 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 		}
 	}()
 
+	go t.runAliveHeartbeat(ctx)
+
 	t.sigClient.On(network.MsgRegistered, func(network.Message) {
 		log.Info().Str("id", t.sigClient.AgentID).Msg("transport registered")
 		t.writeCreds()
@@ -938,6 +940,39 @@ func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 		}
 		t.markProducing()
 		t.distributeFrame(vp8)
+	}
+}
+
+// markAlive refreshes <dataDir>/transport.alive while the transport is
+// registered, whether or not anyone is connected.
+//
+// Distinct from transport.ready, which is only written while FRAMES are
+// flowing. The app used ready to decide whether the daemon owns hosting — but
+// frames only flow once a viewer connects, so with no session it always looked
+// stale, the app registered its OWN id as a second host, and a viewer reaching
+// that id got an app-hosted session with no recording and no system sound. The
+// decision has to be answerable before any session exists.
+func (t *Transport) markAlive() {
+	path := filepath.Join(dataDir(), "transport.alive")
+	_ = os.WriteFile(path,
+		[]byte(strconv.FormatInt(time.Now().Unix(), 10)), 0o644)
+}
+
+// runAliveHeartbeat keeps transport.alive fresh for as long as the transport is
+// running. Stops with the context, so a stopped daemon goes stale and the app
+// takes hosting back rather than leaving the machine unreachable.
+func (t *Transport) runAliveHeartbeat(ctx context.Context) {
+	t.markAlive()
+	tk := time.NewTicker(10 * time.Second)
+	defer tk.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			_ = os.Remove(filepath.Join(dataDir(), "transport.alive"))
+			return
+		case <-tk.C:
+			t.markAlive()
+		}
 	}
 }
 
