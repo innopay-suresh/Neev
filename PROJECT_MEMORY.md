@@ -31,6 +31,20 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-PKG-2 — the macOS pkg version MUST change every release.** It was
+  hardcoded `--version 1.0.0`, so every build claimed the same version. With a
+  receipt already present, `installer` treated an install as a no-op upgrade:
+  printed "The upgrade was successful" and wrote NOTHING. Deleting the app did
+  not help — the stale receipt still claimed it was installed — leaving a
+  machine with a receipt, no app, and a postinstall reporting it could not find
+  the bundle. Version now derives from the build tag (r161 -> 1.0.161) and the
+  build FAILS if it cannot be derived.
+  Recovery on an affected machine: `sudo pkgutil --forget com.neev.neev_remote`
+  then install again.
+  The postinstall now FAILS the install when it cannot find the app, instead of
+  logging: the condition occurred four times in a row while installer reported
+  success each time.
+
 - **LD-MAC-HOST-1 — "does the service own hosting?" must be answerable with NO
   session running.** The app decided via `transport.ready`, which the transport
   only writes while FRAMES ARE FLOWING — and frames only flow once a viewer

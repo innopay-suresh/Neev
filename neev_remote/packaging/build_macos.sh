@@ -10,6 +10,25 @@ set -euo pipefail
 # directory, so re-deriving it later silently points at the wrong place. That
 # broke the macOS build for two releases.
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)/macos_scripts"
+
+# The pkg version MUST change between releases.
+#
+# It was hardcoded to 1.0.0, so every build claimed to be the same version. With
+# a receipt already present, `installer` then treated an install as a no-op
+# upgrade: it printed "The upgrade was successful" and wrote NOTHING. Deleting
+# the app did not help either, because the stale receipt still claimed it was
+# installed — the machine ended up with a receipt, no app, and a postinstall
+# reporting it could not find the bundle it was supposed to configure.
+#
+# Derived from the build tag (r161-... -> 161) so it rises with every release.
+PKG_VERSION="$(sed -n 's/.*buildTag = .*[·-] *r\([0-9][0-9]*\).*/\1/p' \
+  "$(cd "$(dirname "$0")/.." && pwd)/lib/core/constants/app_constants.dart" | head -1)"
+if [ -z "$PKG_VERSION" ]; then
+  echo "ERROR: could not derive a pkg version from buildTag — refusing to build a" >&2
+  echo "       package that installer may treat as already installed." >&2
+  exit 1
+fi
+PKG_VERSION="1.0.$PKG_VERSION"
 cd "$(dirname "$0")/.."
 
 APP="Neev Remote"
@@ -98,7 +117,7 @@ if [ ! -x "$SCRIPTS_DIR/postinstall" ]; then
 fi
 pkgbuild --install-location /Applications \
   --identifier com.neev.neev_remote \
-  --version 1.0.0 \
+  --version "$PKG_VERSION" \
   --scripts "$SCRIPTS_DIR" \
   --component "$APP_PATH" \
   "$OUT/NeevRemote-macos.pkg"

@@ -37,9 +37,20 @@ for candidate in \
 done
 
 if [ -z "$APP" ]; then
-  log "could not find an installed app bundle containing Contents/Resources/daemon"
+  # FAIL the install rather than logging into a file nobody reads.
+  #
+  # This condition occurred four times in a row on a real machine while
+  # `installer` printed "The upgrade was successful" each time — the app was not
+  # on disk at all, and nothing surfaced that. A package that cannot configure
+  # what it just installed has not installed anything useful, and saying so is
+  # the only way the user finds out at the moment they can act on it.
+  log "FAILED: no installed app bundle containing Contents/Resources/daemon"
   log "  looked under: $DEST and /Applications"
-  exit 0
+  echo "Neev Remote: the application was not found after installation." >&2
+  echo "  Looked under $DEST and /Applications." >&2
+  echo "  If an older copy was deleted, clear its receipt and install again:" >&2
+  echo "    sudo pkgutil --forget com.neev.neev_remote" >&2
+  exit 1
 fi
 log "found app bundle: $APP"
 
