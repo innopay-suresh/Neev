@@ -1,4 +1,4 @@
-//go:build cgo && (darwin || linux)
+//go:build cgo && linux
 
 /*
  * encoder.c — FFmpeg H.264 encoding helper with hardware acceleration

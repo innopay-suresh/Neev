@@ -54,11 +54,60 @@ if [ -f "$AGENT_BIN" ]; then
   DAEMON_DST="$APP_PATH/Contents/Resources/daemon"
   mkdir -p "$DAEMON_DST"
   install -m 0755 "$AGENT_BIN" "$DAEMON_DST/neev-agent"
+
+  # Make the agent self-contained.
+  #
+  # It is built on a CI runner with Homebrew, so cgo linked it against
+  # /opt/homebrew/... dylibs. Those paths do not exist on a user's Mac: dyld
+  # cannot resolve them, kills the process before main(), and launchd
+  # crash-loops it forever with `last exit reason = OS_REASON_DYLD` — an
+  # installed, correctly signed daemon that can never start. It read as
+  # machine-specific because a dev Mac with Homebrew runs it fine.
+  #
+  # Copy every non-system dylib in beside the binary and repoint it at
+  # @loader_path. Transitive deps are followed, so this stays correct if a
+  # dependency ever gains one of its own. MUST run BEFORE signing: rewriting
+  # load commands invalidates a signature.
+  bundle_dylibs() {
+    local target="$1" dir; dir="$(dirname "$target")"
+    local dep name
+    while read -r dep; do
+      case "$dep" in
+        /opt/homebrew/*|/usr/local/*) ;;
+        *) continue ;;
+      esac
+      name="$(basename "$dep")"
+      if [ ! -f "$dir/$name" ]; then
+        install -m 0644 "$dep" "$dir/$name"
+        chmod u+w "$dir/$name"
+        install_name_tool -id "@loader_path/$name" "$dir/$name" 2>/dev/null || true
+        bundle_dylibs "$dir/$name"   # follow this library's own deps
+      fi
+      install_name_tool -change "$dep" "@loader_path/$name" "$target" 2>/dev/null || true
+    done < <(otool -L "$target" | tail -n +2 | awk '{print $1}')
+  }
+  bundle_dylibs "$DAEMON_DST/neev-agent"
+
+  # Refuse to ship a daemon that cannot start on a machine without Homebrew.
+  if otool -L "$DAEMON_DST/neev-agent" | grep -qE "/opt/homebrew|/usr/local"; then
+    echo "ERROR: neev-agent still references build-machine dylibs:" >&2
+    otool -L "$DAEMON_DST/neev-agent" | grep -E "/opt/homebrew|/usr/local" >&2
+    exit 1
+  fi
   # Sign with a STABLE identity so the machine's Screen Recording grant survives
   # updates. An identifier alone is not enough: without an explicit designated
   # requirement, codesign pins to the binary's cdhash, which changes every build
   # and silently invalidates the grant while System Settings still shows it
   # enabled. See packaging/mac/sign-stable.sh.
+  # Sign the bundled dylibs FIRST. Under the hardened runtime an unsigned
+  # dependency is refused at load time, which would swap one dyld failure for
+  # another. Signing them after the agent would also invalidate the agent's own
+  # signature, so order matters here.
+  for lib in "$DAEMON_DST"/*.dylib; do
+    [ -e "$lib" ] || continue
+    bash "$REPO_ROOT/packaging/mac/sign-stable.sh" \
+      "com.neev.agent.$(basename "$lib" .dylib)" "$lib"
+  done
   bash "$REPO_ROOT/packaging/mac/sign-stable.sh" com.neev.agent "$DAEMON_DST/neev-agent"
   # The host's macOS session controls (menu bar): "Remote session active",
   # a microphone toggle, and End session. Built here rather than checked in so

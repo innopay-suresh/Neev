@@ -227,6 +227,18 @@ def verify_macos(path, tag):
                       ("agent has a STABLE signing identity — TCC grants survive updates"
                        if stable else
                        "agent is AD-HOC signed — every update needs Screen Recording re-granted"))
+                # A dylib path under /opt/homebrew or /usr/local exists only on
+                # a machine with Homebrew. Shipped that way, dyld cannot resolve
+                # it on a user's Mac and kills the daemon before main() —
+                # launchd then crash-loops it forever with
+                # `last exit reason = OS_REASON_DYLD`. An installed, correctly
+                # signed daemon that can never start, and it looked
+                # machine-specific for days because a dev Mac runs it fine.
+                # The build now bundles dependencies beside the binary and
+                # repoints them at @loader_path.
+                portable = (b"/opt/homebrew" not in blob
+                            and b"/usr/local/opt" not in blob)
+                check("agent has no build-machine dylib paths", portable)
             check("install-daemon.sh present (postinstall calls it)",
                   any(n.endswith("Resources/daemon/install-daemon.sh") for n in names))
 

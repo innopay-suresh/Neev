@@ -1,4 +1,18 @@
-//go:build !cgo || windows
+//go:build !cgo || windows || darwin
+
+// macOS uses this stub deliberately.
+//
+// The FFmpeg path below was compiled for darwin, which linked the shipped
+// neev-agent against Homebrew's libavcodec/libswscale/libavutil/x264 (and
+// libopus, transitively). Those live under /opt/homebrew, which exists only on
+// a machine with Homebrew: on every other Mac dyld could not resolve them and
+// killed the daemon before main() with OS_REASON_DYLD, crash-looping forever.
+// The fault read as machine-specific for days because our two test Macs
+// differed by exactly that.
+//
+// Nothing is lost. NewH264Encoder has no callers at all, and EncodeJPEG's only
+// caller is the legacy stream pipeline — which already gets this same stub on
+// Windows, the platform whose host path is the stable baseline.
 
 package capture
 
