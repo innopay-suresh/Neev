@@ -1,7 +1,15 @@
-import 'dart:io' show File;
+import 'dart:convert' show jsonDecode;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+
+/// The machine identity a daemon-hosted Mac is reachable under.
+class DaemonCreds {
+  const DaemonCreds(this.id, this.password);
+  final String id;
+  final String password;
+}
 
 /// Decides whether THIS app instance should auto-start hosting.
 ///
@@ -38,6 +46,45 @@ class HostMode {
   /// Generous against the transport's ~10s heartbeat, so a slow write does not
   /// briefly hand hosting back and register a second identity for this machine.
   static const Duration _macAliveMaxAge = Duration(seconds: 45);
+
+  /// The id + password the macOS daemon registered this machine under.
+  ///
+  /// The app cannot read the daemon's own transport.txt — it is root-owned 0600
+  /// because it carries the password, and the app runs as the logged-in user.
+  /// The result was a share card showing an empty id on a machine that was
+  /// registered and hosting perfectly well, so the host had nothing to give a
+  /// viewer. Windows never had this problem: its app asks the SYSTEM helper
+  /// directly.
+  ///
+  /// Two sources, in order:
+  ///  - host-creds.json, written by the WORKER (which runs as this user) from
+  ///    the credentials the transport announces over IPC. Has the password.
+  ///  - transport.id, written world-readable by the transport. Id only — enough
+  ///    to name the machine before a worker exists, and the id is not a secret.
+  static DaemonCreds? macDaemonCreds() {
+    if (kIsWeb || !Platform.isMacOS) return null;
+    try {
+      final f = File('${Platform.environment['HOME'] ?? ''}'
+          '/Library/Application Support/NeevRemote/host-creds.json');
+      if (f.existsSync()) {
+        final m = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+        final id = (m['id'] as String?) ?? '';
+        if (id.isNotEmpty) {
+          return DaemonCreds(id, (m['password'] as String?) ?? '');
+        }
+      }
+    } catch (_) {
+      // Fall through to the id-only file rather than showing nothing.
+    }
+    try {
+      final f = File('/Library/Application Support/NeevRemote/transport.id');
+      if (f.existsSync()) {
+        final id = f.readAsStringSync().trim();
+        if (id.isNotEmpty) return DaemonCreds(id, '');
+      }
+    } catch (_) {}
+    return null;
+  }
 
   static bool _macDaemonHosting() {
     if (defaultTargetPlatform != TargetPlatform.macOS) return false;

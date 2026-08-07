@@ -126,6 +126,23 @@ const (
 	// room, and the OS mic indicator lighting up unbidden is how that accusation
 	// starts. The device is opened on "1" and CLOSED on "0" — not merely muted.
 	KindAudioCapture byte = 0x11
+
+	// Transport -> worker: the id + password this machine is registered under,
+	// so the app can SHOW them. payload = {"id":string,"password":string} JSON.
+	//
+	// The app cannot read them from disk. The transport's own transport.txt is
+	// root-owned 0600 (it holds the password), and the app runs as the
+	// logged-in user, so on macOS the share card rendered an empty id and the
+	// host had nothing to hand out — the daemon was hosting correctly and
+	// unreachable in practice. Windows never hit this because its app asks the
+	// SYSTEM helper over localhost TCP; this gives macOS the same answer over
+	// the channel that already exists.
+	//
+	// It goes to the WORKER rather than to a shared file because the worker
+	// runs as the logged-in user: it can write the credentials somewhere only
+	// that user can read. Widening transport.txt instead would hand this
+	// machine's remote-access password to every other local account.
+	KindHostCreds byte = 0x12
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.

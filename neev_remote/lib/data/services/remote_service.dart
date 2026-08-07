@@ -1083,7 +1083,20 @@ class RemoteService extends ChangeNotifier {
   /// the UI shows the single service-owned host to dial, WITHOUT registering a
   /// host. Used when the service transport owns hosting (TransportMode).
   Future<void> _showServiceIdentity() async {
-    if (!_uac.isSupported) return;
+    // macOS has no SYSTEM helper to ask, so this returned immediately and the
+    // share card rendered an empty id whenever the daemon owned hosting —
+    // which is the normal, correct state on an installed Mac. The daemon's
+    // identity comes from the files it and its worker publish instead.
+    if (!_uac.isSupported) {
+      final creds = HostMode.macDaemonCreds();
+      if (creds != null) {
+        _agentId = creds.id;
+        if (creds.password.isNotEmpty) _password = creds.password;
+        _hostStatus = HostStatus.online; // reachable via the daemon transport
+        notifyListeners();
+      }
+      return;
+    }
     try {
       final machine = await _uac.fetchMachineCreds();
       if (machine != null && machine.id.isNotEmpty) {

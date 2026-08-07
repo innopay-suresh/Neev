@@ -214,6 +214,7 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 	t.sigClient.On(network.MsgRegistered, func(network.Message) {
 		log.Info().Str("id", t.sigClient.AgentID).Msg("transport registered")
 		t.writeCreds()
+		t.announceHostCreds()
 		// Freeze the password (and id) so it is STABLE across restarts. The
 		// installer writes only the id to machine.dat, so line 2 is empty and the
 		// fallback above mints a FRESH random password on every boot — a viewer's
@@ -751,6 +752,39 @@ func (t *Transport) announceSessionState() {
 	_ = conn.WriteMessage(ipc.KindSessionState, []byte(strconv.Itoa(n)))
 }
 
+// announceHostCreds gives the worker this machine's id + password so the app
+// can display them.
+//
+// The app has no other way to learn them. transport.txt is root-owned 0600
+// because it carries the password, and the app runs as the logged-in user — so
+// the macOS share card showed an empty id while the daemon was hosting
+// perfectly well, leaving the host with nothing to hand out. Sent to the worker
+// (which runs AS that user) rather than relaxing the file, so the credentials
+// reach the person at the keyboard and no other local account.
+//
+// Sent on register and again whenever a worker attaches, because a worker
+// spawned by a user switch has missed the register that came before it.
+func (t *Transport) announceHostCreds() {
+	id := t.sigClient.AgentID
+	if id == "" {
+		return // not registered yet; the register hook will send it
+	}
+	t.workerMu.Lock()
+	conn := t.worker
+	t.workerMu.Unlock()
+	if conn == nil {
+		return // no worker yet; handleWorker sends it on attach
+	}
+	body, err := json.Marshal(struct {
+		ID       string `json:"id"`
+		Password string `json:"password"`
+	}{id, t.password})
+	if err != nil {
+		return
+	}
+	_ = conn.WriteMessage(ipc.KindHostCreds, body)
+}
+
 func (t *Transport) dropPeer(id string) {
 	t.mu.Lock()
 	ps, ok := t.peers[id]
@@ -788,6 +822,10 @@ func (t *Transport) handleWorker(ctx context.Context, conn *ipc.Conn) {
 	// system-sound controls end up missing or inert until some later
 	// connect/disconnect happens to re-announce.
 	t.announceSessionState()
+	// Same reasoning for the credentials: a worker started by a user switch
+	// missed the register that carried them, so the new user's app would show a
+	// blank id even though the machine is registered and reachable.
+	t.announceHostCreds()
 
 	for {
 		select {
@@ -1131,6 +1169,16 @@ func (t *Transport) writeCreds() {
 	content := "id=" + t.sigClient.AgentID + "\npassword=" + t.password + "\n"
 	_ = os.WriteFile(path, []byte(content), 0o600)
 	log.Info().Str("path", path).Msg("transport creds written")
+
+	// The id ALONE, world-readable.
+	//
+	// It is not a secret — it is the thing the host reads out over the phone —
+	// and keeping it locked inside the 0600 file (which has to stay 0600
+	// because the password lives there) is why the share card could render
+	// nothing at all. This lets the app name the machine's identity even before
+	// a worker exists to relay the password.
+	idPath := filepath.Join(dataDir(), "transport.id")
+	_ = os.WriteFile(idPath, []byte(t.sigClient.AgentID+"\n"), 0o644)
 }
 
 // persistMachineCreds writes id+password to machine.dat so the password stays

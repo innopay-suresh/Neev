@@ -306,6 +306,13 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 			case ipc.KindAudioPlay:
 				// Viewer's voice → host speakers.
 				playViewerVoice(payload)
+			case ipc.KindHostCreds:
+				// The app runs as this user and cannot read the transport's own
+				// 0600 creds file, so the share card had no id to show. Land
+				// them in this user's own directory, readable only by them.
+				if err := writeUserCreds(payload); err != nil {
+					log.Warn().Err(err).Msg("worker: could not publish host creds for the app")
+				}
 			case ipc.KindConsentCancel:
 				// The viewer stopped asking (cancelled, disconnected, timed out).
 				// Withdraw the prompt instead of leaving the host staring at a
