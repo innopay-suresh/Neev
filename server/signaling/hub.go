@@ -124,6 +124,33 @@ type client struct {
 	mu        sync.Mutex
 }
 
+
+// normAgentID is the single key form for the agent registry.
+//
+// The relay MINTS ids as NNN-NNN-NNN (see session/registry.go), and the desktop
+// app strips every non-alphanumeric character before dialing one. So a machine
+// registered as "106-198-026" was looked up as "106198026", missed, and the
+// viewer got "agent not found or offline" — while the device list showed it
+// cheerfully Online, because listing reads the registry and dialing reads the
+// map key. It only surfaced once real daemons started hosting: an app-hosted id
+// is nine plain digits, which survives the client's stripping unchanged.
+//
+// Normalizing both sides here fixes every client already installed, without an
+// app update, and is a no-op for ids that were already bare digits.
+func normAgentID(id string) string {
+	var b strings.Builder
+	b.Grow(len(id))
+	for _, r := range id {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		}
+	}
+	return b.String()
+}
+
 func (c *client) send(msg Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -247,7 +274,7 @@ func (h *Hub) pushClientCertBundle(agentID string, bundle *serverauth.ClientCert
 		return
 	}
 	h.mu.RLock()
-	cli, ok := h.agents[agentID]
+	cli, ok := h.agents[normAgentID(agentID)]
 	h.mu.RUnlock()
 	if !ok || cli == nil {
 		return
@@ -264,7 +291,7 @@ func (h *Hub) disconnectAgent(agentID, reason string) {
 		return
 	}
 	h.mu.RLock()
-	cli, ok := h.agents[agentID]
+	cli, ok := h.agents[normAgentID(agentID)]
 	h.mu.RUnlock()
 	if !ok || cli == nil || cli.conn == nil {
 		return
@@ -364,7 +391,7 @@ func (h *Hub) handleRegister(ctx context.Context, cli *client, msg Message) {
 	} else if id := strings.TrimSpace(payload.AgentID); id != "" {
 		// Honour a client-supplied persistent ID so an install keeps the same
 		// ID across restarts/reconnects (new or already known). A later
-		// h.agents[id] = cli simply replaces any stale prior connection; that
+		// h.agents[normAgentID(id)] = cli simply replaces any stale prior connection; that
 		// connection's own disconnect is guarded against removing the newer
 		// entry, so re-registration after a dropped session "just works"
 		// without the user having to refresh their ID.
@@ -476,7 +503,7 @@ func (h *Hub) handleRegister(ctx context.Context, cli *client, msg Message) {
 	}
 
 	h.mu.Lock()
-	h.agents[agentID] = cli
+	h.agents[normAgentID(agentID)] = cli
 	h.mu.Unlock()
 
 	payload2, _ := json.Marshal(RegisteredPayload{AgentID: agentID, ClientCert: certBundle})
@@ -637,7 +664,7 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	h.failMutex.Unlock()
 
 	h.mu.RLock()
-	target, targetOk := h.agents[payload.TargetID]
+	target, targetOk := h.agents[normAgentID(payload.TargetID)]
 	h.mu.RUnlock()
 
 	if !targetOk {
@@ -686,7 +713,7 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	target.sessionID = createdSession.ID
 
 	h.mu.Lock()
-	h.agents[controllerID] = cli
+	h.agents[normAgentID(controllerID)] = cli
 	h.mu.Unlock()
 
 	// Forward connect request to the target agent — it will show a consent prompt
@@ -810,7 +837,7 @@ func (h *Hub) handlePresence(cli *client, raw json.RawMessage) {
 		if id == "" {
 			continue
 		}
-		other, ok := h.agents[id]
+		other, ok := h.agents[normAgentID(id)]
 		// Only registered HOSTS count as present; a controller being connected
 		// says nothing about whether that machine can be reached.
 		if !ok || other.conn == nil || other.role != "agent" {
@@ -839,7 +866,7 @@ func (h *Hub) handleRelay(ctx context.Context, cli *client, msg Message) {
 		return
 	}
 	h.mu.RLock()
-	dest, ok := h.agents[msg.To]
+	dest, ok := h.agents[normAgentID(msg.To)]
 	h.mu.RUnlock()
 	if !ok {
 		_ = cli.send(errMsg("destination not connected"))
@@ -855,8 +882,8 @@ func (h *Hub) disconnect(ctx context.Context, cli *client) {
 	}
 	shouldClear := false
 	h.mu.Lock()
-	if current, ok := h.agents[cli.agentID]; ok && current == cli {
-		delete(h.agents, cli.agentID)
+	if current, ok := h.agents[normAgentID(cli.agentID)]; ok && current == cli {
+		delete(h.agents, normAgentID(cli.agentID))
 		shouldClear = true
 	}
 	h.mu.Unlock()
@@ -885,7 +912,7 @@ func (h *Hub) disconnect(ctx context.Context, cli *client) {
 	// the latter.
 	peerID := peerOf(cli.agentID)
 	h.mu.RLock()
-	peer, ok := h.agents[peerID]
+	peer, ok := h.agents[normAgentID(peerID)]
 	h.mu.RUnlock()
 	if ok {
 		reason := "peer_dropped"
