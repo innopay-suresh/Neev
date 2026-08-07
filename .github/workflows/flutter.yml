@@ -130,8 +130,54 @@ jobs:
         if: matrix.platform == 'linux'
         run: bash neev_remote/packaging/build_linux.sh
 
+      # Import the code-signing key so the macOS build has a STABLE identity.
+      #
+      # Without it, builds are ad-hoc signed and every update invalidates the
+      # machine's Screen Recording grant — the entry still shows as enabled
+      # while no longer applying, and the host silently captures nothing.
+      #
+      # Absent secret is NOT an error: forks cannot read repository secrets, and
+      # a fork producing an unsigned-but-working build is better than a failed
+      # one. Those builds simply inherit the per-update re-grant.
+      - name: Import macOS signing key
+        if: matrix.platform == 'macos'
+        id: signing
+        env:
+          P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then
+            echo "no signing secret configured — builds will be ad-hoc signed"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/neev-signing.keychain-db"
+          KEYCHAIN_PASS="$(openssl rand -base64 24)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign
+          # Without this, codesign blocks on a GUI prompt that no runner can answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/signing.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk '/[0-9A-F]{40}/ {print $2; exit}')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::signing key imported but no codesigning identity found"
+            exit 1
+          fi
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
+          echo "signing identity ready"
+
       - name: Build + package (macOS)
         if: matrix.platform == 'macos'
+        env:
+          NEEV_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          NEEV_SIGN_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
         run: bash neev_remote/packaging/build_macos.sh
 
       - name: Build + package (Windows)

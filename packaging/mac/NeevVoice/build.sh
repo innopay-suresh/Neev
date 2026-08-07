@@ -31,8 +31,16 @@ xattr -cr "$APP" 2>/dev/null || true
 # macOS treats each rebuild as a different app and re-asks for the microphone.
 # --identifier pins the bundle ID; otherwise the signature inherits the lipo
 # input's name and the identity changes shape between builds.
-codesign --force --sign - --timestamp=none \
-  --identifier com.neev.remote.voice "$APP" || \
-  echo "warning: codesign failed — TCC will re-prompt on every update"
+# Same stable identity as the agent: NeevVoice needs its OWN Screen Recording
+# grant for system-sound capture, so it has exactly the same re-grant problem.
+SIGNER="$HERE/../sign-stable.sh"
+if [ -x "$SIGNER" ]; then
+  bash "$SIGNER" com.neev.remote.voice "$APP" || \
+    echo "warning: signing failed — TCC will re-prompt on every update"
+else
+  codesign --force --sign - --timestamp=none \
+    --identifier com.neev.remote.voice "$APP" || \
+    echo "warning: codesign failed — TCC will re-prompt on every update"
+fi
 
 echo "built $APP"

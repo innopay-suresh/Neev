@@ -150,6 +150,18 @@ def verify_macos(path, tag):
                       info.file_size > 200 * 1024)
             check("neev-agent (daemon) present",
                   any(n.endswith("Resources/daemon/neev-agent") for n in names))
+            # Reported, not enforced: an ad-hoc build is legitimate (forks
+            # cannot read the signing secret) but means every macOS update
+            # invalidates the machine's Screen Recording grant. Worth seeing at
+            # publish time rather than discovering when a host stops capturing.
+            agent = [n for n in names if n.endswith("Resources/daemon/neev-agent")]
+            if agent:
+                blob = z.read(agent[0])
+                stable = b"certificate leaf" in blob
+                print("  " + ("INFO  " if stable else "WARN  ") +
+                      ("agent has a STABLE signing identity — TCC grants survive updates"
+                       if stable else
+                       "agent is AD-HOC signed — every update needs Screen Recording re-granted"))
             check("install-daemon.sh present (postinstall calls it)",
                   any(n.endswith("Resources/daemon/install-daemon.sh") for n in names))
 

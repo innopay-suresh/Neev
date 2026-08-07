@@ -44,6 +44,24 @@ moves to **Working Features** after it is confirmed working on real hardware.
   automatically from the .pkg. Do NOT reimplement the recorder or loopback in
   Dart to close this — that duplicates working native code.
 
+- **LD-MAC-TCC-3 — sign macOS binaries with a FIXED cert AND an explicit
+  designated requirement; a certificate alone is not enough.** VERIFIED by
+  experiment: codesign derives a certificate-based requirement only for
+  Apple-chained certs. For ad-hoc AND for self-signed it falls back to the
+  binary's cdhash, which changes every build and silently invalidates the
+  machine's Screen Recording grant while System Settings still shows it enabled.
+  Passing `-r 'designated => identifier "..." and certificate leaf = H"..."'`
+  pins the identity to the certificate: three different binaries then produced a
+  byte-identical requirement. `security find-identity` prints the cert SHA-1, so
+  one value is both the signing selector and the leaf hash.
+  Key lives ONLY in GitHub Actions secrets (MACOS_SIGNING_P12 /
+  MACOS_SIGNING_PASSWORD) — this repo is PUBLIC, so it must never be committed
+  in any form. Absent secret falls back to ad-hoc so forks still build.
+  `sign-stable.sh` FAILS the build if the result still carries a cdhash, because
+  a silent fallback would reintroduce the bug and only surface weeks later.
+  25-year cert: the requirement match ignores expiry, but codesign refuses to
+  sign with an expired certificate.
+
 - **LD-MAC-TCC-2 — an MDM PPPC profile can pin the grant to the IDENTIFIER,
   which survives updates even ad-hoc signed.** VERIFIED: a binary ad-hoc signed
   with `--identifier com.neev.agent` satisfies the code requirement

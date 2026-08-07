@@ -35,11 +35,12 @@ if [ -f "$AGENT_BIN" ]; then
   DAEMON_DST="$APP_PATH/Contents/Resources/daemon"
   mkdir -p "$DAEMON_DST"
   install -m 0755 "$AGENT_BIN" "$DAEMON_DST/neev-agent"
-  # Give the agent a STABLE code-sign identifier so Screen Recording / Accessibility
-  # TCC grants stick to it (the linker's default 'a.out' identity is not durable).
-  # Ad-hoc here; a Developer-ID re-sign downstream keeps the same identifier.
-  codesign --force --sign - --identifier com.neev.agent --timestamp=none \
-    "$DAEMON_DST/neev-agent" 2>/dev/null || echo "   (agent re-sign skipped)"
+  # Sign with a STABLE identity so the machine's Screen Recording grant survives
+  # updates. An identifier alone is not enough: without an explicit designated
+  # requirement, codesign pins to the binary's cdhash, which changes every build
+  # and silently invalidates the grant while System Settings still shows it
+  # enabled. See packaging/mac/sign-stable.sh.
+  bash "$REPO_ROOT/packaging/mac/sign-stable.sh" com.neev.agent "$DAEMON_DST/neev-agent"
   # The host's macOS session controls (menu bar): "Remote session active",
   # a microphone toggle, and End session. Built here rather than checked in so
   # the shipped bundle always matches the source.
