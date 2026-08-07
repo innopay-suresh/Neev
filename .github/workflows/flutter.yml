@@ -153,6 +153,9 @@ jobs:
           KEYCHAIN="$RUNNER_TEMP/neev-signing.keychain-db"
           KEYCHAIN_PASS="$(openssl rand -base64 24)"
           echo "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          # Also export the public certificate, for the trust step below.
+          openssl pkcs12 -legacy -in "$RUNNER_TEMP/signing.p12" -clcerts -nokeys \
+            -passin "pass:$P12_PASSWORD" -out "$RUNNER_TEMP/signing.cer" >/dev/null 2>&1 || true
           security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
@@ -163,12 +166,25 @@ jobs:
             -s -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
           rm -f "$RUNNER_TEMP/signing.p12"
-          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
-            | awk '/[0-9A-F]{40}/ {print $2; exit}')"
+          # Trust the certificate inside this throwaway keychain. Without it
+          # `find-identity -v` lists nothing: a self-signed certificate is not
+          # trusted by default, and -v shows only valid identities. Failure is
+          # tolerated because the hash lookup below does not depend on trust.
+          security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" \
+            "$RUNNER_TEMP/signing.cer" >/dev/null 2>&1 || true
+
+          # Read the SHA-1 straight off the certificate rather than via
+          # find-identity. It is the same value codesign accepts as an identity
+          # AND the leaf hash the designated requirement needs, and it is
+          # available whether or not the certificate is trusted.
+          IDENTITY="$(security find-certificate -a -Z "$KEYCHAIN" \
+            | awk '/SHA-1 hash:/ {print $3; exit}')"
           if [ -z "$IDENTITY" ]; then
-            echo "::error::signing key imported but no codesigning identity found"
+            echo "::error::signing key imported but no certificate hash found"
+            security find-certificate -a "$KEYCHAIN" | head -20
             exit 1
           fi
+          rm -f "$RUNNER_TEMP/signing.cer"
           echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
           echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
           echo "signing identity ready"
