@@ -15,6 +15,7 @@ class MainFlutterWindow: NSWindow {
     KeyHook.register(messenger: flutterViewController.engine.binaryMessenger)
     SessionWatcher.register(messenger: flutterViewController.engine.binaryMessenger)
     ClipboardMonitor.register(messenger: flutterViewController.engine.binaryMessenger)
+    ScreenPermission.register(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }

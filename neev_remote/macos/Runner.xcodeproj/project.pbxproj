@@ -31,6 +31,7 @@
 		8C49C243F7F0662F9631DDA6 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 40C59B27FB47857BB8513E7B /* Pods_Runner.framework */; };
 		AA0000010000000000000001 /* InputInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000002 /* InputInjector.swift */; };
 		AA0000010000000000000003 /* PrivacyMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000004 /* PrivacyMode.swift */; };
+		AA0000010000000000000031 /* ScreenPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000032 /* ScreenPermission.swift */; };
 		AA0000010000000000000005 /* KeyHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000006 /* KeyHook.swift */; };
 		AA0000010000000000000007 /* SessionWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000008 /* SessionWatcher.swift */; };
 		AA0000010000000000000009 /* ClipboardMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000000A /* ClipboardMonitor.swift */; };
@@ -92,6 +93,7 @@
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		AA0000010000000000000002 /* InputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputInjector.swift; sourceTree = "<group>"; };
 		AA0000010000000000000004 /* PrivacyMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyMode.swift; sourceTree = "<group>"; };
+		AA0000010000000000000032 /* ScreenPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenPermission.swift; sourceTree = "<group>"; };
 		AA0000010000000000000006 /* KeyHook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyHook.swift; sourceTree = "<group>"; };
 		AA0000010000000000000008 /* SessionWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWatcher.swift; sourceTree = "<group>"; };
 		AA000001000000000000000A /* ClipboardMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardMonitor.swift; sourceTree = "<group>"; };
@@ -189,6 +191,7 @@
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				AA0000010000000000000002 /* InputInjector.swift */,
 				AA0000010000000000000004 /* PrivacyMode.swift */,
+				AA0000010000000000000032 /* ScreenPermission.swift */,
 				AA0000010000000000000006 /* KeyHook.swift */,
 				AA0000010000000000000008 /* SessionWatcher.swift */,
 				AA000001000000000000000A /* ClipboardMonitor.swift */,
@@ -455,6 +458,7 @@
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
 				AA0000010000000000000001 /* InputInjector.swift in Sources */,
 				AA0000010000000000000003 /* PrivacyMode.swift in Sources */,
+				AA0000010000000000000031 /* ScreenPermission.swift in Sources */,
 				AA0000010000000000000005 /* KeyHook.swift in Sources */,
 				AA0000010000000000000007 /* SessionWatcher.swift in Sources */,
 				AA0000010000000000000009 /* ClipboardMonitor.swift in Sources */,
