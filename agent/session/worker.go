@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -374,6 +375,29 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		// Tell the app, so it can show the user what to fix rather than leaving
 		// them with a session that connects and then does nothing.
 		markCaptureBlocked()
+
+		// Granted, yet still failing: the PROCESS is stale, so replace it.
+		//
+		// macOS fixes a process's TCC answer at first use and keeps it for that
+		// process's lifetime, so a grant added afterwards never reaches the
+		// running worker. In the field this showed up as 312 consecutive
+		// failures over 26 minutes with Screen Recording already allowed —
+		// retrying could not have worked, and capture started only when the
+		// worker was restarted BY HAND. That manual step is the difference
+		// between the macOS host and the Windows one, and it is not something a
+		// user should ever have to know about.
+		//
+		// launchd has KeepAlive on this job, so exiting brings back a fresh
+		// worker that picks the grant up. Guarded to a granted-but-failing
+		// state, and never before a couple of attempts, so a genuinely
+		// ungranted machine keeps retrying and logging instead of respawning in
+		// a loop.
+		if attempt >= 3 && capture.ScreenCaptureGranted() {
+			log.Warn().Int("attempt", attempt).
+				Msg("worker: Screen Recording IS granted but this process was denied at " +
+					"launch — exiting so launchd restarts it with the grant applied")
+			os.Exit(0)
+		}
 		// Loud on the first failure and then occasionally: a permission problem
 		// must be visible in the log without drowning it.
 		if attempt == 1 || attempt%12 == 0 {

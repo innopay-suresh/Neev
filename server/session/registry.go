@@ -89,6 +89,35 @@ type Registry struct {
 }
 
 // NewRegistry creates a new Registry backed by the given Redis client.
+
+// NormAgentID is the Redis key form for an agent.
+//
+// The relay MINTS ids as NNN-NNN-NNN, and the desktop app strips every
+// non-alphanumeric character before dialing one. So a machine registered as
+// "106-198-026" was fetched as "106198026", missed, and the viewer was told
+// "agent not found or offline" — while the device list showed it Online,
+// because listing reads stored AgentInfo and dialing reads this key. Every
+// daemon-hosted machine was unreachable; it stayed hidden because an
+// app-hosted id is nine plain digits and survives the client's stripping
+// unchanged.
+//
+// Only the KEY is normalized. AgentInfo.ID keeps whatever form it was
+// registered with, so the device list and the host's own share card still
+// display the grouped, readable id.
+func NormAgentID(id string) string {
+	var b strings.Builder
+	b.Grow(len(id))
+	for _, r := range id {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		}
+	}
+	return b.String()
+}
+
 func NewRegistry(rdb *redis.Client) *Registry {
 	return &Registry{rdb: rdb}
 }
@@ -128,7 +157,7 @@ func (r *Registry) Register(ctx context.Context, info *AgentInfo) error {
 	if err != nil {
 		return err
 	}
-	key := agentPrefix + info.ID
+	key := agentPrefix + NormAgentID(info.ID)
 	return r.rdb.Set(ctx, key, data, sessionTTL).Err()
 }
 
@@ -144,7 +173,7 @@ func (r *Registry) Heartbeat(ctx context.Context, agentID string) error {
 
 // Get retrieves agent info by ID.
 func (r *Registry) Get(ctx context.Context, agentID string) (*AgentInfo, error) {
-	data, err := r.rdb.Get(ctx, agentPrefix+agentID).Bytes()
+	data, err := r.rdb.Get(ctx, agentPrefix+NormAgentID(agentID)).Bytes()
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +259,7 @@ func (r *Registry) IsClientCertRevoked(ctx context.Context, fingerprint string) 
 
 // Unregister removes an agent from the registry.
 func (r *Registry) Unregister(ctx context.Context, agentID string) error {
-	return r.rdb.Del(ctx, agentPrefix+agentID).Err()
+	return r.rdb.Del(ctx, agentPrefix+NormAgentID(agentID)).Err()
 }
 
 // ---- Custom alias / namespace (roadmap Phase 3) --------------------------

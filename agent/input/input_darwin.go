@@ -4,9 +4,11 @@
 package input
 
 import (
-	"log"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 /*
@@ -92,7 +94,45 @@ import "C"
 var (
 	initOnce      sync.Once
 	hasPermission int32
+	// lastPermCheck is the last time Accessibility was re-read, and lastDropLog
+	// the last time a dropped-input warning was written.
+	lastPermCheck atomic.Int64
+	lastDropLog   atomic.Int64
 )
+
+// permRecheckEvery bounds how often AXIsProcessTrustedWithOptions is called on
+// the input path. The check is cheap, but input arrives at mouse-move rates.
+const permRecheckEvery = 2 * time.Second
+
+// accessibilityGranted re-reads the CURRENT Accessibility state, never
+// prompting.
+//
+// This used to be read ONCE at startup and cached forever. A worker that
+// started before the grant applied therefore dropped every mouse and keyboard
+// event for the rest of its life, silently — InjectEvent returned nil, so
+// nothing upstream ever saw a failure. What the user experienced was video
+// arriving normally with clicks doing nothing, and no log line anywhere saying
+// why. The original caching existed to avoid prompt spam, which is preserved
+// here by passing promptUser=0: this asks, it never prompts.
+func accessibilityGranted() bool {
+	now := time.Now().UnixNano()
+	if atomic.LoadInt32(&hasPermission) == 1 {
+		return true // a granted state never revokes itself mid-session
+	}
+	last := lastPermCheck.Load()
+	if now-last < int64(permRecheckEvery) {
+		return false
+	}
+	if !lastPermCheck.CompareAndSwap(last, now) {
+		return false // another goroutine is checking
+	}
+	if C.checkAccessibility(0) == 1 {
+		atomic.StoreInt32(&hasPermission, 1)
+		log.Info().Msg("input: Accessibility granted — viewer clicks and keys now reach this Mac")
+		return true
+	}
+	return false
+}
 
 // darwinInjector implements Injector using macOS Core Graphics CGEvent API.
 type darwinInjector struct {
@@ -102,27 +142,39 @@ type darwinInjector struct {
 
 func newPlatformInjector() (Injector, error) {
 	initOnce.Do(func() {
-		log.Println("[input] macOS input injector initialized - testing Accessibility permission...")
-		ret := C.checkAccessibility(1)
-		if ret == 1 {
+		// zerolog, not the stdlib logger: setupFileLog only redirects zerolog,
+		// so stdlib output went to a stderr that a LaunchAgent discards. The one
+		// message that says whether input can work at all was written to
+		// nowhere, which is why "clicks do nothing" could not be diagnosed from
+		// the logs.
+		if C.checkAccessibility(1) == 1 {
 			atomic.StoreInt32(&hasPermission, 1)
-			log.Println("[input] ✅ Accessibility permission available")
+			log.Info().Msg("input: Accessibility granted — viewer input will reach this Mac")
 		} else {
 			atomic.StoreInt32(&hasPermission, 0)
-			log.Println("[input] ⚠️  Accessibility permission denied - input injection disabled")
+			log.Error().Msg("input: NO ACCESSIBILITY PERMISSION — viewer clicks and keys will " +
+				"do nothing. Grant Accessibility to /Library/Application Support/NeevRemote/" +
+				"neev-agent in System Settings → Privacy & Security. Re-checked automatically; " +
+				"no restart needed once granted")
 		}
 	})
 
 	w := float64(C.getScreenWidth())
 	h := float64(C.getScreenHeight())
-	log.Printf("[input] Configured for screen size: %.0fx%.0f\n", w, h)
+	log.Info().Float64("width", w).Float64("height", h).Msg("input: injector configured for screen size")
 	return &darwinInjector{screenWidth: w, screenHeight: h}, nil
 }
 
 func (d *darwinInjector) InjectEvent(e Event) error {
-	if atomic.LoadInt32(&hasPermission) == 0 {
-		// Do not dynamically check; if the OS doesn't recognize the signature,
-		// calling checkAccessibility repeatedly can spam the user with prompts.
+	if !accessibilityGranted() {
+		// Say so, at most once a minute. Silently discarding input is what made
+		// this cost a day: every layer above reported success.
+		now := time.Now().UnixNano()
+		if last := lastDropLog.Load(); now-last > int64(time.Minute) &&
+			lastDropLog.CompareAndSwap(last, now) {
+			log.Error().Msg("input: DROPPING viewer input — no Accessibility permission for " +
+				"/Library/Application Support/NeevRemote/neev-agent")
+		}
 		return nil
 	}
 

@@ -83,7 +83,29 @@ class WebRTCService {
       if (candidate.candidate != null) onIceCandidate?.call(candidate);
     };
 
-    _pc!.onConnectionState = (state) => onConnectionStateChange?.call(state);
+    // Log every peer-connection transition.
+    //
+    // Without this a session that connected and then dropped left NOTHING in
+    // the log between "connectToHost" and a dead screen — no way to tell a
+    // failed ICE negotiation from a host that closed the session from a media
+    // path that never formed. Each of those has a different fix, and guessing
+    // between them is how a day disappears. Windows and macOS share this code,
+    // so both gain it.
+    _pc!.onConnectionState = (state) {
+      DiagLog.log('peer', 'connection state -> $state');
+      onConnectionStateChange?.call(state);
+    };
+
+    // ICE and signaling states, which move BEFORE the connection state does and
+    // say WHY it ended up where it did: a connection that never leaves
+    // 'checking' is a candidate/NAT problem, one that reaches 'connected' then
+    // 'disconnected' is a media path lost mid-session.
+    _pc!.onIceConnectionState =
+        (state) => DiagLog.log('peer', 'ice state -> $state');
+    _pc!.onIceGatheringState =
+        (state) => DiagLog.log('peer', 'ice gathering -> $state');
+    _pc!.onSignalingState =
+        (state) => DiagLog.log('peer', 'signaling state -> $state');
 
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {

@@ -31,15 +31,55 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
-- **LD-PKG-3 — build the macOS pkg with `--root`, never `--component`.**
-  `--component` records the app inside `<upgrade-bundle>`, which makes installer
-  expect an existing copy and merely update it. On a Mac where the app had been
-  deleted there was nothing to upgrade, so it wrote NOTHING while reporting
-  success; a FRESH Mac installed fine, which made the fault look
-  machine-specific. `--root` produces a plain payload with an empty
-  `<upgrade-bundle/>` and installs unconditionally. Verified by diffing the
-  PackageInfo produced both ways. The release gate now rejects a package whose
-  upgrade-bundle is populated.
+- **LD-MAC-LOG-1 — macOS must log connection, audio and crash events to the same
+  standard as the Windows app.log/worker.log/transport.log.** A full day was
+  lost to Mac faults that produced no diagnosable output. What exists and must
+  keep working: `~/.neev_remote/app.log` (boot + build stamp, connect attempts,
+  relay errors, peer/ICE state transitions, voice), and for the daemon
+  `transport.log` plus `worker.log` — the latter falls back to the user's temp
+  dir because /Library/Application Support/NeevRemote is root-owned and the
+  worker runs as the user. Two rules follow from what actually went wrong:
+  native code must log through zerolog, never the stdlib logger (setupFileLog
+  redirects only zerolog, and a LaunchAgent discards stderr, so the one message
+  saying whether input could work at all was written to nowhere); and a
+  swallowed error is worse than none — input injection returned nil on failure,
+  so every layer above reported success while nothing happened.
+
+- **LD-MAC-AUDIO-1 — voice/audio initialisation must never be able to fail the
+  underlying connection.** Video, input and control may not depend on voice
+  succeeding. Voice is carried on the audio transceiver already present in the
+  host's initial offer (direction forced to sendrecv before the answer, mic
+  attached later via replaceTrack), so enabling it triggers NO renegotiation and
+  has no path by which it can tear down the peer connection. Any future change
+  that would add a renegotiation to the voice path must keep that property, and
+  a microphone that cannot be opened must degrade to a visible non-fatal
+  indicator.
+
+- **LD-MAC-TCC-4 — a macOS TCC answer is fixed per PROCESS, so a grant added
+  later requires a restart, and the agent must do that itself.** Observed: 312
+  consecutive capture failures over 26 minutes with Screen Recording already
+  allowed; capture started only when the worker was restarted by hand. Retrying
+  in-process cannot work. The worker now exits when
+  CGPreflightScreenCaptureAccess reports granted while capture still fails, and
+  launchd (KeepAlive) brings back a process the grant applies to. Accessibility
+  is re-read on the input path rather than cached once, since a cached "denied"
+  silently dropped every click for the life of the worker.
+
+- **LD-PKG-3 — the macOS pkg MUST be built non-relocatable
+  (`BundleIsRelocatable=false` via a component plist).** SUPERSEDED the original
+  `--root` vs `--component` reasoning, which was WRONG: both emit
+  `<upgrade-bundle>`, and that element alone is harmless. The real cause was
+  `<relocate><bundle id="com.neev.neevRemote"/></relocate>`, which pkgbuild adds
+  by default. With it present the installer asks LaunchServices where the bundle
+  id was last seen and writes the payload THERE, ignoring `--install-location`.
+  On a Mac whose lsregister still held a copy in ~/.Trash, /Applications stayed
+  empty and the postinstall failed on a package whose payload was intact; a Mac
+  that had never held the app installed fine, which made it look
+  machine-specific across r161-r163. Verified by diffing PackageInfo both ways:
+  `<relocate><bundle .../></relocate>` becomes `<relocate/>`. The release gate
+  now reads PackageInfo out of the xar (it is zlib-compressed, so the earlier
+  regex over raw bytes could never match and every pkg check silently passed)
+  and rejects a relocatable package.
 
 - **LD-PKG-2 — the macOS pkg version MUST change every release.** It was
   hardcoded `--version 1.0.0`, so every build claimed the same version. With a
@@ -977,6 +1017,38 @@ hardware-confirmed intact.
 ---
 
 ## Change Log
+
+- **2026-08-07 — the macOS host was unusable end to end; six separate faults,
+  each hiding the next (r164-r169).** Fixed in order of discovery:
+  (1) the pkg followed a Trash copy instead of /Applications (LD-PKG-3);
+  (2) the app called a daemon "installed" from its plist alone while the agent
+  binary was gone, so it skipped repair and hosted the session itself;
+  (3) the app could not read the daemon's id — transport.txt is root-owned 0600
+  because it carries the password — so the share card rendered an empty id on a
+  machine that was registered and hosting; the transport now announces
+  credentials to the worker over IPC (KindHostCreds) and the worker writes them
+  into the logged-in user's own directory at 0600, matching how Windows already
+  asks its SYSTEM helper;
+  (4) a Mac without Screen Recording did not fail to capture, it ABORTED —
+  flutter_webrtc's source enumeration calls abort() — so the host died before it
+  could show the consent prompt and every viewer hung at "Requesting the
+  device"; now preflighted;
+  (5) the shipped agent linked Homebrew dylibs from the CI machine
+  (/opt/homebrew/...), so the daemon could not start on any Mac without
+  Homebrew; now self-contained via @loader_path with the libraries installed
+  beside it and verified against the binary's own references;
+  (6) **the relay minted ids as NNN-NNN-NNN while the app strips every
+  non-alphanumeric character before dialing**, so every daemon-hosted machine
+  showed Online and answered "agent not found or offline" to every connect. Both
+  the in-memory map and the Redis registry are now keyed by one normalized form;
+  AgentInfo.ID keeps its dashed shape for display. Deployed server-side, which
+  repaired every already-installed client without an app update. Windows-to-
+  Windows is unaffected: it has only ever used bare-digit ids, for which the
+  normalizer is exactly the identity function.
+  Also added: peer/ICE state logging in the shared WebRTC service, input
+  injector logging through zerolog, and self-healing after a TCC grant
+  (LD-MAC-TCC-4) so a macOS host no longer needs a manual `launchctl kickstart`
+  the way it did all day.
 
 - **2026-08-03 — Unattended access is no longer optional; seamless transport has
   a crash-loop fallback (r120).** The installer offered "Seamless user-switch
