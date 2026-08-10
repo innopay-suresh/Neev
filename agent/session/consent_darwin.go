@@ -86,12 +86,21 @@ function run(argv) {
   box.addSubview(cb);
   alert.setAccessoryView(box);
   app.activateIgnoringOtherApps(true);
-  var button = alert.runModal;
+  // EVERY value crossing the ObjC bridge must be coerced, runModal included.
+  //
+  // It returns an NSModalResponse wrapper, not a JS number, so 'button === 1000'
+  // was ALWAYS false and every Allow was reported as a denial: the host clicked
+  // Allow, the worker logged allow=false, and the transport logged "connection
+  // DENIED (consent)". Windows-to-Mac was unusable whenever "ask before
+  // allowing" was on, and the only visible symptom was a prompt that did
+  // nothing.
+  //
+  // The same hazard was already known here for NSButton.state (see the Number()
+  // calls below, added when "Remember this decision" silently read as unticked)
+  // — it just was not applied to the button result. That asymmetry is why the
+  // log showed control=true, correctly coerced, next to allow=false.
+  var button = Number(alert.runModal);
   // 1000 = first button (Allow). Anything else is a refusal.
-  // NSButton.state comes back through the ObjC bridge as a wrapper object, NOT
-  // a JS number: 'state === 1' is ALWAYS false. Coerce with Number() or every
-  // checkbox silently reads as unticked (which is exactly what happened to
-  // "Remember this decision" before this was caught).
   return JSON.stringify({
     accept: button === 1000,
     control: Number(fullCtl.state) === 1,

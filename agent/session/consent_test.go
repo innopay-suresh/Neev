@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,27 @@ func TestIsClipboardMsg(t *testing.T) {
 	for _, p := range []string{`{"k":"chat"}`, `{"k":"mv"}`, `{"k":"ft"}`, `bad`} {
 		if isClipboardMsg([]byte(p)) {
 			t.Errorf("%s is not clipboard traffic", p)
+		}
+	}
+}
+
+// Every value the consent dialog reads back crosses the ObjC bridge as a
+// wrapper object, never a JS primitive, so each one must be coerced with
+// Number(). runModal was left uncoerced: 'button === 1000' was always false,
+// so every Allow was recorded as a denial and Windows-to-Mac could not connect
+// while "ask before allowing" was on. Comparing a bridged value directly is the
+// bug; this asserts it cannot come back.
+func TestConsentAlertCoercesBridgedValues(t *testing.T) {
+	if strings.Contains(consentAlertJS, "var button = alert.runModal;") {
+		t.Error("runModal is compared without Number(): every Allow reads as a denial")
+	}
+	for _, want := range []string{
+		"Number(alert.runModal)",
+		"Number(fullCtl.state)",
+		"Number(cb.state)",
+	} {
+		if !strings.Contains(consentAlertJS, want) {
+			t.Errorf("consent dialog must coerce with %s", want)
 		}
 	}
 }
