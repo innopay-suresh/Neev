@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -227,6 +228,13 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 					return
 				}
 			case ipc.KindSessionState:
+				// Also drives whether we capture at all. With nobody connected the
+				// frames are encoded and then discarded by the transport, which
+				// cost 90% of a CPU on an idle laptop for as long as the service
+				// was running — i.e. all day, since it starts at login.
+				if n, err := strconv.Atoi(strings.TrimSpace(string(payload))); err == nil {
+					setViewerCount(n)
+				}
 				// Show the host's "Remote session active / Disconnect" bar while at
 				// least one viewer is connected. The host had no way to end a session
 				// it did not start; this is that control.
@@ -437,6 +445,18 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		case <-readerDone:
 			return nil // transport disconnected
 		case <-ticker.C:
+		}
+
+		// Nobody is watching: skip the grab and the encode entirely.
+		//
+		// The tick still runs (cheap) so the loop stays responsive the instant a
+		// viewer arrives, and the next frame is forced to be a keyframe so that
+		// viewer gets a decodable picture immediately rather than waiting for
+		// the ~2s keepalive.
+		if !shouldCapture() {
+			wantKeyframe.Store(true)
+			framesSinceKey = 0
+			continue
 		}
 
 		frame, err := capturer.CaptureFrame()
