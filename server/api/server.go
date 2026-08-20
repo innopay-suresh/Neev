@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -8,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -153,6 +156,25 @@ func (s *Server) getAgent(c *fiber.Ctx) error {
 	return c.JSON(toAgentResponse(info))
 }
 
+// turnCredentialTTL bounds how long an issued TURN credential stays valid.
+//
+// Long enough that a session established now survives a normal support call,
+// short enough that a leaked credential is worthless by the time anyone reuses
+// it. coturn recomputes the same HMAC from the username's timestamp, so no
+// state is shared between the two services.
+const turnCredentialTTL = 12 * time.Hour
+
+// turnCredentials derives a coturn REST-API credential pair.
+//
+// username = "<unix-expiry>:<id>", password = base64(HMAC-SHA1(username, secret))
+// This is coturn's documented `use-auth-secret` scheme.
+func turnCredentials(secret, id string, ttl time.Duration) (string, string) {
+	username := strconv.FormatInt(time.Now().Add(ttl).Unix(), 10) + ":" + id
+	mac := hmac.New(sha1.New, []byte(secret))
+	mac.Write([]byte(username))
+	return username, base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
 // getICEServers returns the STUN/TURN server list for WebRTC clients.
 func (s *Server) getICEServers(c *fiber.Ctx) error {
 	servers := []fiber.Map{
@@ -166,11 +188,33 @@ func (s *Server) getICEServers(c *fiber.Ctx) error {
 			s.cfg.Network.TURNServer,
 			s.cfg.Network.TURNServer + "?transport=tcp",
 		}
-		servers = append(servers, fiber.Map{
-			"urls":       urls,
-			"username":   s.cfg.TURN.AuthUser,
-			"credential": s.cfg.TURN.AuthPass,
-		})
+		// Time-limited credentials, not the static pair.
+		//
+		// This endpoint is unauthenticated by necessity — a client needs ICE
+		// servers before it has a session — and it used to hand every caller
+		// the permanent TURN username and password straight from config. That
+		// is free relay bandwidth for anyone who fetches one URL, and the
+		// credential cannot be rotated without redeploying every client. A
+		// derived credential expires on its own and is useless once it does.
+		//
+		// Falls back to the static pair only when no secret is configured, so
+		// an existing deployment keeps working until turnserver.conf is updated
+		// — the alternative is silently breaking every relayed session on
+		// upgrade.
+		if secret := s.cfg.TURN.AuthSecret; secret != "" {
+			user, pass := turnCredentials(secret, "neev", turnCredentialTTL)
+			servers = append(servers, fiber.Map{
+				"urls":       urls,
+				"username":   user,
+				"credential": pass,
+			})
+		} else {
+			servers = append(servers, fiber.Map{
+				"urls":       urls,
+				"username":   s.cfg.TURN.AuthUser,
+				"credential": s.cfg.TURN.AuthPass,
+			})
+		}
 	}
 	return c.JSON(fiber.Map{"ice_servers": servers})
 }

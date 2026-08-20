@@ -54,6 +54,12 @@ type TURNConfig struct {
 	Realm    string `yaml:"realm"`
 	AuthUser string `yaml:"auth_user"`
 	AuthPass string `yaml:"auth_pass"`
+	// AuthSecret enables coturn's REST-API scheme: the relay derives a
+	// short-lived credential per request instead of handing out AuthUser/
+	// AuthPass, which are permanent and were served to anonymous callers. Must
+	// match `static-auth-secret` in turnserver.conf. Empty keeps the old
+	// static behaviour so an existing deployment does not break on upgrade.
+	AuthSecret string `yaml:"auth_secret"`
 }
 
 type JWTConfig struct {
@@ -165,6 +171,9 @@ func applyEnvOverrides(cfg *Config) {
 		if hours, err := strconv.Atoi(expiry); err == nil {
 			cfg.JWT.ExpiryHours = hours
 		}
+	}
+	if secret := os.Getenv("TURN_AUTH_SECRET"); secret != "" {
+		cfg.TURN.AuthSecret = secret
 	}
 	if enabled := os.Getenv("AUTH_ENABLED"); enabled != "" {
 		if parsed, err := strconv.ParseBool(enabled); err == nil {
