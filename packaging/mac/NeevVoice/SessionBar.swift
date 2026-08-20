@@ -25,16 +25,51 @@ final class SessionBar {
 
     func show() {
         guard panel == nil else { return }
-        let width: CGFloat = 420, height: CGFloat = 44
         guard let screen = NSScreen.main else { return }
+
+        // Build the buttons FIRST and size the bar to fit them.
+        //
+        // Fixed 60pt widths truncated every label to "Rec...", "Sou...",
+        // "Voic...", "Dis..." — a control bar whose controls cannot be read is
+        // no better than the hidden menu it was meant to replace. Widths now
+        // come from each button's own intrinsic size, so a longer state label
+        // ("Recording", "Sound on") still fits.
+        let label = NSTextField(labelWithString: "Remote session active")
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.sizeToFit()
+
+        var made: [(String, NSButton)] = []
+        for (key, title) in [("record", "Record"), ("sound", "Sound off"),
+                             ("mic", "Voice off"), ("end", "Disconnect")] {
+            let b = NSButton(title: title, target: self, action: #selector(tapped(_:)))
+            b.bezelStyle = .rounded
+            b.identifier = NSUserInterfaceItemIdentifier(key)
+            b.sizeToFit()
+            // Reserve room for the LONGEST state each button can show, so the
+            // layout does not jump when a label changes under the pointer.
+            let longest = ["record": "Recording", "sound": "Sound off",
+                           "mic": "Voice off", "end": "Disconnect"][key] ?? title
+            let probe = NSButton(title: longest, target: nil, action: nil)
+            probe.bezelStyle = .rounded
+            probe.sizeToFit()
+            b.setFrameSize(NSSize(width: max(b.frame.width, probe.frame.width) + 10,
+                                  height: 30))
+            made.append((key, b))
+        }
+
+        let pad: CGFloat = 14, gap: CGFloat = 8, height: CGFloat = 46
+        var width = pad + label.frame.width + gap * 2
+        for (_, b) in made { width += b.frame.width + gap }
+        width += pad - gap
+
         let x = screen.frame.midX - width / 2
         let y = screen.visibleFrame.maxY - height - 8
 
         // .nonactivatingPanel: clicking a control must never steal focus from
         // whatever the host is doing. .statusBar level keeps it above ordinary
         // windows, and the collection behaviour keeps it visible across Spaces
-        // and alongside a full-screen app — a session indicator that vanishes
-        // when the host switches Space is not an indicator.
+        // and alongside a full-screen app — an indicator that vanishes when the
+        // host switches Space is not an indicator.
         let p = NSPanel(
             contentRect: NSRect(x: x, y: y, width: width, height: height),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
@@ -54,28 +89,42 @@ final class SessionBar {
         content.layer?.cornerRadius = 10
         content.layer?.masksToBounds = true
 
-        let label = NSTextField(labelWithString: "Remote session active")
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.frame = NSRect(x: 14, y: 13, width: 150, height: 18)
+        label.frame.origin = NSPoint(x: pad, y: (height - label.frame.height) / 2)
         content.addSubview(label)
 
-        var x0: CGFloat = 168
-        for (key, title) in [("record", "Record"), ("sound", "Sound off"),
-                             ("mic", "Voice off"), ("end", "Disconnect")] {
-            let b = NSButton(title: title, target: self, action: #selector(tapped(_:)))
-            b.bezelStyle = .rounded
-            b.frame = NSRect(x: x0, y: 8, width: 60, height: 28)
-            b.identifier = NSUserInterfaceItemIdentifier(key)
+        var x0 = pad + label.frame.width + gap * 2
+        for (key, b) in made {
+            b.frame.origin = NSPoint(x: x0, y: (height - b.frame.height) / 2)
             content.addSubview(b)
             buttons[key] = b
-            x0 += 62
+            x0 += b.frame.width + gap
         }
 
         p.contentView = content
         p.orderFrontRegardless()
         panel = p
+        style(mic: false, sound: false, rec: false)
         armAutoHide()
         installRevealStrip(screen: screen, width: width)
+    }
+
+    /// Colour carries the state, because the label alone did not.
+    ///
+    /// "Sound off" and "Sound on" differ by two characters at a glance, so the
+    /// host could not tell whether their microphone was live — the one thing a
+    /// session bar exists to answer. An active control is filled; Disconnect is
+    /// always tinted as destructive.
+    private func style(mic: Bool, sound: Bool, rec: Bool) {
+        func paint(_ key: String, active: Bool, activeColor: NSColor) {
+            guard let b = buttons[key] else { return }
+            b.bezelColor = active ? activeColor : nil
+            b.contentTintColor = active ? .white : nil
+        }
+        paint("record", active: rec, activeColor: .systemRed)
+        paint("sound", active: sound, activeColor: .systemOrange)
+        paint("mic", active: mic, activeColor: .systemOrange)
+        buttons["end"]?.bezelColor = .systemRed
+        buttons["end"]?.contentTintColor = .white
     }
 
     @objc private func tapped(_ sender: NSButton) {
@@ -90,6 +139,7 @@ final class SessionBar {
         buttons["mic"]?.title = mic ? "Voice on" : "Voice off"
         buttons["sound"]?.title = sound ? "Sound on" : "Sound off"
         buttons["record"]?.title = rec ? "Recording" : "Record"
+        style(mic: mic, sound: sound, rec: rec)
     }
 
     private func armAutoHide() {
