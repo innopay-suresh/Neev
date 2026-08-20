@@ -55,15 +55,22 @@ moves to **Working Features** after it is confirmed working on real hardware.
   a microphone that cannot be opened must degrade to a visible non-fatal
   indicator.
 
-- **LD-MAC-TCC-4 — a macOS TCC answer is fixed per PROCESS, so a grant added
-  later requires a restart, and the agent must do that itself.** Observed: 312
-  consecutive capture failures over 26 minutes with Screen Recording already
-  allowed; capture started only when the worker was restarted by hand. Retrying
-  in-process cannot work. The worker now exits when
-  CGPreflightScreenCaptureAccess reports granted while capture still fails, and
-  launchd (KeepAlive) brings back a process the grant applies to. Accessibility
-  is re-read on the input path rather than cached once, since a cached "denied"
-  silently dropped every click for the life of the worker.
+- **LD-MAC-TCC-4 — a macOS TCC answer is fixed per PROCESS, and the process that
+  TRIGGERS a grant never benefits from it.** CGRequestScreenCaptureAccess records
+  the allow and still returns false to the caller. Verified on a real machine:
+  TCC held auth_value=2 for the agent, written by the running worker minutes
+  earlier, while both CGRequestScreenCaptureAccess and
+  CGPreflightScreenCaptureAccess reported denied. Consequences that must not be
+  forgotten: (1) every package update blanks the screen, because installing
+  replaces the binary and the first worker to run is the one that gets denied
+  while creating the grant — the installer's own bootout/bootstrap cannot fix
+  it, since at that moment the grant does not yet exist; (2) a restart is the
+  ONLY recovery, so the worker exits after ~1 minute of sustained capture
+  failure and lets launchd (KeepAlive) replace it. An earlier version gated that
+  restart on the preflight call turning true, which can never happen for the
+  same per-process reason — it shipped in r169 and never once fired.
+  Accessibility is re-read on the input path rather than cached once, since a
+  cached "denied" silently dropped every click for the life of the worker.
 
 - **LD-PKG-3 — the macOS pkg MUST be built non-relocatable
   (`BundleIsRelocatable=false` via a component plist).** SUPERSEDED the original

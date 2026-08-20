@@ -31,6 +31,13 @@ import (
 const (
 	workerFPS     = 30
 	workerBitrate = 3000 // kbps
+
+	// captureRestartAfter bounds how long a worker keeps retrying a capture it
+	// cannot start before replacing itself. Retries are ~5s apart, so this is
+	// about a minute: long enough that a transient failure is not answered with
+	// a restart, short enough that a user who has just granted permission sees
+	// the screen appear rather than wondering whether it worked.
+	captureRestartAfter = 12
 )
 
 // isFileTransferMsg cheaply peeks a KindFileData payload's kind so the reader can
@@ -384,26 +391,32 @@ func RunCaptureWorker(ctx context.Context, port int) error {
 		// them with a session that connects and then does nothing.
 		markCaptureBlocked()
 
-		// Granted, yet still failing: the PROCESS is stale, so replace it.
+		// Replace this process; it can never see a grant made after it started.
 		//
 		// macOS fixes a process's TCC answer at first use and keeps it for that
-		// process's lifetime, so a grant added afterwards never reaches the
-		// running worker. In the field this showed up as 312 consecutive
-		// failures over 26 minutes with Screen Recording already allowed —
-		// retrying could not have worked, and capture started only when the
-		// worker was restarted BY HAND. That manual step is the difference
-		// between the macOS host and the Windows one, and it is not something a
-		// user should ever have to know about.
+		// process's lifetime. CGRequestScreenCaptureAccess RECORDS the allow and
+		// still returns false to the caller, so the worker that triggered the
+		// grant is the one process guaranteed not to benefit from it.
 		//
-		// launchd has KeepAlive on this job, so exiting brings back a fresh
-		// worker that picks the grant up. Guarded to a granted-but-failing
-		// state, and never before a couple of attempts, so a genuinely
-		// ungranted machine keeps retrying and logging instead of respawning in
-		// a loop.
-		if attempt >= 3 && capture.ScreenCaptureGranted() {
+		// This previously waited for capture.ScreenCaptureGranted() to turn true
+		// before restarting — which cannot happen, because the preflight call is
+		// cached per process in exactly the same way. Verified on a real machine:
+		// TCC held auth_value=2 for this binary, written by the running worker
+		// minutes earlier, while both APIs reported denied and the restart never
+		// fired. The result was that EVERY package update blanked the screen —
+		// installing replaces the binary, the fresh worker gets denied once, and
+		// nothing but a manual `launchctl kickstart` ever recovered it.
+		//
+		// So the trigger is sustained failure, not a permission read that cannot
+		// change. If the grant does exist, the next process picks it up
+		// immediately; if it genuinely does not, this costs one restart per
+		// minute, which launchd throttles anyway, and each attempt still logs the
+		// instructions above.
+		if attempt >= captureRestartAfter {
 			log.Warn().Int("attempt", attempt).
-				Msg("worker: Screen Recording IS granted but this process was denied at " +
-					"launch — exiting so launchd restarts it with the grant applied")
+				Msg("worker: capture has been denied since launch — exiting so launchd " +
+					"restarts it, which is the only way to pick up a grant made after " +
+					"this process started")
 			os.Exit(0)
 		}
 		// Loud on the first failure and then occasionally: a permission problem
