@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../widgets/skeleton.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/theme/app_theme.dart';
@@ -82,7 +84,10 @@ class _AuditLogPageState extends State<AuditLogPage> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          // Skeleton rows, not a spinner: the audit log is a LIST, so showing
+          // its shape while it loads keeps the layout from jumping when the
+          // rows arrive and distinguishes "still loading" from "no events".
+          ? const SkeletonList(rows: 8)
           : ListView(
               padding: const EdgeInsets.all(AppSpacing.xl),
               children: [
