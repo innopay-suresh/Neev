@@ -23,7 +23,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SUPPORT="/Library/Application Support/NeevRemote"
 # sign-stable.sh wants the certificate's SHA-1 (it serves as both the signing
 # selector and the leaf hash in the designated requirement), not its name.
-CERT_NAME="${NEEV_DEV_CERT_NAME:-Neev Remote Code Signing}"
+CERT_NAME="${NEEV_DEV_CERT_NAME:-Neev Remote Dev Signing}"
 CERT_SHA1="$(security find-identity -v -p codesigning 2>/dev/null \
   | grep "$CERT_NAME" | head -1 | awk '{print $2}')"
 
