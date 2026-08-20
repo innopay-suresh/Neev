@@ -13,10 +13,10 @@
 > what ships and what every approved screenshot shows; both host bars now use
 > it. Any new surface — native or Flutter, host or viewer — uses #FF6B00.
 >
-> STILL OPEN: the app icon is green while the entire UI is orange (raised
-> 2026-08-03). That is a brand decision, not a token one: either retheme to
-> green or redraw the icon. Until it is made, users see both at once in the Dock
-> and the window.
+> **SETTLED 2026-08-20: the green icon stays.** Open since 2026-08-03. The icon
+> is the brand mark and is deliberately not tied to the UI accent — green mark,
+> #FF6B00 interface. Do NOT "fix" this by rethemeing the app green or recolouring
+> the icon orange; it is intentional, and both have been proposed before.
 **Dark-first.** Warm-charcoal canvas `#131210`, elevated dark cards `#1C1A16`, one
 ember accent `#FF6A32` that glows only on the brand mark + primary Connect action
 (never ambient). Thumbnails read as lit windows. Warm off-white ink `#F4EFE4`;
