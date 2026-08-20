@@ -52,6 +52,11 @@ static void injectMouseMove(double x, double y) {
     }
 }
 
+// gInjectFlags mirrors the held modifiers for MOUSE events, so Command-click
+// and Shift-click behave as the viewer intends rather than as bare clicks.
+static uint64_t gInjectFlags = 0;
+static void setInjectFlags(uint64_t f) { gInjectFlags = f; }
+
 static void injectMouseButton(int button, int isDown, double x, double y) {
     CGEventType eventType;
     if (button == 0) {
@@ -65,6 +70,7 @@ static void injectMouseButton(int button, int isDown, double x, double y) {
     CGPoint pt = CGPointMake(x, y);
     CGEventRef event = CGEventCreateMouseEvent(NULL, eventType, pt, (CGMouseButton)button);
     if (event) {
+        if (gInjectFlags) CGEventSetFlags(event, (CGEventFlags)gInjectFlags);
         neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
@@ -80,9 +86,16 @@ static void injectScroll(int dx, int dy) {
     }
 }
 
-static void injectKey(int keyCode, int isDown) {
+// flags carries the CURRENTLY HELD modifiers.
+//
+// A synthetic key event does not inherit them. Posting Command-down and then
+// C-down produced a plain "c": every shortcut on a Mac host was dead, while
+// right-click menu copy worked because it involves no modifier. CGEventSetFlags
+// is the only thing that binds them together.
+static void injectKeyFlags(int keyCode, int isDown, uint64_t flags) {
     CGEventRef event = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)keyCode, isDown ? true : false);
     if (event) {
+        if (flags) CGEventSetFlags(event, (CGEventFlags)flags);
         neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
@@ -191,7 +204,9 @@ func (d *darwinInjector) InjectEvent(e Event) error {
 	case EventKeyDown, EventKeyUp:
 		isDown := e.Type == EventKeyDown
 		cgCode := mapJSCodeToCG(e.Code, e.KeyCode)
-		C.injectKey(C.int(cgCode), C.int(boolToInt(isDown)))
+		flags := trackModifier(cgCode, isDown)
+		C.setInjectFlags(C.uint64_t(flags))
+		C.injectKeyFlags(C.int(cgCode), C.int(boolToInt(isDown)), C.uint64_t(flags))
 	case EventKeyChar:
 		return nil
 	}
@@ -204,7 +219,12 @@ func (d *darwinInjector) denormalize(nx, ny float64) (float64, float64) {
 	return x, y
 }
 
-func (d *darwinInjector) Close() error { return nil }
+// Close releases any modifier still held, so a session that ends mid-shortcut
+// cannot leave the host with Command stuck down.
+func (d *darwinInjector) Close() error {
+	releaseAllModifiers()
+	return nil
+}
 
 func boolToInt(b bool) int {
 	if b {
@@ -238,4 +258,69 @@ func mapJSCodeToCG(code string, fallback int) int {
 	}
 	// Fallback to basic mapping if code is empty (though it will likely be wrong for letters)
 	return fallback
+}
+
+// Modifier tracking.
+//
+// macOS does not derive a synthetic event's modifiers from previously posted
+// key events — each event carries its own flags. Without this, every keyboard
+// shortcut on a Mac host silently degraded to the bare key: Command-C copied
+// nothing, and the viewer had no way to tell.
+const (
+	cgFlagAlphaShift = 0x00010000 // caps lock
+	cgFlagShift      = 0x00020000
+	cgFlagControl    = 0x00040000
+	cgFlagAlternate  = 0x00080000 // option
+	cgFlagCommand    = 0x00100000
+)
+
+// heldFlags is the set of modifiers currently down, as CGEventFlags bits.
+var heldFlags atomic.Uint64
+
+// modifierBit maps a macOS virtual keycode to the flag it contributes, or 0.
+func modifierBit(cgCode int) uint64 {
+	switch cgCode {
+	case 55, 54: // left / right Command
+		return cgFlagCommand
+	case 56, 60: // left / right Shift
+		return cgFlagShift
+	case 58, 61: // left / right Option
+		return cgFlagAlternate
+	case 59, 62: // left / right Control
+		return cgFlagControl
+	case 57: // Caps Lock
+		return cgFlagAlphaShift
+	}
+	return 0
+}
+
+// trackModifier updates the held set for a key transition and returns the flags
+// that should be attached to this and subsequent events.
+//
+// A modifier's OWN key-down must already carry its bit — macOS expects the
+// Command-down event itself to have the Command flag set — so the set is
+// updated before the value is returned.
+func trackModifier(cgCode int, down bool) uint64 {
+	bit := modifierBit(cgCode)
+	if bit == 0 {
+		return heldFlags.Load()
+	}
+	for {
+		cur := heldFlags.Load()
+		next := cur | bit
+		if !down {
+			next = cur &^ bit
+		}
+		if heldFlags.CompareAndSwap(cur, next) {
+			return next
+		}
+	}
+}
+
+// releaseAllModifiers clears the held set. Called when a session ends so a
+// modifier held at disconnect cannot leave the host stuck with, say, Command
+// down forever.
+func releaseAllModifiers() {
+	heldFlags.Store(0)
+	C.setInjectFlags(0)
 }
