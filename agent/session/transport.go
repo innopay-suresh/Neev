@@ -661,7 +661,7 @@ func (t *Transport) announceHostOS(peer *network.Peer) {
 		// prompt, and any macOS-specific branch skipped. Reported as two
 		// separate bugs, "Ctrl+C does not work" and "the sound/mic/record dock
 		// is missing when I connect to a Mac"; both were this string.
-		if err := peer.SendControlText(`{"k":"os","v":"` + runtime.GOOS + `"}`); err == nil {
+		if err := peer.SendControlText(`{"k":"os","v":"` + viewerOSName() + `"}`); err == nil {
 			log.Info().Msg("transport: announced host OS to viewer")
 			if name != "" {
 				_ = peer.SendControlText(`{"k":"hostname","v":` + string(nameJSON) + `}`)
@@ -672,6 +672,24 @@ func (t *Transport) announceHostOS(peer *network.Peer) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	log.Warn().Msg("transport: host-OS announce never landed (control DC not open)")
+}
+
+// viewerOSName is the host OS in the VIEWER's vocabulary, which is not
+// runtime.GOOS.
+//
+// The viewer compares against "macos"; Go calls it "darwin". Sending GOOS
+// straight through swapped one wrong value for another — the viewer would not
+// recognise the host as a Mac and would still skip the Ctrl->Command
+// translation, so this would have looked exactly like the bug it was meant to
+// fix. The Flutter host has always sent "macos" (see _osName), and that is the
+// contract both ends already share.
+func viewerOSName() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "macos"
+	default:
+		return runtime.GOOS // "windows", "linux" already match
+	}
 }
 
 // sendInputToWorker forwards a raw viewer input event to the current capture
