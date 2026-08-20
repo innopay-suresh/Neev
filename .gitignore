@@ -13,7 +13,6 @@
 *.deb
 *.zip
 vendor/
-go.sum
 
 # Build artifacts (Go + Flutter + web)
 dist/
@@ -73,3 +72,12 @@ external_scan_103.txt
 !client/frontend/public/
 !client/frontend/public/**
 packaging/mac/NeevVoice/build/
+
+# Signing keys and database snapshots must NEVER be committed. A .p12 is a live
+# private key — the one that anchors Screen Recording permission on every
+# deployed Mac — and belongs only in CI secrets. A Redis dump can carry session
+# and registry data.
+*.p12
+*.pfx
+*.key
+dump.rdb
