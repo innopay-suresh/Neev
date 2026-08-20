@@ -7,7 +7,7 @@ import AppKit
 /// (cwColAccent / cwColInk / cwColCard); NSColor.systemOrange and .systemRed
 /// were a fourth and fifth colour in a product that already had three.
 enum BarPalette {
-    static let accent = NSColor(srgbRed: 0xF0 / 255, green: 0x5A / 255, blue: 0x28 / 255, alpha: 1)
+    static let accent = NSColor(srgbRed: 0xFF / 255, green: 0x6B / 255, blue: 0x00 / 255, alpha: 1)
     static let danger = NSColor(srgbRed: 0xD8 / 255, green: 0x49 / 255, blue: 0x3F / 255, alpha: 1)
     static let ink = NSColor(srgbRed: 0x17 / 255, green: 0x17 / 255, blue: 0x14 / 255, alpha: 1)
 }

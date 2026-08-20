@@ -7,10 +7,16 @@
 > contradiction actively produced wrong work. Obsidian is SHELVED; the sections
 > describing it are kept for history only.
 >
-> Accent in code is #FF6B00 (AppColors.primary). The macOS and Windows HOST
-> session bars share #F05A28 (cwColAccent) because they are seen side by side.
-> These are not yet one value; unifying them is an open decision, recorded here
-> rather than left to be rediscovered.
+> **Accent is #FF6B00 (AppColors.primary), product-wide.** Settled 2026-08-20.
+> There were three: the app at #FF6B00, this document at #FF6A32, and the
+> Windows/macOS host session bars at #F05A28. The app's value wins because it is
+> what ships and what every approved screenshot shows; both host bars now use
+> it. Any new surface — native or Flutter, host or viewer — uses #FF6B00.
+>
+> STILL OPEN: the app icon is green while the entire UI is orange (raised
+> 2026-08-03). That is a brand decision, not a token one: either retheme to
+> green or redraw the icon. Until it is made, users see both at once in the Dock
+> and the window.
 **Dark-first.** Warm-charcoal canvas `#131210`, elevated dark cards `#1C1A16`, one
 ember accent `#FF6A32` that glows only on the brand mark + primary Connect action
 (never ambient). Thumbnails read as lit windows. Warm off-white ink `#F4EFE4`;
