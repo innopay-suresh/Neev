@@ -1,6 +1,16 @@
-# Design System — Neev Remote
+## Active direction — v3 LIGHT (restored 2026-07-24, shipping)
 
-## Active direction — v4 "Obsidian" (2026-07-24, user-approved)
+> Corrected 2026-08-20. This header previously declared v4 "Obsidian" active
+> while the Decisions Log below records, on the SAME DAY, that Obsidian was
+> reverted and v3 light restored (r89). The shipping app is light, and the rule
+> in CLAUDE.md sends every visual decision through this file first — so the
+> contradiction actively produced wrong work. Obsidian is SHELVED; the sections
+> describing it are kept for history only.
+>
+> Accent in code is #FF6B00 (AppColors.primary). The macOS and Windows HOST
+> session bars share #F05A28 (cwColAccent) because they are seen side by side.
+> These are not yet one value; unifying them is an open decision, recorded here
+> rather than left to be rediscovered.
 **Dark-first.** Warm-charcoal canvas `#131210`, elevated dark cards `#1C1A16`, one
 ember accent `#FF6A32` that glows only on the brand mark + primary Connect action
 (never ambient). Thumbnails read as lit windows. Warm off-white ink `#F4EFE4`;

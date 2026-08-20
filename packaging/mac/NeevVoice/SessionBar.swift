@@ -1,5 +1,17 @@
 import AppKit
 
+/// The host session bar's palette, shared with the Windows bar.
+///
+/// The two bars sit side by side in cross-platform testing, so they must not be
+/// different oranges. These are the exact values consentwin_windows.go uses
+/// (cwColAccent / cwColInk / cwColCard); NSColor.systemOrange and .systemRed
+/// were a fourth and fifth colour in a product that already had three.
+enum BarPalette {
+    static let accent = NSColor(srgbRed: 0xF0 / 255, green: 0x5A / 255, blue: 0x28 / 255, alpha: 1)
+    static let danger = NSColor(srgbRed: 0xD8 / 255, green: 0x49 / 255, blue: 0x3F / 255, alpha: 1)
+    static let ink = NSColor(srgbRed: 0x17 / 255, green: 0x17 / 255, blue: 0x14 / 255, alpha: 1)
+}
+
 /// The host's on-screen session bar for macOS.
 ///
 /// A Windows host draws a real always-on-top bar (sessionbar_windows.go), so the
@@ -36,6 +48,7 @@ final class SessionBar {
         // ("Recording", "Sound on") still fits.
         let label = NSTextField(labelWithString: "Remote session active")
         label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = BarPalette.ink
         label.sizeToFit()
 
         var made: [(String, NSButton)] = []
@@ -82,7 +95,11 @@ final class SessionBar {
         p.isOpaque = false
 
         let content = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        content.material = .hudWindow
+        // .windowBackground on a light appearance, not .hudWindow: the Windows
+        // bar is a light card, and a dark translucent HUD beside it reads as a
+        // different product.
+        content.material = .windowBackground
+        content.appearance = NSAppearance(named: .aqua)
         content.blendingMode = .behindWindow
         content.state = .active
         content.wantsLayer = true
@@ -120,10 +137,10 @@ final class SessionBar {
             b.bezelColor = active ? activeColor : nil
             b.contentTintColor = active ? .white : nil
         }
-        paint("record", active: rec, activeColor: .systemRed)
-        paint("sound", active: sound, activeColor: .systemOrange)
-        paint("mic", active: mic, activeColor: .systemOrange)
-        buttons["end"]?.bezelColor = .systemRed
+        paint("record", active: rec, activeColor: BarPalette.danger)
+        paint("sound", active: sound, activeColor: BarPalette.accent)
+        paint("mic", active: mic, activeColor: BarPalette.accent)
+        buttons["end"]?.bezelColor = BarPalette.danger
         buttons["end"]?.contentTintColor = .white
     }
 
@@ -165,6 +182,8 @@ final class SessionBar {
     /// monitor would add a permission dependency (and another thing to explain
     /// when it silently stops working), for behaviour a strip gives for free.
     private func installRevealStrip(screen: NSScreen, width: CGFloat) {
+        // The strip is the only always-visible part, so it carries the brand
+        // accent rather than a system colour.
         guard revealStrip == nil else { return }
         let h: CGFloat = 3
         let rect = NSRect(x: screen.frame.midX - width / 2,
@@ -175,7 +194,7 @@ final class SessionBar {
                         backing: .buffered, defer: false)
         s.level = .statusBar
         s.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        s.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.55)
+        s.backgroundColor = BarPalette.accent.withAlphaComponent(0.55)
         s.isOpaque = false
         s.ignoresMouseEvents = false
 
