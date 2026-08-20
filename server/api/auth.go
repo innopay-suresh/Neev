@@ -86,8 +86,21 @@ func (s *Server) requireAuth() fiber.Handler {
 
 func (s *Server) requireRole(required string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		// FAIL CLOSED. Unconfigured auth used to call c.Next(), so a deploy that
+		// simply had not set AUTH_ENABLED served /admin/* and /dashboard/* to
+		// anyone who could reach the port — and that API enumerates every
+		// registered device and can issue or revoke device certificates. The
+		// insecure state was also the DEFAULT, so it was reached by doing
+		// nothing.
+		//
+		// 503, not 401: the problem is server configuration, not the caller's
+		// credentials, and saying so is what gets it fixed instead of retried.
 		if !s.authEnabled() {
-			return c.Next()
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"error": "authentication is not configured; admin and dashboard " +
+					"routes are disabled. Set auth.enabled and a JWT secret, and " +
+					"bootstrap an admin with AUTH_BOOTSTRAP_EMAIL/PASSWORD.",
+			})
 		}
 		user, claims, err := s.currentUser(c)
 		if err != nil {
