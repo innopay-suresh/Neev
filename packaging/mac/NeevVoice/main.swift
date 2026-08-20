@@ -24,6 +24,10 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
     private var recOn = false
     private var soundOn = false
     private var tap: AnyObject?
+    // The on-screen bar. A Windows host draws one natively; macOS had only the
+    // menu, which people did not find. Both stay: the menu is the fallback
+    // while the bar is auto-hidden.
+    private let bar = SessionBar()
     private let socketPath: String
 
     init(socketPath: String) {
@@ -37,8 +41,26 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
             systemSymbolName: "dot.radiowaves.left.and.right",
             accessibilityDescription: "Remote session active")
         item.button?.toolTip = "Neev Remote — session active"
-        rebuildMenu()
+        refreshUI()
+        bar.onAction = { [weak self] key in
+            guard let self else { return }
+            switch key {
+            case "mic": self.toggleMic()
+            case "sound": self.toggleSound()
+            case "record": self.toggleRec()
+            case "end": self.endSession()
+            default: break
+            }
+        }
+        bar.show()
         connect()
+    }
+
+    /// One place that refreshes BOTH surfaces. Updating the menu alone would let
+    /// the bar claim the microphone is off while the menu says it is on.
+    private func refreshUI() {
+        rebuildMenu()
+        bar.setState(mic: micOn, sound: soundOn, rec: recOn)
     }
 
     private func rebuildMenu() {
@@ -154,12 +176,12 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
                     if line.hasPrefix("mic ") {
                         DispatchQueue.main.async {
                             self?.micOn = on
-                            self?.rebuildMenu()
+                            self?.refreshUI()
                         }
                     } else if line.hasPrefix("rec ") {
                         DispatchQueue.main.async {
                             self?.recOn = on
-                            self?.rebuildMenu()
+                            self?.refreshUI()
                         }
                     }
                 }
@@ -181,7 +203,7 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
             (tap as? SystemAudioTap)?.stopAsync()
             tap = nil
             soundOn = false
-            rebuildMenu()
+            refreshUI()
             return
         }
         let t = SystemAudioTap { [weak self] frame in
@@ -207,7 +229,7 @@ final class VoiceBar: NSObject, NSApplicationDelegate {
             } else {
                 self.soundOn = true
             }
-            self.rebuildMenu()
+            self.refreshUI()
         }
     }
 

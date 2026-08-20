@@ -1,5 +1,6 @@
 #!/bin/bash
-# Builds NeevVoice.app — the host's macOS session controls (menu bar).
+# Builds NeevVoice.app — the host's macOS session controls: an on-screen bar
+# (SessionBar.swift) plus the menu-bar item, matching what a Windows host draws.
 #
 # Plain swiftc rather than an Xcode project: this is one source file with no
 # resources, and a .xcodeproj would be another thing to keep in sync with CI.
@@ -15,10 +16,10 @@ cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
 # arm64 + x86_64 so one bundle serves both Apple Silicon and Intel hosts.
 swiftc -O -swift-version 5 \
   -target arm64-apple-macos11.0 \
-  -o "$OUT/NeevVoice-arm64" "$HERE/main.swift" "$HERE/sysaudio.swift"
+  -o "$OUT/NeevVoice-arm64" "$HERE/main.swift" "$HERE/sysaudio.swift" "$HERE/SessionBar.swift"
 swiftc -O -swift-version 5 \
   -target x86_64-apple-macos11.0 \
-  -o "$OUT/NeevVoice-x86_64" "$HERE/main.swift" "$HERE/sysaudio.swift"
+  -o "$OUT/NeevVoice-x86_64" "$HERE/main.swift" "$HERE/sysaudio.swift" "$HERE/SessionBar.swift"
 lipo -create -output "$APP/Contents/MacOS/NeevVoice" \
   "$OUT/NeevVoice-arm64" "$OUT/NeevVoice-x86_64"
 rm -f "$OUT/NeevVoice-arm64" "$OUT/NeevVoice-x86_64"
