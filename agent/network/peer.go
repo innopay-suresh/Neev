@@ -38,6 +38,9 @@ const (
 // VideoTrackID is the standard track ID used for the desktop stream.
 const VideoTrackID = "desktop-video"
 
+// AudioTrackID is the in-session voice track.
+const AudioTrackID = "session-audio"
+
 // ConnectionMode indicates which ICE candidate type succeeded first.
 // This is used by the UI to show connection quality.
 type ConnectionMode string
@@ -87,6 +90,7 @@ type Peer struct {
 	fallbackICEservers []webrtc.ICEServer // TURN servers for fallback
 	iceTimeoutTimer    *time.Timer
 	VideoTrack         *webrtc.TrackLocalStaticRTP // nil for controller role
+	AudioTrack         *webrtc.TrackLocalStaticRTP // nil for controller role; voice
 	ControlDC          *webrtc.DataChannel         // the control data channel
 	ClipboardDC        *webrtc.DataChannel         // clipboard data channel
 	ChatDC             *webrtc.DataChannel         // chat data channel
@@ -156,6 +160,42 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 		}
 		p.VideoTrack = track
 		log.Info().Str("codec", videoCodec.MimeType).Msg("video track added to peer connection")
+
+		// Voice. Opus at 48 kHz: what every WebRTC stack prefers, so the
+		// viewer's libwebrtc handles it natively, and better audio for roughly
+		// half the bytes PCMU spent (~79 vs 160 per 20 ms frame).
+		//
+		// Added as SENDRECV in one transceiver so both directions share a single
+		// m=audio section: the host is heard on the sender, the viewer is heard
+		// on the receiver. Two separate tracks would mean two sections and a
+		// second round of negotiation for nothing.
+		//
+		// The track is created unconditionally, but NOTHING is written to it
+		// until voice is switched on, and the host's microphone is not opened
+		// until then either. Negotiating up front is what lets the toggle be a
+		// plain state change later instead of a renegotiation mid-session.
+		audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+			webrtc.RTPCodecCapability{
+				MimeType:  webrtc.MimeTypeOpus,
+				ClockRate: 48000,
+				Channels:  2, // WebRTC always declares Opus stereo; payload may be mono
+			},
+			AudioTrackID,
+			"remote-agent-stream",
+		)
+		if err != nil {
+			pc.Close()
+			return nil, fmt.Errorf("create audio track: %w", err)
+		}
+		if _, err := pc.AddTransceiverFromTrack(audioTrack,
+			webrtc.RTPTransceiverInit{
+				Direction: webrtc.RTPTransceiverDirectionSendrecv,
+			}); err != nil {
+			pc.Close()
+			return nil, fmt.Errorf("add audio transceiver: %w", err)
+		}
+		p.AudioTrack = audioTrack
+		log.Info().Str("codec", webrtc.MimeTypeOpus).Msg("audio track added (silent until voice is enabled)")
 	}
 
 	// ICE candidate handling — both forwards to peer and detects connection mode.
@@ -202,7 +242,11 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 			Str("mode", string(p.GetConnectionMode())).
 			Msg("ICE candidate gathered")
 
-		// Forward to remote peer.
+		// Forward to remote peer. Guarded because tests build a Peer with no
+		// signaling client and wire the two ends together directly.
+		if sigClient == nil {
+			return
+		}
 		payload, _ := json.Marshal(c.ToJSON())
 		_ = sigClient.Send(Message{Type: MsgCandidate, To: peerID, Payload: payload})
 	})
@@ -259,15 +303,23 @@ func NewPeer(iceServers []ICEServer, role PeerRole, sigClient *Client, peerID st
 		}
 	})
 
-	// Remote track (controller receives video).
-	if role == RoleController {
-		pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-			log.Info().Str("kind", track.Kind().String()).Msg("remote track received")
-			if p.OnTrack != nil {
-				p.OnTrack(track, receiver)
-			}
-		})
-	}
+	// Remote tracks, for BOTH roles.
+	//
+	// This used to be registered only for RoleController, on the assumption
+	// that just the viewer receives media. That stopped being true when voice
+	// was added: the AGENT now has to receive the viewer's microphone. With the
+	// handler gated behind the role, pion never delivered an incoming track to
+	// the agent at all, so the transport's OnTrack callback was dead code and
+	// viewer→host audio could not work no matter what the SDP negotiated —
+	// which is exactly how it presented: host→viewer fine, the reverse silent,
+	// with a healthy-looking sendrecv channel at both ends.
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		log.Info().Str("kind", track.Kind().String()).
+			Str("codec", track.Codec().MimeType).Msg("remote track received")
+		if p.OnTrack != nil {
+			p.OnTrack(track, receiver)
+		}
+	})
 
 	// DataChannel (agent receives control events).
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {

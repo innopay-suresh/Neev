@@ -21,11 +21,12 @@
 }
 
 .brandImage {
-  width: 24px;
+  /* Matches the sidebar mark. No border-radius: the logo is a transparent PNG
+     with its own disc, so rounding it would clip the artwork. */
+  width: 34px;
   height: auto;
   display: block;
   flex-shrink: 0;
-  border-radius: 4px;
 }
 
 .brandName {

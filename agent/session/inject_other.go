@@ -1,18 +1,7 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package session
 
-// inputSink injects viewer input into the worker's session. The real
-// implementation is Windows-only (SendInput); other platforms build a no-op so
-// the transport/worker packages still compile and test in CI.
-type inputSink interface {
-	Post(raw []byte)
-	Close()
-}
-
+// No input injection on this platform: the worker still runs (capture,
+// clipboard, file transfer), viewer input is simply discarded.
 func newInputSink() inputSink { return noopInputSink{} }
-
-type noopInputSink struct{}
-
-func (noopInputSink) Post(raw []byte) {}
-func (noopInputSink) Close()          {}

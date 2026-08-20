@@ -1,3 +1,4 @@
+import '../../core/diag_log.dart';
 import 'dart:async';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -82,11 +83,37 @@ class WebRTCService {
       if (candidate.candidate != null) onIceCandidate?.call(candidate);
     };
 
-    _pc!.onConnectionState = (state) => onConnectionStateChange?.call(state);
+    // Log every peer-connection transition.
+    //
+    // Without this a session that connected and then dropped left NOTHING in
+    // the log between "connectToHost" and a dead screen — no way to tell a
+    // failed ICE negotiation from a host that closed the session from a media
+    // path that never formed. Each of those has a different fix, and guessing
+    // between them is how a day disappears. Windows and macOS share this code,
+    // so both gain it.
+    _pc!.onConnectionState = (state) {
+      DiagLog.log('peer', 'connection state -> $state');
+      onConnectionStateChange?.call(state);
+    };
+
+    // ICE and signaling states, which move BEFORE the connection state does and
+    // say WHY it ended up where it did: a connection that never leaves
+    // 'checking' is a candidate/NAT problem, one that reaches 'connected' then
+    // 'disconnected' is a media path lost mid-session.
+    _pc!.onIceConnectionState =
+        (state) => DiagLog.log('peer', 'ice state -> $state');
+    _pc!.onIceGatheringState =
+        (state) => DiagLog.log('peer', 'ice gathering -> $state');
+    _pc!.onSignalingState =
+        (state) => DiagLog.log('peer', 'signaling state -> $state');
 
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
         _remoteStream = event.streams.first;
+        // Apply the current voice state to a track that has only just arrived.
+        // Without this, connecting with voice already off would play the far
+        // end's audio until the toggle was touched.
+        _applyRemoteAudioEnabled();
         onRemoteStream?.call(_remoteStream!);
       }
     };
@@ -115,6 +142,7 @@ class WebRTCService {
         ..ordered = true
         ..id = 3;
       _fileChannel = await _pc!.createDataChannel('file', fileInit);
+      _armFileBackpressure(_fileChannel!);
       _bindDataChannel(_fileChannel!, isControl: false);
     } else {
       _pc!.onDataChannel = (channel) {
@@ -123,6 +151,7 @@ class WebRTCService {
           _bindDataChannel(channel, isControl: false);
         } else if (channel.label == 'file') {
           _fileChannel = channel;
+          _armFileBackpressure(channel);
           _bindDataChannel(channel, isControl: false);
         } else {
           _dataChannel = channel;
@@ -151,6 +180,156 @@ class WebRTCService {
   }
 
   RTCRtpSender? _videoSender;
+  RTCRtpSender? _audioSender;
+
+  /// Whether this peer negotiated a voice channel.
+  bool get hasVoice => _audioSender != null;
+
+  /// Adds a two-way VOICE transceiver. Must be called BEFORE the offer is
+  /// created, because adding a media section later needs renegotiation.
+  ///
+  /// The transceiver is created with NO microphone attached: negotiating the
+  /// channel does not open the mic, so no permission prompt appears and nothing
+  /// is transmitted until the user actually turns voice on. Enabling later is
+  /// then a replaceTrack, which needs no renegotiation — the same trick the
+  /// monitor switch already uses.
+  ///
+  /// Safe alongside the VP8 munging: that only rewrites the m=video section and
+  /// stops at the next m= line, so an m=audio section passes through untouched.
+  Future<void> addVoiceTransceiver() async {
+    if (_pc == null || _audioSender != null) return;
+    try {
+      final t = await _pc!.addTransceiver(
+        kind: RTCRtpMediaType.RTCRtpMediaTypeAudio,
+        init: RTCRtpTransceiverInit(
+            direction: TransceiverDirection.SendRecv),
+      );
+      _audioSender = t.sender;
+    } catch (e) {
+      // Voice is optional; a peer without it must still carry screen + input.
+      _audioSender = null;
+    }
+  }
+
+  /// Answerer side: adopt the audio transceiver the OFFER created, so the
+  /// viewer can speak back without adding a second media section.
+  Future<void> adoptVoiceTransceiver() async {
+    if (_pc == null || _audioSender != null) return;
+    try {
+      final transceivers = await _pc!.getTransceivers();
+
+      // Preferred match: the receiver's track kind.
+      for (final t in transceivers) {
+        if (t.receiver.track?.kind == 'audio') {
+          await _claimVoice(t);
+          return;
+        }
+      }
+
+      // Fallback: match by the mid of the offer's m=audio section.
+      //
+      // receiver.track is NOT reliably populated straight after
+      // setRemoteDescription, and when it is null the loop above finds nothing,
+      // _audioSender stays null, and the microphone is later attached to
+      // nothing at all — silent, with every visible sign of working. Reading
+      // the mid out of the SDP does not depend on that timing.
+      final mid = _audioMidOf((await _pc!.getRemoteDescription())?.sdp);
+      if (mid != null) {
+        for (final t in transceivers) {
+          if (t.mid == mid) {
+            await _claimVoice(t);
+            return;
+          }
+        }
+      }
+      DiagLog.log('voice',
+          'no audio transceiver found in the offer — viewer cannot speak back');
+    } catch (e) {
+      DiagLog.log('voice', 'adopting the voice channel failed: $e');
+    }
+  }
+
+  /// Takes the sender and forces the channel two-way.
+  Future<void> _claimVoice(RTCRtpTransceiver t) async {
+    // Force SENDRECV before the answer is created.
+    //
+    // This is what makes viewer→host voice possible at all. With no mic
+    // attached yet the answer would otherwise declare RECVONLY — the viewer
+    // hears the host, the host hears nothing — and no later replaceTrack can
+    // undo it: replaceTrack swaps the track, it never changes a negotiated
+    // direction.
+    await t.setDirection(TransceiverDirection.SendRecv);
+    _audioSender = t.sender;
+    DiagLog.log('voice', 'voice channel adopted (mid=${t.mid}) as sendrecv');
+  }
+
+  /// Test hook for [_audioMidOf].
+  static String? debugAudioMidOf(String? sdp) => _audioMidOf(sdp);
+
+  /// Returns the mid of the first m=audio section in an SDP, or null.
+  static String? _audioMidOf(String? sdp) {
+    if (sdp == null) return null;
+    var inAudio = false;
+    for (final line in sdp.split(RegExp(r'\r?\n'))) {
+      if (line.startsWith('m=')) {
+        inAudio = line.startsWith('m=audio');
+        continue;
+      }
+      if (inAudio && line.startsWith('a=mid:')) {
+        return line.substring('a=mid:'.length).trim();
+      }
+    }
+    return null;
+  }
+
+  /// Whether incoming voice may be played on this side.
+  ///
+  /// Separate from the outgoing track on purpose: WebRTC does not link a local
+  /// sender's mute state to a remote track it happens to be receiving, so
+  /// silencing playback has to be done explicitly or the far end is still heard
+  /// while the UI says voice is off.
+  bool _playRemoteAudio = false;
+
+  /// Enables or silences incoming voice. Local and immediate — no
+  /// renegotiation, so it cannot disturb the screen share or drop the call.
+  void setRemoteAudioEnabled(bool on) {
+    _playRemoteAudio = on;
+    _applyRemoteAudioEnabled();
+  }
+
+  void _applyRemoteAudioEnabled() {
+    final stream = _remoteStream;
+    if (stream == null) return;
+    for (final t in stream.getAudioTracks()) {
+      t.enabled = _playRemoteAudio;
+    }
+  }
+
+  /// The negotiated direction of the voice channel, for diagnosis.
+  ///
+  /// Worth logging because a one-way voice bug looks identical to a broken
+  /// microphone from the outside: the button lights, the mic opens, and the
+  /// audio goes into a channel the SDP declared receive-only.
+  Future<String> voiceDirection() async {
+    if (_pc == null) return 'no-peer';
+    try {
+      for (final t in await _pc!.getTransceivers()) {
+        if (t.receiver.track?.kind == 'audio' || t.sender == _audioSender) {
+          return (await t.getCurrentDirection())?.name ?? 'unset';
+        }
+      }
+    } catch (e) {
+      return 'unknown ($e)';
+    }
+    return 'no-audio-section';
+  }
+
+  /// Attach or detach the microphone. Null detaches, which stops transmitting
+  /// while leaving the negotiated channel in place — so muting never costs a
+  /// renegotiation and can never drop the session.
+  Future<void> setMicTrack(MediaStreamTrack? track) async {
+    await _audioSender?.replaceTrack(track);
+  }
 
   /// Adds the captured screen stream (host side) to the connection, then
   /// restricts the video transceiver to VP8 so the generated offer is VP8-only.
@@ -343,6 +522,15 @@ class WebRTCService {
   /// Buffered bytes queued on the file channel — used to pace file sends so we
   /// don't overrun the send buffer. 0 if unknown/unsupported.
   int get fileChannelBufferedAmount => _fileChannel?.bufferedAmount ?? 0;
+
+  /// Ask the native layer to emit bufferedAmount-change events so the sender's
+  /// drain check (see FileTransferManager) sees fresh values and can pace sends
+  /// well under the ~16 MB SCTP cap instead of flooding it.
+  void _armFileBackpressure(RTCDataChannel c) {
+    try {
+      c.bufferedAmountLowThreshold = 256 * 1024;
+    } catch (_) {}
+  }
 
   /// Sends a file-transfer message on the dedicated 'file' channel (falls back
   /// to control if that channel isn't up), keeping file bytes off 'control'.

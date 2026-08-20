@@ -13,6 +13,8 @@ dependencies:
   # UI Components
   cupertino_icons: ^1.0.8
   google_fonts: ^6.2.1
+  # SHA-256 for relay certificate pinning (Phase 1 security).
+  crypto: ^3.0.3
   flutter_animate: ^4.5.0
 
   # WebRTC & Networking
@@ -56,3 +58,25 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # The brand mark, used wherever the app shows its own logo. Previously the
+    # UI drew a coloured square with the letter "N" — a placeholder that
+    # survived the rebrand because it is not an image asset and so was missed
+    # when the icons were swapped.
+    - assets/brand/logo.png
+
+  # Bundled (NOT fetched at runtime): this app runs on LANs and offline machines,
+  # and the old theme asked for 'Segoe UI Variable Text', which doesn't exist on
+  # macOS — the Mac build had no typographic identity at all. See DESIGN.md.
+  # Variable TTFs; weight axis is driven by fontWeight.
+  fonts:
+    - family: SpaceGrotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk.ttf
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono.ttf

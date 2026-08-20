@@ -47,10 +47,10 @@ type openFileNameW struct {
 }
 
 const (
-	ofnExplorer     = 0x00080000
+	ofnExplorer      = 0x00080000
 	ofnFileMustExist = 0x00001000
 	ofnPathMustExist = 0x00000800
-	ofnNoChangeDir  = 0x00000008
+	ofnNoChangeDir   = 0x00000008
 )
 
 // showOpenFileDialog blocks (on a locked OS thread — GetOpenFileNameW runs its

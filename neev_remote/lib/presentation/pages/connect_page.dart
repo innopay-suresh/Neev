@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter, PointMode;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -6,16 +7,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/constants/app_constants.dart';
 import '../../core/diag_log.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/services/discovery_service.dart';
 import '../../data/services/host_mode.dart';
+import '../../data/services/mac_daemon.dart';
+import '../../data/services/audit_log.dart';
+import '../../data/services/consent_store.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
+import '../widgets/consent_dialog.dart';
 import '../widgets/file_transfer_panel.dart';
 import '../widgets/remote_view_widget.dart';
 import '../widgets/shortcuts_menu.dart';
+import 'home_command_center.dart';
 import 'settings_page.dart';
 
 /// Single-screen hub: "Share my screen" (host) on the left, "Connect to a
@@ -38,12 +43,32 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   @override
   void initState() {
     super.initState();
+    // Load this machine's saved alias so it's re-asserted on register (Phase 3).
+    ref.read(remoteServiceProvider).loadDeviceAlias();
     // On desktop, start hosting automatically when the app opens so the
     // machine is immediately reachable (service-like). The browser web build
     // stays manual (each visitor shouldn't auto-share their screen).
     if (!kIsWeb) {
-      Future.delayed(const Duration(milliseconds: 600), _autoStartHost);
+      Future.delayed(const Duration(milliseconds: 600), _bootstrapHost);
     }
+  }
+
+  /// Make sure the machine can host before deciding who hosts.
+  ///
+  /// On macOS the daemon has to exist before [HostMode.shouldAutoHost] runs —
+  /// it is the thing that decides whether this window hosts or defers to the
+  /// service — so installing it afterwards would leave the first launch in the
+  /// wrong mode until the app was restarted.
+  Future<void> _bootstrapHost() async {
+    if (MacDaemon.supported) {
+      final relayUrl = ref.read(settingsProvider).relayUrl;
+      final err = await MacDaemon.ensureInstalled(
+        relayUrl: relayUrl.isEmpty ? null : relayUrl,
+      );
+      if (err != null) DiagLog.log('daemon', 'first-launch install: $err');
+    }
+    if (!mounted) return;
+    await _autoStartHost();
   }
 
   Future<void> _autoStartHost() async {
@@ -119,12 +144,44 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       _lastChatCount = msgs.length;
     });
 
-    // Attended access: prompt on incoming connections unless unattended access
-    // is enabled or the user turned prompting off (then accept silently with
-    // the default permissions), AnyDesk-style.
+    // The "Ask before allowing connections" toggle is authoritative and
+    // independent of unattended access: a fixed/unattended password governs
+    // REACHABILITY (the box stays dial-able), this toggle governs PROMPTING.
+    // When it's ON, every incoming connection shows the host an Accept/Dismiss
+    // prompt; turn it OFF for silent unattended access. (Previously this was
+    // clamped with `&& !unattendedEnabled`, which made the toggle inert on every
+    // always-on host that had an unattended password — the reported bug.)
     final _s = ref.watch(settingsProvider);
-    service.promptOnConnect = _s.askOnConnect && !_s.unattendedEnabled;
+    service.promptOnConnect = _s.askOnConnect;
+    // TransportMode hosts (SYSTEM service) can't see this setting — mirror it to
+    // a file the transport reads, so the Accept/Deny gate works there too.
+    service.syncConsentFlag(_s.askOnConnect);
     service.defaultPermControl = _s.defaultAllowControl;
+    // The persisted "View Only" mode. The widget gate reads the provider
+    // directly, but the keyboard hook and shortcut buttons live in the service
+    // and never see it — mirror it so view-only actually blocks them.
+    service.viewOnlySetting = _s.viewOnly;
+    // The SAME setting, applied in the other direction: as a HOST, "View only
+    // mode" means viewers of THIS machine may watch but not control. Mirrored
+    // to viewonly.txt for the SYSTEM/root transport, which is the process that
+    // actually injects input in TransportMode.
+    service.hostGrantsControl = !_s.viewOnly;
+    service.syncViewOnlyFlag(_s.viewOnly);
+    // Interactive Access + the two permission profiles, mirrored for the
+    // transport (the process that actually admits connections).
+    service.interactiveAccess = _s.interactiveAccess;
+    service.unattendedAllowControl = _s.unattendedAllowControl;
+    service.unattendedAllowClipboard = _s.unattendedAllowClipboard;
+    service.unattendedAllowFiles = _s.unattendedAllowFiles;
+    service.syncInteractiveAccess(_s.interactiveAccess);
+    service.syncAccessProfiles(
+      unattendedControl: _s.unattendedAllowControl && !_s.viewOnly,
+      unattendedClipboard: _s.unattendedAllowClipboard,
+      unattendedFiles: _s.unattendedAllowFiles,
+      interactiveControl: _s.defaultAllowControl && !_s.viewOnly,
+      interactiveClipboard: _s.defaultAllowClipboard,
+      interactiveFiles: _s.defaultAllowFiles,
+    );
     service.defaultPermClipboard = _s.defaultAllowClipboard;
     service.defaultPermFiles = _s.defaultAllowFiles;
     service.lockOnSessionEnd = _s.lockOnSessionEnd;
@@ -142,13 +199,46 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       return _ConnectedSession(service: service);
     }
 
+    // Once the host announces its machine name, remember it against the recent
+    // entry — a nine-digit id says nothing about which desk a machine is on,
+    // and across an organisation that is the difference between a usable list
+    // and a wall of numbers.
+    final announced = service.remoteHostName;
+    if (announced != null && announced.isNotEmpty) {
+      final target = _idController.text.trim();
+      if (target.isNotEmpty) {
+        final existing = ref.read(recentConnectionsProvider);
+        final known = existing.where((c) => c.id == target).firstOrNull;
+        if (known == null || known.name != announced) {
+          ref.read(recentConnectionsProvider.notifier).addConnection(
+                RecentConnection(
+                  id: target,
+                  name: announced,
+                  lastConnected: DateTime.now(),
+                ),
+              );
+        }
+      }
+    }
+
+    // Connecting: full-screen animated sequence (locating → securing → …) with a
+    // glowing encrypted path, instead of a bare spinner on the Home shell.
+    if (service.viewerStatus == ViewerStatus.connecting) {
+      final target = _idController.text.trim();
+      return ConnectionSequence(
+        phase: service.viewerPhase,
+        targetLabel: target.isEmpty ? 'Remote device' : target,
+        onCancel: () => service.disconnectViewer(),
+      );
+    }
+
     // First run with no server baked in / saved: ask for the server once.
     if (relayUrl.isEmpty) {
       return Scaffold(
         appBar: AppBar(
           backgroundColor: AppColors.surface,
           elevation: 0,
-          title: Text('Neev Remote', style: AppTypography.heading2),
+          title: BrandWordmark(style: AppTypography.heading2),
         ),
         body: Center(
           child: SingleChildScrollView(
@@ -162,20 +252,24 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
       );
     }
 
+    final onHome = _section == 0;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Row(
         children: [
-          _Sidebar(
+          CommandNavRail(
+            items: [for (final n in _navItems) NavRailItem(n.icon, n.label)],
             selected: _section,
             online: service.hostStatus == HostStatus.online,
             onSelect: (i) => setState(() => _section = i),
+            service: service,
           ),
           Expanded(
             child: Column(
               children: [
                 _TopBar(
                   service: service,
+                  title: _navItems[_section].label,
                   onSettings: () => setState(() => _section = 6),
                 ),
                 Expanded(child: _sectionContent(service)),
@@ -206,13 +300,14 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
         return _AddressBookPage(onPick: _pickAndHome, favoritesOnly: true);
       case 2: // Recent
         return _RecentPage(onPick: _pickAndHome);
-      case 0: // Home
-        return _HomeDashboard(
+      case 0: // Home — Command Center redesign (DESIGN.md 2026-07-21)
+        return HomeCommandCenter(
           service: service,
           idController: _idController,
           passwordController: _passwordController,
           onConnect: _connect,
           onPick: _fillId,
+          onOpenSettings: () => setState(() => _section = 6),
         );
       default: // Contacts — coming soon
         return _ComingSoon(item: _navItems[_section]);
@@ -246,7 +341,11 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
   Timer? _chatToastTimer;
 
   void _notifyChat(String text) {
-    final overlay = Overlay.maybeOf(context);
+    // rootOverlay: the shell/session context isn't always under a local Overlay,
+    // so target the app-root overlay — otherwise the toast silently no-ops (the
+    // "chat notification doesn't pop up" report).
+    final overlay =
+        Overlay.maybeOf(context, rootOverlay: true) ?? Overlay.maybeOf(context);
     if (overlay == null) return;
     _dismissChatToast();
     final preview = text.length > 90 ? '${text.substring(0, 90)}…' : text;
@@ -282,33 +381,45 @@ class _ConnectPageState extends ConsumerState<ConnectPage> {
     if (ref.read(settingsProvider).soundOnConnect) {
       SystemSound.play(SystemSoundType.alert);
     }
-    final accepted = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Row(children: [
-          const Icon(Icons.shield_outlined, color: AppColors.primary),
-          const SizedBox(width: 10),
-          Text('Incoming connection', style: AppTypography.title),
-        ]),
-        content: Text(
-            'Someone wants to connect to this computer. They will be able to '
-            'see and control the screen. Accept?',
-            style: AppTypography.caption),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Dismiss')),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.check, size: 18),
-            label: const Text('Accept'),
-          ),
-        ],
-      ),
-    );
-    if (accepted == true) {
-      await service.acceptConnection();
+    // Close the prompt if the request goes away while it is open (the viewer
+    // cancelled or disconnected). Without this the dialog sat there until
+    // dismissed by hand, asking about a viewer that had already left.
+    var open = true;
+    void withdrawIfGone() {
+      if (open && service.pendingConsent == null && mounted) {
+        open = false;
+        Navigator.of(context, rootNavigator: true).maybePop();
+      }
+    }
+
+    service.addListener(withdrawIfGone);
+    final ConsentChoice? choice;
+    try {
+      choice = await showDialog<ConsentChoice>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => ConsentDialog(
+          deviceId: req.controllerId,
+          defaultControl: !ref.read(settingsProvider).viewOnly,
+        ),
+      );
+    } finally {
+      open = false;
+      service.removeListener(withdrawIfGone);
+    }
+    // A null choice means the route was popped without an answer — treat it as
+    // a refusal. Accepting on anything other than an explicit Accept would be
+    // the wrong default for a security prompt.
+    final accepted = choice?.accepted ?? false;
+    if (choice?.remember == true) {
+      await ConsentStore.remember(req.controllerId, accepted,
+          control: choice?.control ?? true);
+    }
+    if (accepted) {
+      // The host's choice is authoritative for this session: a view-only grant
+      // makes the host DROP input, rather than trusting the viewer not to send.
+      service.hostGrantsControl = choice?.control ?? true;
+      await service.acceptConnection(control: choice?.control ?? true);
     } else {
       service.rejectConnection();
     }
@@ -400,7 +511,7 @@ class _ChatToast extends StatelessWidget {
                 color: AppColors.primary.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.chat_bubble_rounded,
+              child: Icon(Icons.chat_bubble_rounded,
                   color: AppColors.primary, size: 16),
             ),
             const SizedBox(width: 10),
@@ -439,7 +550,7 @@ class _ChatToast extends StatelessWidget {
                   InkWell(
                     onTap: onOpen,
                     borderRadius: BorderRadius.circular(6),
-                    child: const Text('Open chat',
+                    child: Text('Open chat',
                         style: TextStyle(
                             color: AppColors.primary,
                             fontWeight: FontWeight.w600,
@@ -474,23 +585,44 @@ const List<_NavItem> _navItems = [
 ];
 
 class _Sidebar extends StatelessWidget {
+  final RemoteService service;
   final int selected;
   final bool online;
   final ValueChanged<int> onSelect;
   const _Sidebar(
-      {required this.selected, required this.online, required this.onSelect});
+      {required this.service,
+      required this.selected,
+      required this.online,
+      required this.onSelect});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 76,
-      decoration: const BoxDecoration(
+      width: 216,
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(right: BorderSide(color: AppColors.border)),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: AppSpacing.md),
+          // Brand
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+            child: Row(children: [
+              const BrandMark(size: 27),
+              const SizedBox(width: 9),
+              BrandWordmark(
+                  style: AppTypography.cardTitle.copyWith(fontSize: 13.5)),
+            ]),
+          ),
+          // This machine's own ID + password. Lives here (not in a big card in
+          // the content area) so the content column is free for the session
+          // grid — that card is what left the large dead space.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(13, 0, 13, 18),
+            child: _SidebarIdPanel(service: service),
+          ),
           for (var i = 0; i < _navItems.length; i++)
             _SidebarItem(
               item: _navItems[i],
@@ -498,28 +630,156 @@ class _Sidebar extends StatelessWidget {
               onTap: () => onSelect(i),
             ),
           const Spacer(),
-          Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: online ? AppColors.success : AppColors.textTertiary,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(online ? 'Online' : 'Offline',
-                    style: AppTypography.label.copyWith(fontSize: 10)),
-              ],
+          Container(
+            margin: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+            padding: const EdgeInsets.only(top: 10),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: AppColors.border)),
             ),
+            child: Row(children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: AppColors.inkBand,
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                alignment: Alignment.center,
+                child: Text('TP',
+                    style: AppTypography.microLabel.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0)),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('This PC',
+                          style: AppTypography.caption
+                              .copyWith(fontSize: 11.5)),
+                      Row(children: [
+                        Container(
+                          width: 5,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: online
+                                ? AppColors.success
+                                : AppColors.textTertiary,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(online ? 'Online' : 'Offline',
+                            style: AppTypography.meta),
+                      ]),
+                    ]),
+              ),
+            ]),
           ),
+          const SizedBox(height: AppSpacing.lg),
         ],
       ),
     );
+  }
+}
+
+/// Own ID + password, grouped + monospace, with copy buttons.
+class _SidebarIdPanel extends StatelessWidget {
+  final RemoteService service;
+  const _SidebarIdPanel({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    final id = service.agentId ?? "—";
+    final pw = service.password ?? "—";
+
+    Widget row(String label, String value, {bool accent = false}) {
+      return Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label.toUpperCase(), style: AppTypography.microLabel),
+            const SizedBox(height: 3),
+            Text(value,
+                style: AppTypography.idLarge.copyWith(
+                    color: accent ? AppColors.primaryDark : null,
+                    fontSize: accent ? 13 : 14),
+                maxLines: 1),
+          ]),
+        ),
+        _CopyChip(value: value),
+      ]);
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Column(children: [
+        row('Your ID', _groupId(id)),
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 7),
+          child: _DashedDivider(),
+        ),
+        row('Password', pw, accent: true),
+      ]),
+    );
+  }
+}
+
+class _CopyChip extends StatelessWidget {
+  final String value;
+  const _CopyChip({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadii.sm),
+      onTap: value == '—'
+          ? null
+          : () {
+              Clipboard.setData(ClipboardData(text: value));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Copied'), duration: Duration(seconds: 1)));
+            },
+      child: Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.circular(AppRadii.sm),
+          border: Border.all(color: AppColors.borderStrong),
+        ),
+        child: Icon(Icons.copy_rounded,
+            size: 11, color: AppColors.textSecondary),
+      ),
+    );
+  }
+}
+
+class _DashedDivider extends StatelessWidget {
+  const _DashedDivider();
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      const dash = 3.0, gap = 3.0;
+      final n = (c.maxWidth / (dash + gap)).floor();
+      return Row(
+        children: List.generate(
+            n,
+            (_) => Container(
+                  width: dash,
+                  height: 1,
+                  margin: const EdgeInsets.only(right: gap),
+                  color: AppColors.borderStrong,
+                )),
+      );
+    });
   }
 }
 
@@ -553,26 +813,27 @@ class _SidebarItemState extends State<_SidebarItem> {
           waitDuration: const Duration(milliseconds: 500),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            margin: const EdgeInsets.symmetric(horizontal: 13, vertical: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(AppRadius.md),
+              borderRadius: BorderRadius.circular(AppRadii.md),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+            child: Row(
               children: [
-                Icon(widget.item.icon, size: 21, color: fg),
-                const SizedBox(height: 3),
-                Text(
-                  widget.item.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.label.copyWith(
-                      fontSize: 10,
-                      color: fg,
-                      fontWeight:
-                          active ? FontWeight.w600 : FontWeight.w500),
+                Icon(widget.item.icon, size: 16, color: fg),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    widget.item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.caption.copyWith(
+                        fontSize: 13,
+                        color: fg,
+                        fontWeight:
+                            active ? FontWeight.w500 : FontWeight.w400),
+                  ),
                 ),
               ],
             ),
@@ -609,9 +870,6 @@ class _HomeDashboard extends StatelessWidget {
         onConnect: onConnect,
       );
       final thisPc = _ThisComputerCard(service: service);
-      void soon(String f) => ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$f is coming soon'),
-              duration: const Duration(seconds: 2)));
       return SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.xl),
         child: Center(
@@ -620,58 +878,57 @@ class _HomeDashboard extends StatelessWidget {
             child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Connect is a slim BAR, not a tall card. The old card reserved a
+            // full column height for three controls, which is where most of the
+            // empty space came from.
             if (wide)
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 6, child: connect),
-                    const SizedBox(width: AppSpacing.lg),
-                    Expanded(flex: 5, child: thisPc),
-                  ],
-                ),
+              _ConnectBar(
+                service: service,
+                idController: idController,
+                passwordController: passwordController,
+                onConnect: onConnect,
               )
-            else ...[
+            else
               connect,
-              const SizedBox(height: AppSpacing.lg),
-              thisPc,
-            ],
-            const SizedBox(height: AppSpacing.lg),
-            // Feature tiles
-            LayoutBuilder(builder: (context, fc) {
-              final cols = fc.maxWidth > 720 ? 4 : 2;
-              final tiles = [
-                const _FeatureTile(
-                    icon: Icons.lock_clock_rounded,
-                    title: 'Unattended',
-                    subtitle: 'Set a permanent password'),
-                const _FeatureTile(
-                    icon: Icons.shield_outlined,
-                    title: 'Security',
-                    subtitle: 'End-to-end encrypted'),
-                _FeatureTile(
-                    icon: Icons.radar_rounded,
-                    title: 'Discovery',
-                    subtitle: 'Find LAN devices',
-                    onTap: () => soon('Discovery')),
-                _FeatureTile(
-                    icon: Icons.send_rounded,
-                    title: 'Invite',
-                    subtitle: 'Share an invitation',
-                    onTap: () => soon('Invite')),
-              ];
-              return GridView.count(
-                crossAxisCount: cols,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                mainAxisSpacing: AppSpacing.md,
-                crossAxisSpacing: AppSpacing.md,
-                childAspectRatio: 2.6,
-                children: tiles,
+            const SizedBox(height: AppSpacing.md),
+            _StatusChips(service: service),
+            const SizedBox(height: AppSpacing.xl),
+            // Recent sessions as a bento tile grid — this is the dominant
+            // surface and is what fills the dead space the old sparse list left.
+            const _SectionHead(
+                title: 'Recent sessions',
+                subtitle: "Machines you've accessed recently"),
+            const SizedBox(height: AppSpacing.md),
+            _SessionTiles(onPick: onPick),
+            const SizedBox(height: AppSpacing.xl),
+            // Bento bottom. NOTE: the mockup's activity chart + team presence
+            // are deliberately NOT here — there is no session audit log
+            // (roadmap Phase 2) and no multi-user backend (Phase 4), so those
+            // tiles would be invented numbers. See the Data Honesty Rule in
+            // DESIGN.md. These two cards state only things that are true today.
+            LayoutBuilder(builder: (context, bc) {
+              const security = _SecurityCard();
+              if (bc.maxWidth <= 720) {
+                return Column(children: [
+                  thisPc,
+                  const SizedBox(height: AppSpacing.lg),
+                  security,
+                ]);
+              }
+              // Sharing controls (own ID lives in the sidebar now, so this card
+              // is just share state + unattended) beside the security facts.
+              return IntrinsicHeight(
+                child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 11, child: thisPc),
+                      const SizedBox(width: AppSpacing.lg),
+                      Expanded(flex: 10, child: security),
+                    ]),
               );
             }),
-            const SizedBox(height: AppSpacing.lg),
-            _RecentConnectionsCard(onPick: onPick),
+            const SizedBox(height: AppSpacing.xl),
+            const _UnattendedBand(),
           ],
             ),
           ),
@@ -1006,7 +1263,7 @@ class _DiscoveryPage extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(children: [
-                  const Icon(Icons.radar_rounded,
+                  Icon(Icons.radar_rounded,
                       color: AppColors.accentDark, size: 20),
                   const SizedBox(width: AppSpacing.sm),
                   Text('Discovery', style: AppTypography.title),
@@ -1038,7 +1295,7 @@ class _DiscoveryPage extends ConsumerWidget {
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
                     child: Column(children: [
-                      const SizedBox(
+                      SizedBox(
                         width: 26,
                         height: 26,
                         child: CircularProgressIndicator(
@@ -1099,7 +1356,7 @@ class _DiscoveryRowState extends State<_DiscoveryRow> {
                 color: AppColors.primarySoft,
                 borderRadius: BorderRadius.circular(AppRadius.sm)),
             alignment: Alignment.center,
-            child: const Icon(Icons.computer,
+            child: Icon(Icons.computer,
                 size: 18, color: AppColors.primary),
           ),
           const SizedBox(width: AppSpacing.md),
@@ -1267,51 +1524,60 @@ class _ChatLine extends StatelessWidget {
 /// settings, user chip.
 class _TopBar extends ConsumerWidget {
   final RemoteService service;
+  final String title;
   final VoidCallback onSettings;
-  const _TopBar({required this.service, required this.onSettings});
+  const _TopBar(
+      {required this.service, required this.title, required this.onSettings});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final online = service.hostStatus == HostStatus.online;
+    final isHome = title == 'Home';
     return Container(
-      height: 60,
-      decoration: const BoxDecoration(
+      height: 86,
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      padding: const EdgeInsets.symmetric(horizontal: 30),
       child: Row(
         children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppColors.primary,
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-            ),
-            child: const Icon(Icons.hub_rounded, color: Colors.white, size: 19),
-          ),
-          const SizedBox(width: 10),
-          Text('Neev Remote', style: AppTypography.title),
-          const SizedBox(width: 8),
-          // Build stamp — lets us confirm which version is actually running.
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(
-              color: AppColors.primarySoft,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(AppConstants.buildTag,
-                style: const TextStyle(
-                    fontSize: 10.5,
-                    color: AppColors.primaryDark,
-                    fontWeight: FontWeight.w600)),
-          ),
+          if (isHome)
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Welcome back 👋',
+                    style: AppTypography.pageTitle.copyWith(fontSize: 24)),
+                const SizedBox(height: 3),
+                Text('Securely access and manage your devices from anywhere.',
+                    style:
+                        AppTypography.caption.copyWith(fontSize: 12.5)),
+              ],
+            )
+          else
+            Text(title, style: AppTypography.pageTitle.copyWith(fontSize: 22)),
+          const SizedBox(width: AppSpacing.md),
+          const Spacer(),
+          SizedBox(width: 300, height: 42, child: _TopSearchField()),
           const SizedBox(width: AppSpacing.md),
           _StatusPill(online: online),
-          const Spacer(),
-          SizedBox(width: 260, height: 40, child: _TopSearchField()),
           const SizedBox(width: AppSpacing.sm),
+          // Drawn (not a font glyph) so icon tree-shaking can never blank it.
+          Tooltip(
+            message: AppColors.isDark ? 'Light theme' : 'Dark theme',
+            child: InkWell(
+              onTap: toggleAppTheme,
+              borderRadius: BorderRadius.circular(999),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: CustomPaint(
+                  size: const Size(20, 20),
+                  painter: _ThemeGlyph(dark: AppColors.isDark),
+                ),
+              ),
+            ),
+          ),
           _TopIconButton(
             icon: Icons.notifications_none_rounded,
             tooltip: 'Notifications',
@@ -1322,11 +1588,27 @@ class _TopBar extends ConsumerWidget {
             ),
           ),
           _TopIconButton(
+              icon: Icons.help_outline_rounded,
+              tooltip: 'Help & Support',
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Help & Support — coming soon'),
+                        duration: Duration(seconds: 2)),
+                  )),
+          _TopIconButton(
               icon: Icons.settings_outlined,
               tooltip: 'Settings',
               onTap: onSettings),
-          const SizedBox(width: AppSpacing.sm),
-          _UserChip(),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onSettings,
+            child: Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              child: const BrandMark(size: 34),
+            ),
+          ),
         ],
       ),
     );
@@ -1342,7 +1624,7 @@ class _TopSearchField extends ConsumerWidget {
       style: AppTypography.body,
       decoration: InputDecoration(
         isDense: true,
-        hintText: 'Search recent connections',
+        hintText: 'Search by ID, device name or contact',
         prefixIcon: const Icon(Icons.search, size: 18),
         prefixIconConstraints:
             const BoxConstraints(minWidth: 38, minHeight: 38),
@@ -1389,7 +1671,7 @@ class _UserChip extends StatelessWidget {
         Container(
           width: 24,
           height: 24,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
               color: AppColors.primary, shape: BoxShape.circle),
           alignment: Alignment.center,
           child: const Icon(Icons.person, color: Colors.white, size: 15),
@@ -1584,7 +1866,7 @@ class _RecentRowState extends State<_RecentRow> {
                     color: AppColors.primarySoft,
                     borderRadius: BorderRadius.circular(AppRadius.sm)),
                 alignment: Alignment.center,
-                child: const Icon(Icons.computer,
+                child: Icon(Icons.computer,
                     size: 18, color: AppColors.primary),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -1695,9 +1977,8 @@ class _ThisComputerCard extends ConsumerWidget {
           ),
           const SizedBox(height: AppSpacing.lg),
           if (online) ...[
-            _Credential(label: 'ID', value: service.agentId ?? '…', big: true),
-            const SizedBox(height: AppSpacing.sm),
-            _Credential(label: 'Password', value: service.password ?? '…'),
+            // ID + password deliberately NOT repeated here — they live in the
+            // sidebar panel now. This card is share state + controls only.
             if (service.connectedViewers > 0) ...[
               const SizedBox(height: AppSpacing.md),
               Align(
@@ -1725,7 +2006,7 @@ class _ThisComputerCard extends ConsumerWidget {
                   label: const Text('Stop sharing'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.error,
-                    side: const BorderSide(color: AppColors.error),
+                    side: BorderSide(color: AppColors.error),
                   ),
                 ),
               ),
@@ -1760,6 +2041,13 @@ class _ThisComputerCard extends ConsumerWidget {
                 label: Text(busy ? 'Starting…' : 'Start sharing'),
               ),
             ),
+          // Unattended controls show in BOTH states. They used to render only
+          // while sharing, which left this card as a lone button surrounded by
+          // whitespace whenever sharing was off.
+          if (!online) ...[
+            const SizedBox(height: AppSpacing.md),
+            const _UnattendedControls(),
+          ],
           if (service.hostError != null) ...[
             const SizedBox(height: AppSpacing.md),
             _ErrorText(service.hostError!),
@@ -1896,7 +2184,7 @@ class _CardHeader extends StatelessWidget {
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
+            gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [AppColors.accent, AppColors.accentDark],
@@ -1927,72 +2215,6 @@ class _CardHeader extends StatelessWidget {
   }
 }
 
-class _Credential extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool big;
-  const _Credential(
-      {required this.label, required this.value, this.big = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 10, AppSpacing.sm, 10),
-      decoration: BoxDecoration(
-        color: big ? AppColors.accentSoft : AppColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(
-            color: big ? AppColors.accent.withValues(alpha: 0.45)
-                       : AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(label.toUpperCase(),
-                  style: AppTypography.label
-                      .copyWith(color: AppColors.textTertiary)),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: big ? 26 : 18,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  color: big ? AppColors.accentDark : AppColors.textPrimary,
-                  letterSpacing: big ? 2 : 1,
-                ),
-              ),
-            ],
-          ),
-          const Spacer(),
-          IconButton(
-            icon: const Icon(Icons.content_copy_rounded, size: 18),
-            tooltip: 'Copy $label',
-            style: IconButton.styleFrom(
-              foregroundColor: AppColors.accentDark,
-              backgroundColor: AppColors.surface,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppRadius.sm),
-                side: const BorderSide(color: AppColors.border),
-              ),
-            ),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: value));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                    content: Text('$label copied'),
-                    duration: const Duration(seconds: 1)),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _ErrorText extends StatelessWidget {
   final String message;
@@ -2002,7 +2224,7 @@ class _ErrorText extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Icon(Icons.error_outline, color: AppColors.error, size: 18),
+        Icon(Icons.error_outline, color: AppColors.error, size: 18),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(message,
@@ -2015,14 +2237,62 @@ class _ErrorText extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 
-class _ConnectedSession extends ConsumerWidget {
+class _ConnectedSession extends ConsumerStatefulWidget {
   final RemoteService service;
   const _ConnectedSession({required this.service});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final viewOnly =
-        ref.watch(settingsProvider).viewOnly || service.viewerViewOnly;
+  ConsumerState<_ConnectedSession> createState() => _ConnectedSessionState();
+}
+
+class _ConnectedSessionState extends ConsumerState<_ConnectedSession> {
+  /// The toolbar hides itself so it stops covering the top of the remote
+  /// screen, and comes back when the pointer reaches the top edge — the
+  /// behaviour people already expect from remote-desktop tools.
+  bool _toolbarVisible = true;
+  Timer? _hideTimer;
+
+  /// Long enough to use the toolbar without it vanishing mid-reach, short
+  /// enough that it is out of the way while actually working.
+  static const _idleBeforeHide = Duration(seconds: 4);
+
+  /// The strip at the very top that brings it back. Thin enough not to be hit
+  /// by accident, deep enough to catch a deliberate move to the edge.
+  static const _revealStripHeight = 6.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleHide();
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(_idleBeforeHide, () {
+      if (mounted && _toolbarVisible) setState(() => _toolbarVisible = false);
+    });
+  }
+
+  void _revealToolbar() {
+    if (!mounted) return;
+    if (!_toolbarVisible) setState(() => _toolbarVisible = true);
+    _scheduleHide();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = widget.service;
+    // Three ways to end up watching without control, and the HOST's refusal is
+    // the one the viewer could not see before: it just clicked into a void.
+    final viewOnly = ref.watch(settingsProvider).viewOnly ||
+        service.viewerViewOnly ||
+        !service.hostGrantedControl;
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F1A),
       // Slim persistent header (AnyDesk-style) above the remote view. Because
@@ -2030,7 +2300,21 @@ class _ConnectedSession extends ConsumerWidget {
       // taskbar, and the video fills everything below it.
       body: Column(
         children: [
-          _SessionToolbar(service: service),
+          // Collapsed to zero height rather than moved off-screen or faded:
+          // at zero height it occupies no space and cannot intercept a click
+          // meant for the remote screen underneath.
+          MouseRegion(
+            onEnter: (_) => _revealToolbar(),
+            onHover: (_) => _revealToolbar(),
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOut,
+              alignment: Alignment.topCenter,
+              child: _toolbarVisible
+                  ? _SessionToolbar(service: service)
+                  : const SizedBox(width: double.infinity, height: 0),
+            ),
+          ),
           Expanded(
             child: Stack(
               children: [
@@ -2091,6 +2375,22 @@ class _ConnectedSession extends ConsumerWidget {
                       },
                     ),
                   ),
+                // Bring the toolbar back when the pointer reaches the very
+                // top. HitTestBehavior.translucent matters: the strip senses
+                // the pointer but never consumes a click, so dragging or
+                // clicking near the top of the remote screen still reaches it.
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: _revealStripHeight,
+                  child: MouseRegion(
+                    opaque: false,
+                    hitTestBehavior: HitTestBehavior.translucent,
+                    onEnter: (_) => _revealToolbar(),
+                    child: const SizedBox.shrink(),
+                  ),
+                ),
               ],
             ),
           ),
@@ -2447,18 +2747,68 @@ class _SessionToolbar extends ConsumerWidget {
                         .toggleFavorite(id),
                   );
                 }),
-                // --- Control group ---
+                // Voice. Off by default and the mic is not opened until it is
+                // switched on, so no permission prompt appears for users who
+                // never use it.
                 _ToolButton(
-                  icon: service.viewerViewOnly
-                      ? Icons.visibility_outlined
-                      : Icons.ads_click,
-                  label: service.viewerViewOnly ? 'View only' : 'Control',
-                  tooltip: service.viewerViewOnly
-                      ? 'View only — click to take control'
-                      : 'Controlling — click for view only',
-                  active: !service.viewerViewOnly,
-                  onPressed: () => service.setViewOnly(!service.viewerViewOnly),
+                  icon: service.voiceOn ? Icons.mic : Icons.mic_off_outlined,
+                  // "Voice", not "Mic": this toggle governs what you send AND
+                  // what you hear, so naming only the microphone would promise
+                  // less than it does — and someone who muted to cut background
+                  // noise would be left wondering why the other side went quiet.
+                  label: service.voiceOn ? 'Voice on' : 'Voice off',
+                  tooltip: !service.voiceAvailable
+                      ? 'Voice is not available in this session — the host is '
+                          'on a build older than r126, which carries no audio'
+                      : service.voiceOn
+                          ? 'Voice on — click to turn off talking and listening'
+                          : 'Turn on voice to talk to and hear the other end',
+                  active: service.voiceOn,
+                  // Disabled, not silently inert, when the session has no audio
+                  // section to speak over.
+                  onPressed: service.voiceAvailable
+                      ? () => service.setVoice(!service.voiceOn)
+                      : null,
                 ),
+                _ToolButton(
+                  icon: service.recording
+                      ? Icons.stop_circle_outlined
+                      : Icons.fiber_manual_record_outlined,
+                  label: service.recording ? 'Recording' : 'Record',
+                  tooltip: service.recording
+                      ? 'Recording — click to stop. The file is sent here when '
+                          'it finishes.'
+                      : 'Record this session. The host captures it and sends '
+                          'you the file when you stop.',
+                  active: service.recording,
+                  onPressed: () => service.setRecording(!service.recording),
+                ),
+                // --- Control group ---
+                // When the HOST granted view-only the viewer cannot take
+                // control, so the button says why instead of offering a toggle
+                // that silently does nothing — the host drops the input either
+                // way, and pretending otherwise is what made this look broken.
+                if (!service.hostGrantedControl)
+                  _ToolButton(
+                    icon: Icons.visibility_outlined,
+                    label: 'View only',
+                    tooltip: 'The host granted view-only access — '
+                        'control is disabled for this session',
+                    active: false,
+                    onPressed: null,
+                  )
+                else
+                  _ToolButton(
+                    icon: service.viewerViewOnly
+                        ? Icons.visibility_outlined
+                        : Icons.ads_click,
+                    label: service.viewerViewOnly ? 'View only' : 'Control',
+                    tooltip: service.viewerViewOnly
+                        ? 'View only — click to take control'
+                        : 'Controlling — click for view only',
+                    active: !service.viewerViewOnly,
+                    onPressed: () => service.setViewOnly(!service.viewerViewOnly),
+                  ),
                 if (service.keyboardCaptureSupported)
                   _ToolButton(
                     icon: service.keyboardCapture
@@ -2692,7 +3042,7 @@ class _SessionToolbar extends ConsumerWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Row(children: [
-          const Icon(Icons.password_rounded,
+          Icon(Icons.password_rounded,
               color: AppColors.accentDark, size: 20),
           const SizedBox(width: AppSpacing.sm),
           const Text('Transmit login'),
@@ -2787,7 +3137,7 @@ class _ConnectionBadge extends StatelessWidget {
         Container(
           width: 9,
           height: 9,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
               color: AppColors.success, shape: BoxShape.circle),
         ),
         const SizedBox(width: 8),
@@ -2843,7 +3193,10 @@ class _ToolButton extends StatefulWidget {
   final String label;
   final String tooltip;
   final bool active;
-  final VoidCallback onPressed;
+  /// Null renders the button DISABLED — dimmed, no hover, default cursor. A
+  /// control the user cannot use must look that way; a live-looking button that
+  /// silently does nothing is what made host-enforced view-only feel broken.
+  final VoidCallback? onPressed;
   const _ToolButton({
     required this.icon,
     required this.label,
@@ -2862,17 +3215,24 @@ class _ToolButtonState extends State<_ToolButton> {
   @override
   Widget build(BuildContext context) {
     final active = widget.active;
-    final fg = active
-        ? AppColors.primary
-        : (_hover ? const Color(0xFF1D1D1F) : const Color(0xFF5B5B60));
-    final bg = _hover ? const Color(0xFFEAEAEC) : Colors.transparent;
+    final enabled = widget.onPressed != null;
+    final fg = !enabled
+        ? const Color(0xFFB4B4B8)
+        : active
+            ? AppColors.primary
+            : (_hover ? const Color(0xFF1D1D1F) : const Color(0xFF5B5B60));
+    final bg = (_hover && enabled)
+        ? const Color(0xFFEAEAEC)
+        : Colors.transparent;
     return Tooltip(
       message: widget.tooltip,
       waitDuration: const Duration(milliseconds: 400),
       child: MouseRegion(
-        onEnter: (_) => setState(() => _hover = true),
+        onEnter: (_) => setState(() => _hover = enabled),
         onExit: (_) => setState(() => _hover = false),
-        cursor: SystemMouseCursors.click,
+        cursor: enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         child: GestureDetector(
           onTap: widget.onPressed,
           child: SizedBox(
@@ -3023,7 +3383,7 @@ class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.dns_outlined, color: AppColors.accent, size: 40),
+          Icon(Icons.dns_outlined, color: AppColors.accent, size: 40),
           const SizedBox(height: AppSpacing.md),
           Text('Connect to your server', style: AppTypography.heading1),
           const SizedBox(height: AppSpacing.xs),
@@ -3057,3 +3417,632 @@ class _ServerSetupCardState extends ConsumerState<_ServerSetupCard> {
   }
 }
 
+
+// ─── Bento home widgets (DESIGN.md) ────────────────────────────────────────
+// Added in the layout pass. The tile grid replaces the old sparse "Recent
+// connections" list, which left a large dead area at the bottom of the page.
+
+/// "958897411" -> "958 897 411". The device ID is the product's core noun and
+/// gets read aloud over the phone, so it is grouped and set in tabular mono.
+String _groupId(String id) {
+  final digits = id.replaceAll(RegExp(r'[^0-9A-Za-z]'), '');
+  if (digits.length != 9) return id;
+  return '${digits.substring(0, 3)} ${digits.substring(3, 6)} ${digits.substring(6)}';
+}
+
+String _relativeTime(DateTime t) {
+  final d = DateTime.now().difference(t);
+  if (d.inMinutes < 1) return 'just now';
+  if (d.inMinutes < 60) return '${d.inMinutes} min ago';
+  if (d.inHours < 24) return '${d.inHours}h ago';
+  if (d.inDays == 1) return 'yesterday';
+  if (d.inDays < 30) return '${d.inDays} days ago';
+  return '${(d.inDays / 30).floor()} mo ago';
+}
+
+class _SectionHead extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  const _SectionHead({required this.title, required this.subtitle});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: AppTypography.sectionTitle),
+            const SizedBox(height: 2),
+            Text(subtitle, style: AppTypography.meta),
+          ]),
+        ),
+      ],
+    );
+  }
+}
+
+/// Bento grid of recent machines. Featured (most recent) tile is wider.
+class _SessionTiles extends ConsumerWidget {
+  final void Function(String id) onPick;
+  const _SessionTiles({required this.onPick});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final query = ref.watch(_homeSearchProvider).trim().toLowerCase();
+    final all = ref.watch(recentConnectionsProvider);
+    final recents = query.isEmpty
+        ? all
+        : all
+            .where((c) =>
+                c.id.toLowerCase().contains(query) ||
+                c.name.toLowerCase().contains(query))
+            .toList();
+
+    if (recents.isEmpty) {
+      return _Card(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xl, vertical: 22),
+        child: Column(children: [
+          Icon(Icons.devices_other_rounded,
+              size: 26, color: AppColors.textTertiary),
+          const SizedBox(height: AppSpacing.md),
+          Text(query.isEmpty ? 'No sessions yet' : 'No matches',
+              style: AppTypography.cardTitle),
+          const SizedBox(height: 4),
+          Text(
+              query.isEmpty
+                  ? 'Machines you connect to will appear here.'
+                  : 'Try a different ID or name.',
+              style: AppTypography.meta),
+        ]),
+      );
+    }
+
+    return LayoutBuilder(builder: (context, c) {
+      final cols = c.maxWidth > 980
+          ? 4
+          : c.maxWidth > 700
+              ? 3
+              : c.maxWidth > 460
+                  ? 2
+                  : 1;
+      const gap = AppSpacing.lg;
+      // Bento: the most recent machine gets a WIDER featured tile (1.7fr vs 1fr),
+      // so the grid has a focal point instead of four identical boxes. Only when
+      // there's room for the full row and we're not filtering.
+      final feature = cols >= 3 && recents.length >= cols && query.isEmpty;
+      final units = feature ? (cols - 1) + 1.7 : cols.toDouble();
+      final unit = (c.maxWidth - gap * (cols - 1)) / units;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [
+          for (var i = 0; i < recents.length; i++)
+            SizedBox(
+              width: feature && i == 0 ? unit * 1.7 : unit,
+              child: _SessionTile(
+                entry: recents[i],
+                seed: i,
+                featured: feature && i == 0,
+                onTap: () => onPick(recents[i].id),
+              ),
+            ),
+        ],
+      );
+    });
+  }
+}
+
+class _SessionTile extends StatefulWidget {
+  final RecentConnection entry;
+  final int seed;
+  final bool featured;
+  final VoidCallback onTap;
+  const _SessionTile({
+    required this.entry,
+    required this.seed,
+    required this.featured,
+    required this.onTap,
+  });
+
+  @override
+  State<_SessionTile> createState() => _SessionTileState();
+}
+
+class _SessionTileState extends State<_SessionTile> {
+  bool _hover = false;
+
+  // Decorative thumbnail tints. NOT data — we don't store a screenshot per
+  // machine yet, so the tile shows a neutral desktop motif rather than
+  // pretending to be a live preview.
+  static const List<List<Color>> _tints = [
+    [Color(0xFF4A6B8A), Color(0xFF1B2838)],
+    [Color(0xFF5C8068), Color(0xFF1F2F26)],
+    [Color(0xFF8A5C74), Color(0xFF301F29)],
+    [Color(0xFF8A7350), Color(0xFF332822)],
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final tint = _tints[widget.seed % _tints.length];
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadii.xl),
+            border: Border.all(
+                color: _hover || widget.featured
+                    ? AppColors.borderStrong
+                    : AppColors.border),
+            boxShadow: _hover || widget.featured
+                ? AppShadows.float
+                : AppShadows.card,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: 118,
+                child: Stack(children: [
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: tint,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // window motif
+                  Positioned(
+                      left: 18,
+                      top: 24,
+                      child: _MiniWindow(w: 62, h: 40)),
+                  Positioned(
+                      left: 52,
+                      top: 46,
+                      child: _MiniWindow(w: 46, h: 32)),
+                  // taskbar strip
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      height: 13,
+                      color: Colors.black.withValues(alpha: 0.28),
+                    ),
+                  ),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(13, 11, 13, 13),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_groupId(widget.entry.id),
+                        style: AppTypography.mono, maxLines: 1),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${widget.entry.name} · ${_relativeTime(widget.entry.lastConnected)}',
+                      style: AppTypography.meta,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniWindow extends StatelessWidget {
+  final double w;
+  final double h;
+  const _MiniWindow({required this.w, required this.h});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: w,
+      height: h,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 8,
+              offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(children: [
+        Container(
+          height: 7,
+          decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.06)),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Only statements that are true of every session today.
+class _SecurityCard extends StatelessWidget {
+  const _SecurityCard();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget line(String t) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(children: [
+            Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                color: AppColors.successSoft,
+                borderRadius: BorderRadius.circular(AppRadii.sm - 1),
+              ),
+              child: Icon(Icons.check_rounded,
+                  size: 12, color: AppColors.success),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+                child: Text(t,
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.textSecondary))),
+          ]),
+        );
+    return _Card(
+      padding: const EdgeInsets.all(18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Security', style: AppTypography.cardTitle),
+        const SizedBox(height: 2),
+        Text('How every session is protected', style: AppTypography.meta),
+        const SizedBox(height: 11),
+        line('End-to-end encrypted between the two machines'),
+        line('The relay routes traffic and cannot read your session'),
+        line('Session password regenerates each time you share'),
+      ]),
+    );
+  }
+}
+
+/// Dark band. Points at a real feature (unattended access), no invented stats.
+class _UnattendedBand extends StatelessWidget {
+  const _UnattendedBand();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(26, 24, 26, 24),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [AppColors.inkBand, AppColors.inkBandAlt],
+        ),
+        borderRadius: BorderRadius.circular(AppRadii.xl),
+        boxShadow: AppShadows.float,
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('UNATTENDED ACCESS',
+                style: AppTypography.microLabel.copyWith(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1)),
+            const SizedBox(height: 7),
+            Text('Set a permanent password on this machine',
+                style: AppTypography.sectionTitle
+                    .copyWith(color: const Color(0xFFF3EFE5), fontSize: 17)),
+            const SizedBox(height: 5),
+            Text(
+                'Reconnect any time without waiting for someone to share a new code. Survives restarts.',
+                style: AppTypography.caption
+                    .copyWith(color: const Color(0x9EF3EFE5))),
+          ]),
+        ),
+        const SizedBox(width: 20),
+        Icon(Icons.lock_clock_rounded,
+            size: 40, color: AppColors.primary.withValues(alpha: 0.85)),
+      ]),
+    );
+  }
+}
+
+/// Single-row connect control: icon + ID + password + Connect.
+/// Replaces the tall card whose reserved column height created the dead space.
+class _ConnectBar extends StatelessWidget {
+  final RemoteService service;
+  final TextEditingController idController;
+  final TextEditingController passwordController;
+  final VoidCallback onConnect;
+  const _ConnectBar({
+    required this.service,
+    required this.idController,
+    required this.passwordController,
+    required this.onConnect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final connecting = service.viewerStatus == ViewerStatus.connecting;
+    final failed = service.viewerStatus == ViewerStatus.failed;
+
+    InputDecoration deco(String hint, IconData icon) => InputDecoration(
+          hintText: hint,
+          prefixIcon: Icon(icon, size: 17, color: AppColors.textTertiary),
+          filled: true,
+          fillColor: AppColors.background,
+          isDense: true,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            borderSide: BorderSide(color: AppColors.borderStrong),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            borderSide: BorderSide(color: AppColors.borderStrong),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            borderSide: BorderSide(color: AppColors.primary, width: 1.4),
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.xl),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.float,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: AppColors.primarySoft,
+                borderRadius: BorderRadius.circular(AppRadii.md),
+              ),
+              child: Icon(Icons.cast_connected_rounded,
+                  size: 17, color: AppColors.primaryDark),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 3,
+              child: TextField(
+                controller: idController,
+                decoration: deco('Enter Remote Desk ID', Icons.link_rounded),
+                style: AppTypography.mono.copyWith(fontSize: 13.5),
+                onSubmitted: (_) => onConnect(),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: 2,
+              child: TextField(
+                controller: passwordController,
+                obscureText: true,
+                decoration: deco('Password', Icons.lock_outline_rounded),
+                style: AppTypography.mono.copyWith(fontSize: 13.5),
+                onSubmitted: (_) => onConnect(),
+              ),
+            ),
+            const SizedBox(width: 10),
+            SizedBox(
+              height: 44,
+              child: FilledButton(
+                onPressed: connecting ? null : onConnect,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 22),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.md)),
+                ),
+                child: connecting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text('Connect',
+                            style: AppTypography.bodyStrong
+                                .copyWith(color: Colors.white, fontSize: 13.5)),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.arrow_forward_rounded, size: 15),
+                      ]),
+              ),
+            ),
+          ]),
+          if (failed && service.viewerError != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 48, top: 8),
+              child: Text(service.viewerError!,
+                  style: AppTypography.meta.copyWith(color: AppColors.error)),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Status chip strip. Occupies the band the mockup used for stat tiles, but
+/// every value here is REAL state the app already tracks — device count, share
+/// state, unattended state, relay connectivity. No invented metrics
+/// (see the Data Honesty Rule in DESIGN.md).
+class _StatusChips extends ConsumerWidget {
+  final RemoteService service;
+  const _StatusChips({required this.service});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final recents = ref.watch(recentConnectionsProvider);
+    final settings = ref.watch(settingsProvider);
+    final online = service.hostStatus == HostStatus.online;
+
+    final chips = <Widget>[
+      // Real now that Phase 2's audit log exists — counted from recorded
+      // sessions, not invented.
+      FutureBuilder<int>(
+        future: AuditLog.instance.countToday(),
+        builder: (context, snap) => _StatusChip(
+          icon: Icons.today_rounded,
+          tint: AppColors.primarySoft,
+          fg: AppColors.primaryDark,
+          label: 'Sessions today',
+          value: snap.hasData ? '${snap.data}' : '—',
+        ),
+      ),
+      _StatusChip(
+        icon: Icons.devices_other_rounded,
+        tint: AppColors.secondarySoft,
+        fg: AppColors.secondary,
+        label: 'Known devices',
+        value: '${recents.length}',
+      ),
+      _StatusChip(
+        icon: Icons.cast_connected_rounded,
+        tint: AppColors.secondarySoft,
+        fg: AppColors.secondary,
+        label: 'Sharing',
+        value: online
+            ? (service.connectedViewers > 0
+                ? '${service.connectedViewers} connected'
+                : 'On')
+            : 'Off',
+      ),
+      _StatusChip(
+        icon: Icons.lock_clock_rounded,
+        tint: AppColors.successSoft,
+        fg: AppColors.success,
+        label: 'Unattended',
+        value: settings.unattendedEnabled ? 'On' : 'Off',
+      ),
+    ];
+
+    return LayoutBuilder(builder: (context, c) {
+      final cols = c.maxWidth > 860 ? 4 : 2;
+      const gap = AppSpacing.md;
+      final w = (c.maxWidth - gap * (cols - 1)) / cols;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [for (final ch in chips) SizedBox(width: w, child: ch)],
+      );
+    });
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final IconData icon;
+  final Color tint;
+  final Color fg;
+  final String label;
+  final String value;
+  const _StatusChip({
+    required this.icon,
+    required this.tint,
+    required this.fg,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Row(children: [
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+              color: tint, borderRadius: BorderRadius.circular(AppRadii.md)),
+          child: Icon(icon, size: 15, color: fg),
+        ),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label.toUpperCase(), style: AppTypography.microLabel),
+                const SizedBox(height: 2),
+                Text(value,
+                    style: AppTypography.sectionTitle.copyWith(fontSize: 15),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ]),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Sun (dark mode active → tap for light) / moon (light active → tap for dark),
+/// hand-drawn so it never depends on the icon font subset.
+class _ThemeGlyph extends CustomPainter {
+  final bool dark;
+  _ThemeGlyph({required this.dark});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final p = Paint()
+      ..color = AppColors.textSecondary
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    if (dark) {
+      // sun: core + 8 rays
+      canvas.drawCircle(c, size.width * 0.22, p);
+      for (var i = 0; i < 8; i++) {
+        final a = i * math.pi / 4;
+        final r0 = size.width * 0.33, r1 = size.width * 0.46;
+        canvas.drawLine(
+          Offset(c.dx + r0 * math.cos(a), c.dy + r0 * math.sin(a)),
+          Offset(c.dx + r1 * math.cos(a), c.dy + r1 * math.sin(a)),
+          p,
+        );
+      }
+    } else {
+      // moon: circle minus an offset circle (even-odd crescent)
+      final r = size.width * 0.40;
+      final path = Path()..fillType = PathFillType.evenOdd;
+      path.addOval(Rect.fromCircle(center: c, radius: r));
+      path.addOval(Rect.fromCircle(
+          center: Offset(c.dx + r * 0.55, c.dy - r * 0.35), radius: r * 0.92));
+      canvas.drawPath(path, Paint()..color = AppColors.textSecondary);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ThemeGlyph old) => old.dark != dark;
+}

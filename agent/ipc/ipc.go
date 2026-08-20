@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -75,11 +76,254 @@ const (
 	// payload = {"k":"chat","t":...} JSON; the transport relays it to viewers on
 	// the control channel.
 	KindChat byte = 0x09
+
+	// Transport -> worker: ask the logged-in user to approve an incoming viewer
+	// (the "Ask before allowing connections" gate in TransportMode, where the
+	// headless session-0 transport can't draw UI). payload = viewer id (string).
+	KindConsentRequest byte = 0x0A
+
+	// Worker -> transport: the user's Accept/Deny answer. payload =
+	// {"id":<viewer id>,"allow":bool,"control":bool} JSON.
+	KindConsentReply byte = 0x0B
+
+	// Worker -> transport: the HOST user wants to end the session now. Until
+	// this existed, only the viewer could hang up: the person whose screen was
+	// being watched had no way to stop it, which is the wrong way round for a
+	// remote-access tool. payload = viewer id to drop, or empty for ALL viewers.
+	KindEndSession byte = 0x0C
+
+	// Transport -> worker: a viewer connected or the last one left, so the
+	// worker can show/hide the host's session indicator. payload = viewer count
+	// as decimal text ("0" = nobody connected).
+	KindSessionState byte = 0x0D
+
+	// Transport -> worker: withdraw a consent prompt that is still on screen.
+	// The viewer cancelled, disconnected, or the request timed out, so the
+	// question is moot — leaving the dialog up asks the host to decide something
+	// that no longer exists, and it sat there until dismissed by hand.
+	// payload = viewer id.
+	KindConsentCancel byte = 0x0E
+
+	// Worker -> transport: one 20 ms frame of the host's microphone, already
+	// mu-law encoded (see agent/audio). payload = 160 bytes of PCMU.
+	//
+	// Capture lives in the WORKER, not here, and that placement is the whole
+	// reason voice can work at all under TransportMode: the worker is launched
+	// into the interactive session via CreateProcessAsUser, so it has an audio
+	// session and can see the user's microphone. The transport runs as SYSTEM
+	// in session 0, which has no audio endpoint of its own.
+	KindAudioFrame byte = 0x0F
+
+	// Transport -> worker: one 20 ms frame of the VIEWER's voice to play out on
+	// the host's speakers. payload = 160 bytes of PCMU.
+	KindAudioPlay byte = 0x10
+
+	// Transport -> worker: turn host microphone capture on or off.
+	// payload = "1" to capture, "0" to stop.
+	//
+	// Capture must be OFF until asked. A remote-support tool that opens the
+	// microphone on connect is indistinguishable from a bug that listens to the
+	// room, and the OS mic indicator lighting up unbidden is how that accusation
+	// starts. The device is opened on "1" and CLOSED on "0" — not merely muted.
+	KindAudioCapture byte = 0x11
+
+	// Transport -> worker: the id + password this machine is registered under,
+	// so the app can SHOW them. payload = {"id":string,"password":string} JSON.
+	//
+	// The app cannot read them from disk. The transport's own transport.txt is
+	// root-owned 0600 (it holds the password), and the app runs as the
+	// logged-in user, so on macOS the share card rendered an empty id and the
+	// host had nothing to hand out — the daemon was hosting correctly and
+	// unreachable in practice. Windows never hit this because its app asks the
+	// SYSTEM helper over localhost TCP; this gives macOS the same answer over
+	// the channel that already exists.
+	//
+	// It goes to the WORKER rather than to a shared file because the worker
+	// runs as the logged-in user: it can write the credentials somewhere only
+	// that user can read. Widening transport.txt instead would hand this
+	// machine's remote-access password to every other local account.
+	KindHostCreds byte = 0x12
 )
 
 // maxPayload caps a single message so a corrupt stream can't allocate wildly.
 // A 4K keyframe is comfortably under this.
 const maxPayload = 32 << 20 // 32 MiB
+
+// ErrConnClosed is returned by the write methods after the Conn is closed.
+var ErrConnClosed = fmt.Errorf("ipc: connection closed")
+
+// Conn wraps the single transport↔worker net.Conn. All writes go through a
+// SINGLE dedicated writer goroutine draining THREE priority queues, so:
+//   - no producer ever holds a lock across a blocking socket write (the r69
+//     mutex did — a large file's blocked write starved input and deadlocked the
+//     bidirectional pipe);
+//   - one message's [header][payload] is written by exactly one goroutine, so
+//     the frame stream can never interleave/corrupt (the reason r69 serialized);
+//   - INPUT/control always beat bulk file data to the wire (hi > bulk), so a
+//     large transfer can't head-of-line-block clicks;
+//   - VIDEO is droppable (drop-oldest) so a slow peer can never stall capture;
+//   - BULK file data is a bounded queue, so a producer blocks on enqueue when
+//     the peer is behind — that is real backpressure to the file sender and it
+//     never touches the hi lane.
+//
+// One reader per direction, so ReadMessage stays lock-free.
+type Conn struct {
+	net.Conn
+	hi        chan []byte // reliable, high priority: input/control/acks/clip/chat/keyframe/video-info
+	bulk      chan []byte // reliable, bulk: file-transfer + clipboard-file bytes (backpressured)
+	vid       chan []byte // droppable: video frames (drop-oldest when the peer is behind)
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+// NewConn wraps c and starts its writer goroutine.
+func NewConn(c net.Conn) *Conn {
+	cn := &Conn{
+		Conn: c,
+		hi:   make(chan []byte, 1024),
+		bulk: make(chan []byte, 256),
+		vid:  make(chan []byte, 8),
+		done: make(chan struct{}),
+	}
+	go cn.writeLoop()
+	return cn
+}
+
+func (c *Conn) writeLoop() {
+	hiStreak := 0
+	for {
+		var b []byte
+		fromHi := false
+		// FAIRNESS: after a run of hi-lane messages, force a bulk slot. hi (input +
+		// keyframe requests) can otherwise flood — e.g. a PLI storm or rapid mouse
+		// moves during a big transfer — and STARVE the bulk file lane, wedging the
+		// upload (the reported "large file stalls at ~8MB"). This still gives hi
+		// ~8:1 priority (input stays snappy) while guaranteeing file data always
+		// makes progress.
+		if hiStreak >= 8 {
+			select {
+			case b = <-c.bulk:
+				hiStreak = 0
+			case <-c.done:
+				return
+			default:
+			}
+		}
+		// Prefer the hi lane: drain it first (non-blocking) so input/acks are never
+		// stuck behind bulk file data.
+		if b == nil {
+			select {
+			case b = <-c.hi:
+				fromHi = true
+			case <-c.done:
+				return
+			default:
+				select {
+				case b = <-c.hi:
+					fromHi = true
+				case b = <-c.bulk:
+				case b = <-c.vid:
+				case <-c.done:
+					return
+				}
+			}
+		}
+		if fromHi {
+			hiStreak++
+		} else {
+			hiStreak = 0
+		}
+		if _, err := c.Conn.Write(b); err != nil {
+			// CRITICAL: on a write error the writer is done, but producers are
+			// blocked on `case c.hi <- b` / `c.bulk <- b`. Close `done` so every
+			// pending and future Write* returns ErrConnClosed instead of hanging
+			// forever (a single transient error otherwise permanently wedges
+			// clipboard, chat, and file acks until the process restarts). The dead
+			// conn then surfaces to the reader, which drives reconnect/teardown.
+			c.closeOnce.Do(func() { close(c.done) })
+			return
+		}
+	}
+}
+
+func frame(kind byte, payload []byte) ([]byte, error) {
+	if len(payload) > maxPayload {
+		return nil, fmt.Errorf("ipc: payload too large (%d)", len(payload))
+	}
+	b := make([]byte, 5+len(payload))
+	binary.LittleEndian.PutUint32(b[0:4], uint32(1+len(payload)))
+	b[4] = kind
+	copy(b[5:], payload)
+	return b, nil
+}
+
+// WriteMessage enqueues a reliable, HIGH-priority message (input, control,
+// acks, clipboard control, chat, keyframe req, video info). Blocks only if the
+// hi queue is full (rare — it's low volume), never across the socket write.
+func (c *Conn) WriteMessage(kind byte, payload []byte) error {
+	b, err := frame(kind, payload)
+	if err != nil {
+		return err
+	}
+	select {
+	case c.hi <- b:
+		return nil
+	case <-c.done:
+		return ErrConnClosed
+	}
+}
+
+// WriteBulk enqueues reliable BULK data (file-transfer / clipboard-file bytes).
+// Blocks on enqueue when the peer is behind — that is the backpressure that
+// paces the sender; it never blocks the hi lane and never holds a lock across
+// the socket write, so a huge file can't deadlock input/capture.
+func (c *Conn) WriteBulk(kind byte, payload []byte) error {
+	b, err := frame(kind, payload)
+	if err != nil {
+		return err
+	}
+	select {
+	case c.bulk <- b:
+		return nil
+	case <-c.done:
+		return ErrConnClosed
+	}
+}
+
+// WriteDroppable enqueues a droppable message (video). Never blocks: if the peer
+// is behind, the oldest queued frame is dropped so capture is never stalled (a
+// keyframe request recovers the decoder).
+func (c *Conn) WriteDroppable(kind byte, payload []byte) error {
+	b, err := frame(kind, payload)
+	if err != nil {
+		return err
+	}
+	for {
+		select {
+		case c.vid <- b:
+			return nil
+		case <-c.done:
+			return ErrConnClosed
+		default:
+			// Queue full — drop the oldest frame, then retry.
+			select {
+			case <-c.vid:
+			default:
+			}
+		}
+	}
+}
+
+// Close stops the writer goroutine and closes the underlying connection.
+func (c *Conn) Close() error {
+	c.closeOnce.Do(func() { close(c.done) })
+	return c.Conn.Close()
+}
+
+// ReadMessage reads one framed message (single reader per direction; no lock).
+func (c *Conn) ReadMessage() (byte, []byte, error) {
+	return ReadMessage(c.Conn)
+}
 
 // WriteMessage frames and writes one message to w.
 func WriteMessage(w io.Writer, kind byte, payload []byte) error {

@@ -497,6 +497,47 @@ static HANDLE LaunchTransportSession0() {
 // above it — forward-declare so it's visible here.
 static HANDLE LaunchClipAgentAsUser(DWORD sid);
 
+// Loopback port the user-session clipboard agent serves (see RunClipAgent).
+// Declared here because the supervisor's health probe below needs it.
+static const unsigned short kClipPort = 47922;
+
+// ClipAgentListening probes 127.0.0.1:47922 to prove the clipboard agent is
+// actually SERVING, not merely running. Process liveness alone is not enough:
+// the agent can be alive with no listening socket (its bind lost the port to a
+// stale agent left over from a previous user session — SO_REUSEADDR on Windows
+// permits that hijack), and then every clipboard-file op fails with "No
+// connection could be made because the target machine actively refused it"
+// forever, because nothing ever exits to trigger a relaunch.
+//
+// Connect-and-close is safe for the agent: ClipRecvMsg fails on the empty
+// client, it closes that socket and goes back to accept(). Non-blocking connect
+// with a short select() so the supervisor loop is never stalled by this.
+//
+// Limit: this proves the listening socket exists. It cannot detect an agent
+// wedged inside recv() on another client — the 5s SO_RCVTIMEO added in r80
+// bounds that case separately.
+static bool ClipAgentListening() {
+  SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+  if (s == INVALID_SOCKET) return true;  // can't probe — assume healthy
+  u_long nb = 1;
+  ioctlsocket(s, FIONBIO, &nb);
+  sockaddr_in a = {0};
+  a.sin_family = AF_INET;
+  a.sin_port = htons(kClipPort);
+  inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+  connect(s, (sockaddr*)&a, sizeof(a));
+  fd_set wr, ex;
+  FD_ZERO(&wr);
+  FD_ZERO(&ex);
+  FD_SET(s, &wr);
+  FD_SET(s, &ex);
+  timeval tv = {0, 500 * 1000};  // 500 ms
+  int n = select(0, nullptr, &wr, &ex, &tv);
+  bool ok = (n > 0 && FD_ISSET(s, &wr));
+  closesocket(s);
+  return ok;
+}
+
 // --------------------------------------------------------------------------
 // Service control + main loop. Keeps exactly one agent alive, relaunching it
 // when it exits (e.g. session switch / logoff).
@@ -533,12 +574,27 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
   // the published id stable + service-owned on every laptop, first boot included.
   EnsureMachineId();
 
+  // Winsock for the clipboard-agent health probe below. The other WSAStartup
+  // calls live in the agent / clipagent processes; the service had none, so
+  // socket() here would fail and the probe would silently never run.
+  WSADATA wsaSvc;
+  WSAStartup(MAKEWORD(2, 2), &wsaSvc);
+
   HANDLE agent = nullptr;
   DWORD agentSession = 0xFFFFFFFF;
   HANDLE host = nullptr;  // ServiceHost mode: the service-owned Flutter host
   DWORD hostSession = 0xFFFFFFFF;
   HANDLE clip = nullptr;  // user-context clipboard agent (file clipboard)
   DWORD clipSession = 0xFFFFFFFF;
+  int clipProbeTick = 0;   // loops since the last health probe (loop = 3s)
+  int clipProbeFails = 0;  // consecutive failed probes
+  // TransportMode crash-loop fallback. Seamless mode is now the DEFAULT, so a
+  // transport that can never start must not leave the machine unreachable: after
+  // repeated fast failures we stop trying and let the Flutter host take over.
+  int transportFastFails = 0;
+  ULONGLONG transportStartedAt = 0;
+  bool transportBroken = false;
+  ULONGLONG transportBrokenAt = 0;
   HANDLE transport = nullptr;  // TransportMode: session-0 persistent transport
   HANDLE worker = nullptr;     // TransportMode: per-session capture worker
   DWORD workerSession = 0xFFFFFFFF;
@@ -549,18 +605,51 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
     bool transportMode = ReadTransportModeFlag();
 
     // ---- clipboard agent (runs as the logged-in USER; file clipboard) ----
-    // Relaunch when it dies OR the active session moves. It self-skips at the
-    // logon screen (no interactive user), so retry keeps it best-effort.
+    // Relaunch when it dies, when the active session moves, OR when it is alive
+    // but no longer serving. It self-skips at the logon screen (no interactive
+    // user), so retry keeps it best-effort.
     bool cDead = (!clip || WaitForSingleObject(clip, 0) == WAIT_OBJECT_0);
     bool cMoved = (clip && target != 0xFFFFFFFF && target != clipSession);
-    if (cDead || cMoved) {
+
+    // Liveness by process handle alone missed the failure seen in the field:
+    // the agent was running yet every clipboard-file op got "the target machine
+    // actively refused it", and nothing ever restarted it because the process
+    // never exited. Probe the port instead of trusting the handle. Only when we
+    // believe it should be up (already launched, session settled), every ~15s,
+    // and only after two consecutive failures (~30s) so a momentary blip during
+    // a switch doesn't kill a healthy agent.
+    bool cWedged = false;
+    if (clip && !cDead && !cMoved) {
+      if (++clipProbeTick >= 5) {
+        clipProbeTick = 0;
+        if (ClipAgentListening()) {
+          clipProbeFails = 0;
+        } else if (++clipProbeFails >= 2) {
+          Log(L"svc",
+              L"clipboard agent alive but not listening on %u; restarting",
+              kClipPort);
+          cWedged = true;
+        }
+      }
+    } else {
+      clipProbeTick = 0;
+      clipProbeFails = 0;
+    }
+
+    if (cDead || cMoved || cWedged) {
       if (clip) {
-        if (cMoved) TerminateProcess(clip, 0);
+        if (cMoved || cWedged) TerminateProcess(clip, 0);
         CloseHandle(clip);
         clip = nullptr;
       }
       clip = LaunchClipAgentAsUser(target);  // may be null at logon screen
       clipSession = target;
+      clipProbeFails = 0;
+      clipProbeTick = 0;
+      // Was silent either way, so a session with no working file clipboard gave
+      // the log nothing to go on.
+      if (!clip && target != 0xFFFFFFFF)
+        Log(L"svc", L"clipboard agent launch failed for session %lu", target);
     }
 
     // ---- helper agent (always kept alive in the active session) ----
@@ -586,15 +675,54 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
     // Transport = ONE persistent process in session 0 (survives switches).
     // Worker = per active session (swapped on switch), streams to the transport.
     // When on, the Flutter service-host below is NOT launched (they'd conflict).
-    if (transportMode) {
+    // The fallback is TEMPORARY, not a life sentence. Several fast failures are
+    // not always a broken build: an upgrade or service restart can leave the old
+    // transport holding IPC port 47930 for a moment, and the new one exits
+    // immediately because it cannot listen. Falling back permanently on that
+    // would quietly downgrade a perfectly good machine until someone rebooted.
+    // So retry seamless after a cool-off; if it really is broken, we simply fall
+    // back again and the machine keeps working in the meantime.
+    if (transportBroken && GetTickCount64() - transportBrokenAt > 300000) {
+      transportBroken = false;
+      transportFastFails = 0;
+      Log(L"svc", L"retrying seamless transport after fallback cool-off");
+    }
+    // Effective mode: seamless unless its transport has proven it cannot run.
+    bool useTransport = transportMode && !transportBroken;
+    if (useTransport) {
       bool tDead = (!transport || WaitForSingleObject(transport, 0) == WAIT_OBJECT_0);
       if (tDead) {
         if (transport) {
-          Log(L"svc", L"transport exited; relaunching");
+          // Exiting within seconds of launch is a crash loop, not a restart.
+          ULONGLONG up = GetTickCount64() - transportStartedAt;
+          if (up < 15000) {
+            transportFastFails++;
+          } else {
+            transportFastFails = 0;
+          }
+          Log(L"svc", L"transport exited after %llus (fast failures: %d); relaunching",
+              up / 1000, transportFastFails);
           CloseHandle(transport);
           transport = nullptr;
         }
+        if (transportFastFails >= 5) {
+          // Give up on seamless rather than loop forever with nothing hosting.
+          // Five, not three: a couple of fast failures around a restart are
+          // normal, and the cost of falling back unnecessarily is a worse
+          // product for five minutes.
+          transportBroken = true;
+          transportBrokenAt = GetTickCount64();
+          Log(L"svc", L"transport failed to stay up 5x — FALLING BACK to the "
+                      L"Flutter host so this machine stays reachable; will retry "
+                      L"seamless in 5 minutes");
+          continue; // re-evaluate this loop with useTransport=false
+        }
         transport = LaunchTransportSession0();
+        transportStartedAt = GetTickCount64();
+        if (!transport) {
+          transportFastFails++;
+          Log(L"svc", L"transport failed to launch (attempt %d)", transportFastFails);
+        }
       }
       // Retire a worker held over from the previous loop's swap. By now the new
       // worker has had a full loop (+ its own dial-retry) to attach to the
@@ -635,7 +763,10 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
       workerSession = 0xFFFFFFFF;
     }
 
-    if (ReadServiceHostFlag() && !transportMode) {
+    // Host the Flutter app when seamless is off — or when it broke and we fell
+    // back to it, in which case run it regardless of the ServiceHost flag: an
+    // unreachable machine is the worst outcome.
+    if ((ReadServiceHostFlag() || transportBroken) && !useTransport) {
       bool hDead = (!host || WaitForSingleObject(host, 0) == WAIT_OBJECT_0);
       bool hMoved = (host && target != 0xFFFFFFFF && target != hostSession);
       if (hDead || hMoved) {
@@ -1042,7 +1173,7 @@ static std::string NarrowUtf8(const std::wstring& w) {
 // launched by the service with the user's OWN token (WTSQueryUserToken), so it
 // runs as the real user on winsta0\default and can. The Flutter host asks it
 // over 127.0.0.1:47922. (Text clipboard already works and is untouched.)
-static const unsigned short kClipPort = 47922;
+// kClipPort is declared near the supervisor loop, which health-probes it.
 #ifndef DROPEFFECT_COPY
 #define DROPEFFECT_COPY 1
 #endif
@@ -1184,6 +1315,17 @@ static int RunClipAgent() {
   for (;;) {
     SOCKET c = accept(srv, nullptr, nullptr);
     if (c == INVALID_SOCKET) continue;
+    // This server is single-threaded and serves one client at a time. WITHOUT a
+    // read timeout a half-open / stalled client (e.g. a capture worker killed
+    // mid-op during a user-session SWAP, while the deferred prevWorker + new
+    // worker both poll 47922) leaves recv() blocking this thread FOREVER — the
+    // clipboard-file agent then serves no future worker until relaunched, a
+    // global, non-recovering break. A 5s recv timeout bounds any stalled read:
+    // ClipRecvAll fails, we drop that client and accept the next. Real ops carry
+    // only CF_HDROP paths (tiny) over loopback, so a healthy client never hits it.
+    DWORD rcvTimeoutMs = 5000;
+    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (char*)&rcvTimeoutMs,
+               sizeof(rcvTimeoutMs));
     for (;;) {
       char type = 0;
       std::string payload;

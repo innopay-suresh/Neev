@@ -22,10 +22,7 @@ import (
 // a single serial worker so events apply in receipt order (a button-up must
 // never overtake its button-down, or the remote button sticks: the classic
 // "click and everything freezes" bug).
-type inputSink interface {
-	Post(raw []byte)
-	Close()
-}
+// inputSink itself is declared in inject.go, without a build tag.
 
 func newInputSink() inputSink { return newPlatformInputSink() }
 

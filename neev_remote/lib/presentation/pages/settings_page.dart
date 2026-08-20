@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
+import 'audit_log_page.dart';
+import '../../data/services/consent_store.dart';
+import '../../data/services/update_service.dart';
 import '../../data/services/mac_daemon.dart';
 import '../../data/services/remote_service.dart';
 import '../providers/app_providers.dart';
@@ -41,7 +44,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         // Section list
         Container(
           width: 190,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             border: Border(right: BorderSide(color: AppColors.border)),
           ),
           child: ListView(
@@ -193,11 +196,95 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         const Divider(),
         _buildInfoRow('Build', AppConstants.buildTag),
         const Divider(),
+        // "Which build am I running, and is it current?" was unanswerable from
+        // inside the app, which is how bug reports ended up filed against code
+        // that had already been fixed.
+        const _UpdateCheckRow(),
+        const Divider(),
         _buildInfoRow('Platform', 'Desktop'),
         const Divider(),
         _buildInfoRow('Engine', 'WebRTC (native)'),
       ]),
     ];
+  }
+
+  /// Interactive Access: what happens when someone connects with the SESSION
+  /// password. The unattended password is a separate door and is unaffected.
+  Widget _buildInteractiveAccess(AppSettings settings) {
+    const modes = [
+      ('always', 'Always allow requests', 'Anyone with the session password may ask'),
+      ('when-open', 'Only while the app is open', 'Requests are ignored when the app is closed'),
+      ('never', 'Disable interactive access',
+          'Refuse session-password logins entirely — only the unattended password works'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text('Interactive access',
+              style: AppTypography.body.copyWith(fontWeight: FontWeight.w600)),
+        ),
+        Text(
+          'Applies to the session password only. The unattended password always '
+          'connects without a prompt — that is what it is for.',
+          style: AppTypography.caption,
+        ),
+        const SizedBox(height: 8),
+        for (final m in modes)
+          RadioListTile<String>(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: m.$1,
+            groupValue: settings.interactiveAccess,
+            onChanged: (v) => ref
+                .read(settingsProvider.notifier)
+                .setInteractiveAccess(v ?? 'always'),
+            title: Text(m.$2, style: AppTypography.body),
+            subtitle: Text(m.$3, style: AppTypography.caption),
+          ),
+      ],
+    );
+  }
+
+  /// Permissions for UNATTENDED sessions, kept separate from interactive ones:
+  /// nobody is present to judge an unattended login, so it can be given less.
+  Widget _buildUnattendedProfile(AppSettings settings) {
+    final n = ref.read(settingsProvider.notifier);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text('Unattended session permissions',
+              style: AppTypography.body.copyWith(fontWeight: FontWeight.w600)),
+        ),
+        Text(
+          'Granted when someone connects with the unattended password. '
+          '"View only mode" still overrides control.',
+          style: AppTypography.caption,
+        ),
+        const SizedBox(height: 4),
+        _buildToggle(
+          label: 'Allow control',
+          subtitle: 'Keyboard and mouse, lock, restart',
+          value: settings.unattendedAllowControl,
+          onChanged: (v) => n.setUnattendedPerms(control: v),
+        ),
+        _buildToggle(
+          label: 'Allow clipboard',
+          subtitle: 'Share clipboard text and files',
+          value: settings.unattendedAllowClipboard,
+          onChanged: (v) => n.setUnattendedPerms(clipboard: v),
+        ),
+        _buildToggle(
+          label: 'Allow file transfer',
+          subtitle: 'Send and receive files',
+          value: settings.unattendedAllowFiles,
+          onChanged: (v) => n.setUnattendedPerms(files: v),
+        ),
+      ],
+    );
   }
 
   List<Widget> _securitySection(AppSettings settings) {
@@ -208,11 +295,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 _buildToggle(
                   label: 'Ask before allowing connections',
                   subtitle:
-                      'Show an Accept / Dismiss prompt for incoming sessions',
+                      'Show an Accept / Decline prompt for interactive sessions',
                   value: settings.askOnConnect,
                   onChanged: (v) =>
                       ref.read(settingsProvider.notifier).setAskOnConnect(v),
                 ),
+                const Divider(),
+                // Interactive Access, AnyDesk-style. The unattended password is
+                // a separate door and is never governed by this — that is the
+                // whole point of unattended access.
+                _buildInteractiveAccess(settings),
+                const Divider(),
+                _buildUnattendedProfile(settings),
+                const Divider(),
+                // Undo for "Remember this decision" on the consent prompt. A
+                // remembered DECLINE is otherwise a dead end: the device is
+                // refused silently, with no prompt left to change the answer.
+                const _ForgetRememberedDevices(),
                 const Divider(),
                 _buildToggle(
                   label: 'Sound on incoming connection',
@@ -221,6 +320,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   onChanged: (v) =>
                       ref.read(settingsProvider.notifier).setSoundOnConnect(v),
                 ),
+                const Divider(),
+                // Roadmap Phase 2 — audit trail entry point.
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.receipt_long_rounded, size: 20),
+                  title: Text('Audit log', style: AppTypography.body),
+                  subtitle: Text(
+                      'Every session: who connected, when, for how long',
+                      style: AppTypography.caption),
+                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const AuditLogPage())),
+                ),
+                const Divider(),
+                // Roadmap Phase 3 — custom alias.
+                const _AliasField(),
                 const Divider(),
                 _buildToggle(
                   label: 'Lock this device on session end',
@@ -519,6 +634,202 @@ class _RelayUrlFieldState extends ConsumerState<_RelayUrlField> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Phase 3: set a human-readable alias for this machine. Others can then dial
+/// the alias instead of the numeric ID.
+class _AliasField extends ConsumerStatefulWidget {
+  const _AliasField();
+  @override
+  ConsumerState<_AliasField> createState() => _AliasFieldState();
+}
+
+class _AliasFieldState extends ConsumerState<_AliasField> {
+  late final TextEditingController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = TextEditingController(text: ref.read(remoteServiceProvider).deviceAlias);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = ref.watch(remoteServiceProvider);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Custom alias', style: AppTypography.body),
+        Text('Let people reach this machine by a name instead of its ID.',
+            style: AppTypography.caption),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _c,
+              decoration: InputDecoration(
+                hintText: 'e.g. reception-pc',
+                isDense: true,
+                errorText: service.aliasError,
+                prefixIcon: const Icon(Icons.alternate_email_rounded, size: 18),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton(
+            onPressed: () => ref
+                .read(remoteServiceProvider)
+                .setDeviceAlias(_c.text.trim().toLowerCase()),
+            child: const Text('Save'),
+          ),
+        ]),
+        if (service.deviceAlias.isNotEmpty && service.aliasError == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text('Reachable as "${service.deviceAlias}"',
+                style: AppTypography.caption.copyWith(color: AppColors.success)),
+          ),
+      ]),
+    );
+  }
+}
+
+/// "Forget remembered devices" — clears every Accept/Decline decision saved by
+/// the "Remember this decision" checkbox on the consent prompt.
+///
+/// This exists because a remembered DECLINE is otherwise unrecoverable from the
+/// UI: the device is refused before any prompt is shown, so there is nothing
+/// left to click to change the answer.
+class _ForgetRememberedDevices extends StatefulWidget {
+  const _ForgetRememberedDevices();
+
+  @override
+  State<_ForgetRememberedDevices> createState() =>
+      _ForgetRememberedDevicesState();
+}
+
+class _ForgetRememberedDevicesState extends State<_ForgetRememberedDevices> {
+  int _count = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final n = await ConsentStore.count();
+    if (mounted) setState(() => _count = n);
+  }
+
+  Future<void> _forget() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Forget remembered devices?', style: AppTypography.title),
+        content: Text(
+          'Every device with a remembered Accept or Decline will prompt again '
+          'on the next connection. This cannot be undone.',
+          style: AppTypography.caption,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Forget')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await ConsentStore.forgetAll();
+    await _refresh();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Remembered devices cleared')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Data Honesty: show the real count this app knows about, and say plainly
+    // that it counts this app's own store (the host worker keeps its own).
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.history_toggle_off_rounded, size: 20),
+      title: Text('Forget remembered devices', style: AppTypography.body),
+      subtitle: Text(
+        _count == 0
+            ? 'No remembered decisions in this app'
+            : '$_count device${_count == 1 ? '' : 's'} will connect or be '
+                'refused without prompting',
+        style: AppTypography.caption,
+      ),
+      trailing: TextButton(
+        onPressed: _forget,
+        child: const Text('Forget'),
+      ),
+    );
+  }
+}
+
+/// Reports whether a newer build has been published. Deliberately does not
+/// download or run anything — it shows the answer and where to get it.
+class _UpdateCheckRow extends ConsumerStatefulWidget {
+  const _UpdateCheckRow();
+
+  @override
+  ConsumerState<_UpdateCheckRow> createState() => _UpdateCheckRowState();
+}
+
+class _UpdateCheckRowState extends ConsumerState<_UpdateCheckRow> {
+  bool _busy = false;
+  String? _result;
+
+  Future<void> _check() async {
+    setState(() {
+      _busy = true;
+      _result = null;
+    });
+    final relay = ref.read(settingsProvider).relayUrl;
+    final info = await UpdateService.check(relay);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      // "Couldn't check" is deliberately distinct from "up to date". Reporting
+      // an unreachable portal as current is the false reassurance this feature
+      // exists to remove.
+      _result = info == null
+          ? "Couldn't check — the portal was unreachable"
+          : info.available
+              ? 'Update available: ${info.latestBuild}'
+              : 'You are on the latest build';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.system_update_alt_rounded, size: 20),
+      title: Text('Check for updates', style: AppTypography.body),
+      subtitle: _result == null
+          ? null
+          : Text(_result!, style: AppTypography.caption),
+      trailing: _busy
+          ? const SizedBox(
+              width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          : TextButton(onPressed: _check, child: const Text('Check')),
     );
   }
 }

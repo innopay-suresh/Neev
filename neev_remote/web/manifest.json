@@ -1,6 +1,6 @@
 {
-    "name": "neev_remote",
-    "short_name": "neev_remote",
+    "name": "Neev Remote",
+    "short_name": "Neev Remote",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

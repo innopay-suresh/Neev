@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'ws_connect.dart';
 
 /// Signaling message types
 enum SignalingMessageType {
@@ -13,6 +14,12 @@ enum SignalingMessageType {
   error,
   discover,
   peers,
+  presence,
+  presenceResult,
+  setAlias,
+  aliasResult,
+  resolveAlias,
+  resolveResult,
 }
 
 /// Signaling message
@@ -69,6 +76,10 @@ class SignalingMessage {
         return SignalingMessageType.peers;
       case 'discover':
         return SignalingMessageType.discover;
+      case 'presence':
+        return SignalingMessageType.presence;
+      case 'presence_result':
+        return SignalingMessageType.presenceResult;
       default:
         return SignalingMessageType.register;
     }
@@ -94,8 +105,20 @@ class SignalingMessage {
         return 'error';
       case SignalingMessageType.discover:
         return 'discover';
+      case SignalingMessageType.presence:
+        return 'presence';
+      case SignalingMessageType.presenceResult:
+        return 'presence_result';
       case SignalingMessageType.peers:
         return 'peers';
+      case SignalingMessageType.setAlias:
+        return 'set_alias';
+      case SignalingMessageType.aliasResult:
+        return 'alias_result';
+      case SignalingMessageType.resolveAlias:
+        return 'resolve_alias';
+      case SignalingMessageType.resolveResult:
+        return 'resolve_result';
     }
   }
 }
@@ -111,11 +134,20 @@ class SignalingService {
   bool _isConnected = false;
   String? _agentId;
 
+  /// SHA-256 of the relay's certificate, for wss:// pinning. Empty = learn it
+  /// on first connect (see connectSignaling). Ignored for ws:// and on web.
+  final String? relayCertPin;
+
+  /// Called when a pin is learned on first use so it can be persisted.
+  final void Function(String sha256)? onPinLearned;
+
   SignalingService({
     required String serverUrl,
     required this.onMessage,
     required this.onConnected,
     required this.onDisconnected,
+    this.relayCertPin,
+    this.onPinLearned,
   }) : _serverUrl = serverUrl;
 
   bool get isConnected => _isConnected;
@@ -123,7 +155,11 @@ class SignalingService {
 
   Future<void> connect() async {
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(_serverUrl));
+      _channel = await connectSignaling(
+        _serverUrl,
+        pinSha256: relayCertPin,
+        onPinLearned: onPinLearned,
+      );
       _isConnected = true;
       onConnected();
 
@@ -226,10 +262,37 @@ class SignalingService {
     ));
   }
 
+  /// Phase 3: claim (or, with an empty string, clear) a human-readable alias.
+  /// The server replies with an `alias_result` message.
+  void setAlias(String alias) {
+    send(SignalingMessage(
+      type: SignalingMessageType.setAlias,
+      payload: {'alias': alias},
+    ));
+  }
+
+  /// Phase 3: ask the relay what agent ID an alias points to. The server replies
+  /// with a `resolve_result` message (empty agent_id = not found).
+  void resolveAlias(String alias) {
+    send(SignalingMessage(
+      type: SignalingMessageType.resolveAlias,
+      payload: {'alias': alias},
+    ));
+  }
+
   /// Asks the relay which other hosts share this machine's public IP (LAN-mate
   /// discovery that works even when UDP broadcast is blocked).
   void sendDiscover() {
     send(SignalingMessage(type: SignalingMessageType.discover));
+  }
+
+  /// Ask the relay which of [ids] are online right now. Discovery only covers
+  /// machines on the requester's own public IP, so saved devices elsewhere
+  /// always looked offline; this asks about specific known ids instead.
+  void requestPresence(List<String> ids) {
+    if (ids.isEmpty) return;
+    send(SignalingMessage(
+        type: SignalingMessageType.presence, payload: {'ids': ids}));
   }
 
   Future<void> disconnect() async {

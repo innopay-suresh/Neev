@@ -62,3 +62,14 @@ config.run.yaml
 objdump.txt
 build_server.err
 external_scan_103.txt
+.gstack/
+
+# The blanket `public/` rule above is for build output, but Vite REQUIRES a
+# public/ directory to serve static files at the site root — the favicon lives
+# there. Without these exceptions the favicon is silently never committed and
+# the deployed site keeps its broken /favicon.png reference.
+!web/public/
+!web/public/**
+!client/frontend/public/
+!client/frontend/public/**
+packaging/mac/NeevVoice/build/

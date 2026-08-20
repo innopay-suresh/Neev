@@ -25,16 +25,16 @@ import (
 // for the host's CF_HDROP read/write. Ctrl+C a file on the host → viewer pastes;
 // Ctrl+C on the viewer → host pastes.
 //
-//   As SOURCE (host copied):     poll clipagent 'R' → clipfann → (on clipfreq) read bytes → clipfdat
-//   As DESTINATION (viewer copied): clipfann → clipfreq (eager) → assemble clipfdat → temp file → clipagent 'W'
+//	As SOURCE (host copied):     poll clipagent 'R' → clipfann → (on clipfreq) read bytes → clipfdat
+//	As DESTINATION (viewer copied): clipfann → clipfreq (eager) → assemble clipfdat → temp file → clipagent 'W'
 type clipFiles struct {
-	conn net.Conn // to the transport (clipf* ride ipc.KindFileData → viewer file channel)
+	conn *ipc.Conn // to the transport (clipf* ride ipc.KindFileData → viewer file channel); writes serialized
 
 	mu       sync.Mutex
-	lastRead string                 // last host CF_HDROP paths seen (echo/change guard)
-	outFiles map[string][]string    // token → host paths we announced (serve on clipfreq)
-	seq      int                    // token counter
-	inAsm    map[string]*clipInASM  // token → destination assembly (viewer→host)
+	lastRead string                // last host CF_HDROP paths seen (echo/change guard)
+	outFiles map[string][]string   // token → host paths we announced (serve on clipfreq)
+	seq      int                   // token counter
+	inAsm    map[string]*clipInASM // token → destination assembly (viewer→host)
 }
 
 type clipInASM struct {
@@ -47,16 +47,27 @@ type clipInASM struct {
 	pathsWritten []string // temp files written, to stage on the host clipboard
 }
 
-func newClipFiles(conn net.Conn) *clipFiles {
+func newClipFiles(conn *ipc.Conn) *clipFiles {
 	return &clipFiles{conn: conn, outFiles: map[string][]string{}, inAsm: map[string]*clipInASM{}}
 }
 
+// send is for small clipf* control messages (announce/req/fail) — hi lane.
 func (cf *clipFiles) send(m map[string]interface{}) {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
-	_ = ipc.WriteMessage(cf.conn, ipc.KindFileData, b)
+	_ = cf.conn.WriteMessage(ipc.KindFileData, b)
+}
+
+// sendBulk is for clipfdat file BYTES — bulk lane, so a large clipboard file
+// paces itself and never blocks input/acks on the hi lane.
+func (cf *clipFiles) sendBulk(m map[string]interface{}) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = cf.conn.WriteBulk(ipc.KindFileData, b)
 }
 
 // poll watches the HOST clipboard (via the clipagent) for a file copy and
@@ -162,7 +173,12 @@ func (cf *clipFiles) handle(payload []byte) bool {
 			cf.send(map[string]interface{}{"k": "clipfdat", "token": m.Token, "index": m.Index, "ok": false, "seq": 0, "total": 1})
 			return true
 		}
-		cf.serveBytes(m.Token, m.Index, paths[m.Index])
+		// Stream on its OWN goroutine — serveBytes walks the WHOLE file, so running
+		// it inline would block this clipboard lane (and, pre-split, file transfers)
+		// for the entire transfer. Concurrent serves are safe: each clipfdat carries
+		// token/index/seq and the write is atomic per message (ipc.Conn mutex).
+		log.Info().Str("token", m.Token).Int("index", m.Index).Msg("worker: viewer pulling host clipboard file")
+		go cf.serveBytes(m.Token, m.Index, paths[m.Index])
 		return true
 	case "clipfdat":
 		// Bytes for a file we (host destination) requested from the viewer.
@@ -203,11 +219,13 @@ func (cf *clipFiles) serveBytes(token string, index int, path string) {
 			fail()
 			return
 		}
-		cf.send(map[string]interface{}{
+		cf.sendBulk(map[string]interface{}{
 			"k": "clipfdat", "token": token, "index": index, "ok": true,
 			"seq": i, "total": total, "d": base64.StdEncoding.EncodeToString(buf[:n]),
 		})
 	}
+	log.Info().Str("token", token).Int("index", index).Int64("bytes", fi.Size()).
+		Msg("worker: served host clipboard file to viewer")
 }
 
 // recvBytes assembles a viewer file (host destination) and, when all announced
@@ -284,26 +302,62 @@ func (cf *clipFiles) finishFile(asm *clipInASM, token string, index int, data []
 	cf.mu.Unlock()
 
 	if allDone {
-		if len(paths) > 0 {
-			if clipAgentWriteFiles(paths) {
-				log.Info().Str("token", token).Int("files", len(paths)).Msg("worker: staged viewer files on host clipboard")
-			} else {
-				log.Warn().Msg("worker: clipagent write files failed")
-			}
-		}
 		cf.mu.Lock()
 		delete(cf.inAsm, token)
 		cf.mu.Unlock()
+		if len(paths) > 0 {
+			// Stage on the host clipboard OFF this lane: clipAgentWriteFiles is a
+			// synchronous helper round-trip (up to ~2s) and must not stall the next
+			// clipboard pull/assembly on the clipboard goroutine.
+			go func(paths []string, token string) {
+				if clipAgentWriteFiles(paths) {
+					log.Info().Str("token", token).Int("files", len(paths)).Msg("worker: staged viewer files on host clipboard")
+				} else {
+					log.Warn().Msg("worker: clipagent write files failed")
+				}
+			}(paths, token)
+		}
 	}
 }
 
 // ---- clipagent client (neev_helper 'clipagent' on 127.0.0.1:47922) ----------
 // Framing: [uint32 BE len][1 byte type][payload]. 'R'→'F'(\n-joined paths); 'W'(paths)→'K'/'E'.
 
+// clipAgentReadWarned throttles the polled read-dial failure log (this runs
+// every 700ms) so a down/wedged clipagent logs ONCE, not continuously. Reset on
+// the next success. Single poll goroutine calls this, so no lock needed.
+var clipAgentReadWarned bool
+
+// dialClipAgent connects to the user-session clipagent, retrying briefly. On a
+// user switch the helper KILLS the old clipagent and launches the new one ~3s
+// later (helper.log: "active session 1 -> 2" then "launched clipagent"); a
+// single-shot dial inside that window fails and the clipboard-file operation is
+// silently skipped. Retrying across the gap makes copy/paste survive the switch.
+func dialClipAgent() (net.Conn, error) {
+	var err error
+	for i := 0; i < 6; i++ {
+		var c net.Conn
+		c, err = net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
+		if err == nil {
+			return c, nil
+		}
+		time.Sleep(700 * time.Millisecond)
+	}
+	return nil, err
+}
+
 func clipAgentReadFiles() ([]string, bool) {
-	c, err := net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
+	c, err := dialClipAgent()
 	if err != nil {
+		if !clipAgentReadWarned {
+			clipAgentReadWarned = true
+			log.Warn().Err(err).Msg("worker: clipagent dial FAILED (host clipboard-file poll) — user-session clipagent (47922) down or wedged")
+		}
 		return nil, false
+	}
+	if clipAgentReadWarned {
+		clipAgentReadWarned = false
+		log.Info().Msg("worker: clipagent reachable again (host clipboard-file poll)")
 	}
 	defer c.Close()
 	if !clipAgentSend(c, 'R', nil) {
@@ -326,8 +380,9 @@ func clipAgentReadFiles() ([]string, bool) {
 }
 
 func clipAgentWriteFiles(paths []string) bool {
-	c, err := net.DialTimeout("tcp", "127.0.0.1:47922", 2*time.Second)
+	c, err := dialClipAgent()
 	if err != nil {
+		log.Warn().Err(err).Msg("worker: clipagent dial FAILED (staging viewer files on host clipboard) — clipagent (47922) down or wedged")
 		return false
 	}
 	defer c.Close()

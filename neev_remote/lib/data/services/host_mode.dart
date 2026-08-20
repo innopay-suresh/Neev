@@ -1,7 +1,15 @@
-import 'dart:io' show File;
+import 'dart:convert' show jsonDecode;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+
+/// The machine identity a daemon-hosted Mac is reachable under.
+class DaemonCreds {
+  const DaemonCreds(this.id, this.password);
+  final String id;
+  final String password;
+}
 
 /// Decides whether THIS app instance should auto-start hosting.
 ///
@@ -30,14 +38,78 @@ class HostMode {
       '/Library/Application Support/NeevRemote/transport.ready';
   static const Duration _macReadyMaxAge = Duration(seconds: 15);
 
+  /// Heartbeat the transport refreshes while REGISTERED, whether or not anyone
+  /// is connected.
+  static const String _macAliveFile =
+      '/Library/Application Support/NeevRemote/transport.alive';
+
+  /// Generous against the transport's ~10s heartbeat, so a slow write does not
+  /// briefly hand hosting back and register a second identity for this machine.
+  static const Duration _macAliveMaxAge = Duration(seconds: 45);
+
+  /// The id + password the macOS daemon registered this machine under.
+  ///
+  /// The app cannot read the daemon's own transport.txt — it is root-owned 0600
+  /// because it carries the password, and the app runs as the logged-in user.
+  /// The result was a share card showing an empty id on a machine that was
+  /// registered and hosting perfectly well, so the host had nothing to give a
+  /// viewer. Windows never had this problem: its app asks the SYSTEM helper
+  /// directly.
+  ///
+  /// Two sources, in order:
+  ///  - host-creds.json, written by the WORKER (which runs as this user) from
+  ///    the credentials the transport announces over IPC. Has the password.
+  ///  - transport.id, written world-readable by the transport. Id only — enough
+  ///    to name the machine before a worker exists, and the id is not a secret.
+  static DaemonCreds? macDaemonCreds() {
+    if (kIsWeb || !Platform.isMacOS) return null;
+    try {
+      final f = File('${Platform.environment['HOME'] ?? ''}'
+          '/Library/Application Support/NeevRemote/host-creds.json');
+      if (f.existsSync()) {
+        final m = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+        final id = (m['id'] as String?) ?? '';
+        if (id.isNotEmpty) {
+          return DaemonCreds(id, (m['password'] as String?) ?? '');
+        }
+      }
+    } catch (_) {
+      // Fall through to the id-only file rather than showing nothing.
+    }
+    try {
+      final f = File('/Library/Application Support/NeevRemote/transport.id');
+      if (f.existsSync()) {
+        final id = f.readAsStringSync().trim();
+        if (id.isNotEmpty) return DaemonCreds(id, '');
+      }
+    } catch (_) {}
+    return null;
+  }
+
   static bool _macDaemonHosting() {
     if (defaultTargetPlatform != TargetPlatform.macOS) return false;
     try {
       if (!File(_macTransportPlist).existsSync()) return false;
+      // ALIVE, not READY.
+      //
+      // transport.ready is only written while frames are FLOWING, which cannot
+      // happen until a viewer connects. Deciding on it meant that with no
+      // session the daemon always looked idle, so the app registered its own id
+      // as a second host for this machine — and a viewer reaching that id got an
+      // app-hosted session with no recording and no system sound. The question
+      // "does the service own hosting?" has to be answerable before any session
+      // exists, so it is answered by the transport's heartbeat instead.
+      final alive = File(_macAliveFile);
+      if (alive.existsSync()) {
+        final age = DateTime.now().difference(alive.lastModifiedSync());
+        if (age <= _macAliveMaxAge) return true;
+      }
+      // Fall back to the old signal, so a transport too old to write a
+      // heartbeat is still detected while it is actively streaming.
       final ready = File(_macReadyFile);
       if (!ready.existsSync()) return false;
       final age = DateTime.now().difference(ready.lastModifiedSync());
-      return age <= _macReadyMaxAge; // fresh ⇒ worker is really producing video
+      return age <= _macReadyMaxAge;
     } catch (_) {
       return false;
     }

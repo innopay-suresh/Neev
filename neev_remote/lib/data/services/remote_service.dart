@@ -16,8 +16,10 @@ import '../../core/diag_log.dart';
 import 'auth_service.dart';
 import 'clip_agent_bridge.dart';
 import 'clipboard_writer.dart';
+import 'consent_store.dart';
 import 'discovery_model.dart';
 import 'file_store.dart';
+import 'native_consent.dart';
 import 'file_transfer_service.dart';
 import 'host_mode.dart';
 import 'host_name.dart' as host_name;
@@ -25,7 +27,10 @@ import 'input_event.dart';
 import 'input_injector.dart';
 import 'keyboard_hook.dart';
 import 'privacy_mode.dart';
+import 'audit_log.dart';
 import 'clipboard_monitor.dart';
+import 'consent_flag.dart';
+import 'thumb_store.dart';
 import 'screen_capture_service.dart';
 import 'session_watcher.dart';
 import 'signaling_service.dart';
@@ -73,9 +78,40 @@ class _ClipRecv {
 /// Both roles use independent signaling connections so a single app instance
 /// can host and view at the same time (like AnyDesk).
 class RemoteService extends ChangeNotifier {
-  RemoteService({this.iceServers = AppConstants.iceServers});
+  RemoteService({this.iceServers = AppConstants.iceServers}) {
+    _thumbs.init(); // per-device session thumbnails (last remote frame)
+  }
 
   final List<Map<String, dynamic>> iceServers;
+
+  // Per-device session thumbnails: a real captured remote frame saved per device
+  // id, shown on the Home device cards (Data Honesty: it's an actual frame).
+  final ThumbStore _thumbs = ThumbStore();
+  Timer? _thumbTimer;
+
+  String _normThumbId(String id) => id.replaceAll(RegExp(r'[^0-9a-zA-Z]'), '');
+
+  /// Absolute path to a device's saved thumbnail (may not exist → card glyph).
+  String? thumbPathFor(String id) {
+    final n = _normThumbId(id);
+    return n.isEmpty ? null : _thumbs.pathFor(n);
+  }
+
+  /// Capture the current remote frame and store it as this session's device
+  /// thumbnail. Best-effort; failures are silent (card just keeps the glyph).
+  Future<void> _captureThumb() async {
+    final id = _targetId;
+    if (id == null || _viewerStatus != ViewerStatus.connected) return;
+    try {
+      final tracks = _remoteStream?.getVideoTracks();
+      if (tracks == null || tracks.isEmpty) return;
+      final buf = await tracks.first.captureFrame();
+      final bytes = buf.asUint8List();
+      if (bytes.isEmpty) return;
+      await _thumbs.save(_normThumbId(id), bytes);
+      notifyListeners(); // refresh the card image
+    } catch (_) {}
+  }
 
   // ICE servers resolved from the signaling server at connect time. The server
   // advertises STUN + a reachable TURN relay; without this the app would only
@@ -179,11 +215,238 @@ class RemoteService extends ChangeNotifier {
     return _files.sendFile(name, bytes);
   }
 
+  /// Queue count for the overall-progress indicator (files still active).
+  int get queuedFileCount =>
+      _files.transfers.where((t) => t.status == FileStatus.active).length;
+
+  /// Multi-file (roadmap parity with AnyDesk): send every picked file, one at a
+  /// time through the single fixed file channel. Sequential — not parallel — so
+  /// chunks stay ordered and the drain-paced backpressure keeps the SCTP buffer
+  /// small. A failure on one file is isolated: it's logged and the queue
+  /// continues with the next.
+  Future<void> sendFilesQueued(List<XFile> files) async {
+    DiagLog.log('file', 'queue ${files.length} file(s)');
+    for (final f in files) {
+      try {
+        final bytes = await _readVerified(f);
+        await sendFile(f.name, bytes);
+      } catch (e) {
+        DiagLog.log('file', 'queued "${f.name}" failed: $e');
+        // Surface it: this used to be log-only, so a file that read as 0 bytes
+        // was either skipped invisibly or sent as an empty "success".
+        _files.failLocal(f.name, '$e');
+        // continue with the rest — no batch corruption
+      }
+    }
+  }
+
+  /// Read a picked file, refusing to return a short or empty result. A file
+  /// that is open and being written (a live log) or locked by the app that owns
+  /// it can read as 0 bytes on Windows; sending that produced a real-looking
+  /// transfer that landed as an empty file on the host. Retry briefly to ride
+  /// out a transient lock, then throw so the caller reports a visible failure.
+  Future<Uint8List> _readVerified(XFile f) async {
+    Object? last;
+    for (var i = 0; i < 3; i++) {
+      if (i > 0) await Future<void>.delayed(const Duration(milliseconds: 150));
+      try {
+        final want = await f.length();
+        final bytes = await f.readAsBytes();
+        // A growing file may read longer than the earlier length; only a SHORT
+        // read means data was lost.
+        if (bytes.length < want) {
+          last = 'short read: got ${bytes.length} of $want bytes (file in use?)';
+          continue;
+        }
+        if (bytes.isEmpty) {
+          throw 'file is 0 bytes — it may be locked by another app';
+        }
+        return bytes;
+      } catch (e) {
+        last = e;
+        // A hard read error (0-byte/lock message included) shouldn't be retried
+        // forever; the loop bounds it at 3 attempts.
+      }
+    }
+    throw last ?? 'could not read the file';
+  }
+
   /// Import: ask the connected peer to pick a file and send it to us.
   void requestFileFromPeer() {
     DiagLog.log('file', 'request file from peer');
     _sendFileData(jsonEncode({'k': 'ft', 't': 'request'}));
   }
+
+  // ---- Two-way voice -----------------------------------------------------
+  // The product had no audio at all: you fixed someone's machine while talking
+  // to them on a separate phone call. This is a voice channel inside the
+  // session, negotiated up front but SILENT until switched on — the mic is not
+  // opened, and no permission prompt appears, unless the user asks for it.
+  MediaStream? _micStream;
+  bool _voiceOn = false;
+
+  /// Whether this side is currently transmitting microphone audio.
+  bool get voiceOn => _voiceOn;
+
+  /// Whether this session actually HAS a voice channel.
+  ///
+  /// False against a TransportMode host: the Go transport offers video only, so
+  /// there is no audio section to speak over. The UI must show that rather than
+  /// offering a mic button that silently transmits nothing — the exact failure
+  /// this project has already been bitten by.
+  bool get voiceAvailable {
+    if (_viewerPeer != null) return _viewerPeer!.hasVoice;
+    return _hostPeers.values.any((p) => p.hasVoice);
+  }
+
+  /// Turn the microphone on or off for the live session.
+  ///
+  /// Toggling only swaps the track on an already-negotiated sender, so it never
+  /// renegotiates and can never drop the screen share.
+  Future<void> setVoice(bool on) async {
+    final peers = <WebRTCService>[
+      if (_viewerPeer != null) _viewerPeer!,
+      ..._hostPeers.values,
+    ];
+
+    // Turning OFF always runs, even when the flag already says off.
+    //
+    // The flag and the device could disagree: if getUserMedia succeeded but
+    // anything after it bailed out, the microphone was open while _voiceOn
+    // stayed false — and the old early return meant nothing ever closed it. The
+    // app said off and the OS mic indicator said otherwise, with no way back
+    // short of quitting.
+    if (!on) {
+      for (final p in peers) {
+        await p.setMicTrack(null);
+        // Voice off silences BOTH directions on this side. WebRTC does not
+        // link them, so the incoming track has to be silenced explicitly or
+        // the far end is still heard while the UI says off.
+        p.setRemoteAudioEnabled(false);
+      }
+      await _releaseMic();
+      if (_voiceOn) {
+        _voiceOn = false;
+        DiagLog.log('voice', 'microphone OFF');
+      }
+      notifyListeners();
+      return;
+    }
+
+    if (_voiceOn) return;
+    if (peers.isEmpty) return;
+
+    if (on) {
+      try {
+        // Ask for the audio processing explicitly rather than relying on the
+        // implementation's defaults.
+        //
+        // This is where echo cancellation, noise suppression and gain control
+        // come from: libwebrtc's audio engine, tuned over years, applied at
+        // capture. Hand-writing any of it would be strictly worse. The host
+        // side has no equivalent — pion has no audio processing module — so
+        // the viewer doing this properly is what keeps a two-way call clean.
+        _micStream ??= await navigator.mediaDevices.getUserMedia({
+          'audio': {
+            'echoCancellation': true,
+            'noiseSuppression': true,
+            'autoGainControl': true,
+          },
+          'video': false,
+        });
+      } catch (e) {
+        // Denied or no device: report it rather than showing a live mic button
+        // that transmits nothing.
+        DiagLog.log('voice', 'microphone unavailable: $e');
+        return;
+      }
+      final track = _micStream!.getAudioTracks().isEmpty
+          ? null
+          : _micStream!.getAudioTracks().first;
+      if (track == null) {
+        // Device opened but gave us nothing to send. Hand it straight back
+        // rather than leaving it held open for a feature that is not running.
+        DiagLog.log('voice', 'microphone opened but exposed no audio track');
+        await _releaseMic();
+        return;
+      }
+      try {
+        for (final p in peers) {
+          await p.setMicTrack(track);
+        }
+      } catch (e) {
+        // Attaching failed, so nothing is being transmitted — the device must
+        // not stay open regardless.
+        DiagLog.log('voice', 'attaching the microphone failed: $e');
+        await _releaseMic();
+        return;
+      }
+      for (final p in peers) {
+        p.setRemoteAudioEnabled(true);
+      }
+      _voiceOn = true;
+      // Log the NEGOTIATED direction, not just "on". If this ever reads
+      // recvOnly the microphone is fine and the channel is one-way — the exact
+      // bug that made viewer→host silent while host→viewer worked.
+      for (final p in peers) {
+        DiagLog.log('voice', 'microphone ON — channel is ${await p.voiceDirection()}');
+      }
+    } else {
+      // unreachable — turning off is handled above, before any device work
+      await _releaseMic();
+      _voiceOn = false;
+    }
+    notifyListeners();
+  }
+
+  /// Stop voice and release the device — session teardown.
+  Future<void> _stopVoice() async {
+    if (_micStream == null && !_voiceOn) return;
+    // Detach from every sender first, so nothing holds a track that is about
+    // to be stopped.
+    for (final p in <WebRTCService>[
+      if (_viewerPeer != null) _viewerPeer!,
+      ..._hostPeers.values,
+    ]) {
+      await p.setMicTrack(null);
+    }
+    await _releaseMic();
+    _voiceOn = false;
+  }
+
+  /// Hands the microphone back to the operating system.
+  ///
+  /// STOPPING each track is what actually closes the device. MediaStream's
+  /// dispose() only tears down the Dart/native stream object — it does not stop
+  /// the tracks, so the capture device stayed open and the OS went on treating
+  /// the app as listening after the user had switched the microphone off. That
+  /// is the single worst bug a voice feature can have, and it is silent: the
+  /// app shows "off", the mic indicator says otherwise.
+  Future<void> _releaseMic() async {
+    final stream = _micStream;
+    _micStream = null;
+    if (stream == null) return;
+    for (final t in stream.getTracks()) {
+      try {
+        await t.stop();
+      } catch (e) {
+        DiagLog.log('voice', 'stopping a mic track failed: $e');
+      }
+    }
+    try {
+      await stream.dispose();
+    } catch (e) {
+      DiagLog.log('voice', 'disposing the mic stream failed: $e');
+    }
+    DiagLog.log('voice', 'microphone released to the OS');
+  }
+
+  /// VIEWER: whether the host granted control. False means the host is
+  /// dropping our input on purpose — the viewer must show that rather than
+  /// letting the user click into a void. Defaults true so an older host, which
+  /// announces nothing, behaves exactly as before.
+  bool _hostGrantedControl = true;
+  bool get hostGrantedControl => _hostGrantedControl;
 
   /// In-session view-only: when true the viewer watches without sending input
   /// (separate from the persisted view-only setting; either one disables input).
@@ -191,7 +454,39 @@ class RemoteService extends ChangeNotifier {
   void setViewOnly(bool value) {
     if (viewerViewOnly == value) return;
     viewerViewOnly = value;
+    _applyViewOnlyToKeyboardHook();
     notifyListeners();
+  }
+
+  /// The PERSISTED view-only setting ("View Only" in the session-mode selector),
+  /// mirrored here from settingsProvider. The widget layer already ORs the two,
+  /// but the OS keyboard hook and the shortcut buttons never go through the
+  /// widget, so the service needs to see it too.
+  bool settingsViewOnly = false;
+  set viewOnlySetting(bool value) {
+    if (settingsViewOnly == value) return;
+    settingsViewOnly = value;
+    _applyViewOnlyToKeyboardHook();
+  }
+
+  /// Effective view-only: either source disables sending input.
+  bool get inputBlocked => settingsViewOnly || viewerViewOnly;
+
+  /// Stop CAPTURING keys while view-only, not merely stop forwarding them. The
+  /// hook is a low-level OS hook that swallows the keystroke locally, so leaving
+  /// it armed in view-only would eat the user's own typing on their own machine
+  /// while sending nothing.
+  void _applyViewOnlyToKeyboardHook() {
+    if (inputBlocked) {
+      _keyHook.setCapture(false);
+      // Turning view-only ON mid-session while a key is physically held would
+      // strand that key down on the host forever, because the key-UP is now
+      // blocked. releaseHeldViewerKeys() deliberately writes past the gate for
+      // exactly this reason — a stuck Ctrl/Alt is worse than a late key-up.
+      releaseHeldViewerKeys();
+    } else if (keyboardCapture) {
+      _keyHook.setCapture(true);
+    }
   }
 
   // The peer sent an import request — open a picker here and send the choice.
@@ -201,13 +496,12 @@ class RemoteService extends ChangeNotifier {
       // macOS: a backgrounded host would show the picker behind its window,
       // invisible to the viewer — bring the app frontmost first.
       await SessionWatcher.activateApp();
-      final f = await openFile();
-      if (f == null) {
+      final picked = await openFiles(); // multi-select on the import side too
+      if (picked.isEmpty) {
         DiagLog.log('file', 'picker cancelled');
         return;
       }
-      final bytes = await f.readAsBytes();
-      await _files.sendFile(f.name, bytes);
+      await sendFilesQueued(picked);
     } catch (e) {
       // Was a silent black hole — surface picker/read failures so a failed
       // Mac↔Win import can actually be diagnosed from the log.
@@ -230,7 +524,22 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
-  int _fileBuffered() => _viewerPeer?.fileChannelBufferedAmount ?? 0;
+  // Backpressure for the file channel. MUST cover BOTH directions: when hosting
+  // there is no _viewerPeer, so the old `_viewerPeer?…` returned 0 and Host→Viewer
+  // sends had zero backpressure — they flooded the ~16 MB SCTP send buffer, which
+  // is one bidirectional channel per peer, so once full it stalls BOTH directions
+  // (the "fails at file 5" leak). Report the WORST (max) buffered across whichever
+  // peers we're actually sending to.
+  int _fileBuffered() {
+    final v = _viewerPeer;
+    if (v != null) return v.fileChannelBufferedAmount;
+    var maxB = 0;
+    for (final p in _hostPeers.values) {
+      final b = p.fileChannelBufferedAmount;
+      if (b > maxB) maxB = b;
+    }
+    return maxB;
+  }
 
   // ---- Viewer-side UAC overlay state (driven by host 'uac' messages) ----
   bool uacActive = false;
@@ -254,9 +563,60 @@ class RemoteService extends ChangeNotifier {
   // our LAN-mates, so discovery works even where UDP broadcast is blocked.
   Timer? _discoverTimer;
   final Map<String, DiscoveredDevice> _serverPeers = {};
+  // Consecutive relay polls a peer was absent — evict only after a couple of
+  // misses so one transient/empty reply doesn't wipe the whole list (flicker).
+  final Map<String, int> _serverPeerMiss = {};
 
   /// Hosts the relay reports on our network (from the last `peers` reply).
   List<DiscoveredDevice> get serverPeers => _serverPeers.values.toList();
+
+  // Presence for SAVED devices. Relay discovery only covers machines sharing
+  // our public IP, so an address-book entry on another network always showed
+  // "Offline" even while it was reachable — which is what users actually see.
+  final Set<String> _presentIds = {};
+  Timer? _presenceTimer;
+
+  /// Device ids the relay says are online right now (normalised to digits).
+  Set<String> get presentIds => Set.unmodifiable(_presentIds);
+
+  /// Ask about these ids on a timer. Called with whatever the UI knows about
+  /// (address book + recents), so we only ever ask about ids the user already
+  /// has — nothing is enumerable from this.
+  void trackPresenceFor(List<String> ids) {
+    _presenceIdsToWatch = ids;
+    if (_presenceTimer != null) return;
+    _pollPresence();
+    _presenceTimer =
+        Timer.periodic(const Duration(seconds: 20), (_) => _pollPresence());
+  }
+
+  List<String> _presenceIdsToWatch = const [];
+
+  void _pollPresence() {
+    if (_presenceIdsToWatch.isEmpty) return;
+    // Either socket will do — the relay answers on whichever asked. A
+    // viewer-only install never registers as a host, so _hostSignaling can be
+    // null and the viewer socket is the only way to ask.
+    final sig = _hostSignaling ?? _viewerSignaling;
+    sig?.requestPresence(_presenceIdsToWatch);
+  }
+
+  void _onPresenceResult(dynamic payload) {
+    if (payload is! Map) return;
+    final list = payload['online'];
+    if (list is! List) return;
+    final next = <String>{
+      for (final e in list)
+        if (e is String) e.replaceAll(RegExp(r'[^0-9]'), '')
+    };
+    if (next.length == _presentIds.length && next.containsAll(_presentIds)) {
+      return; // unchanged — don't rebuild the device grid for nothing
+    }
+    _presentIds
+      ..clear()
+      ..addAll(next);
+    notifyListeners();
+  }
 
   // ---- Incoming-connection consent + per-session permissions (host) --------
   /// When true, an incoming connection prompts the host user (Accept/Dismiss).
@@ -298,9 +658,39 @@ class RemoteService extends ChangeNotifier {
     permControl = control;
     permClipboard = clipboard;
     permFiles = files;
+    // permControl was assigned in three places and READ IN NONE — which is why
+    // a host granting view-only had no effect. It now drives the host-side gate.
+    hostGrantsControl = control;
     _pendingConsent = null;
     notifyListeners();
     await _startHostOffer(req.controllerId);
+  }
+
+  /// Asks natively when the in-window dialog cannot be relied on.
+  ///
+  /// Resolved through acceptConnection/rejectConnection so there is ONE consent
+  /// path: this is a different way to ASK the same question, not a second
+  /// implementation of answering it.
+  Future<void> _showNativeConsentIfNeeded(String controllerId) async {
+    final allow = await showNativeConsent(controllerId);
+    if (allow == null) return; // no native prompt here — in-app dialog stands
+    // A viewer that gave up, or a second request arriving meanwhile, must not
+    // have this answer applied to it.
+    if (_pendingConsent?.controllerId != controllerId) {
+      DiagLog.log('host', 'native consent answered a request that moved on');
+      return;
+    }
+    if (allow) {
+      DiagLog.log('host', 'native consent ACCEPTED for $controllerId');
+      await acceptConnection(
+        control: _hostAllowsControl,
+        clipboard: defaultPermClipboard,
+        files: defaultPermFiles,
+      );
+    } else {
+      DiagLog.log('host', 'native consent DECLINED/timed out for $controllerId');
+      rejectConnection();
+    }
   }
 
   /// Host: decline the pending incoming connection.
@@ -322,10 +712,74 @@ class RemoteService extends ChangeNotifier {
   String? get hostError => _hostError;
   int get connectedViewers => _hostPeers.length;
 
+  /// HOST: called whenever a viewer goes away. Privacy mode is SESSION state,
+  /// not machine state — leaving it on after the session that enabled it ended
+  /// blanked the host's screen and blocked its local input, locking the user
+  /// out of their own machine until someone reconnected and turned it off.
+  void _onHostPeerGone() {
+    if (_hostPeers.isNotEmpty) return;
+    if (PrivacyMode.isOn) {
+      DiagLog.log('host', 'last viewer gone — clearing privacy mode');
+      PrivacyMode.set(false);
+    }
+    notifyListeners();
+  }
+
+  /// HOST: end the session(s) this machine is serving.
+  ///
+  /// Until this existed only the VIEWER could hang up — the person whose screen
+  /// was being watched had no way to stop it, which is backwards for a
+  /// remote-access tool. Each viewer is sent a bye first so it shows a clean
+  /// "session ended" instead of appearing to freeze.
+  Future<void> endHostSession({String? viewerId}) async {
+    final ids = viewerId != null
+        ? [viewerId]
+        : _hostPeers.keys.toList(growable: false);
+    if (ids.isEmpty) return;
+    for (final id in ids) {
+      _hostSignaling?.sendBye(id);
+      _hostPeers.remove(id)?.close();
+    }
+    DiagLog.log('host', 'host ended the session (viewers=${ids.length})');
+    await _stopVoice();
+    _onHostPeerGone();
+  }
+
   // ---- Viewer state ----
   SignalingService? _viewerSignaling;
   WebRTCService? _viewerPeer;
   ViewerStatus _viewerStatus = ViewerStatus.idle;
+
+  /// How far the CURRENT connection attempt has actually got.
+  ///
+  /// The connect screen used to advance four ticks on a 420ms timer regardless
+  /// of what was happening — it showed "Verifying identity" complete for a
+  /// password that had already been rejected. That is a Data Honesty Rule
+  /// violation (DESIGN.md) and it actively misled us while debugging.
+  int _viewerPhase = 0;
+  int get viewerPhase => _viewerPhase;
+
+  /// Maps a host refusal token to something a person can act on. Unknown tokens
+  /// return null so an older or newer host cannot make the viewer claim a
+  /// reason it does not actually know.
+  static String? _refusalMessage(String? reason) {
+    switch (reason) {
+      case 'interactive_disabled':
+        return 'That machine is not accepting interactive connections right '
+            'now. It may be set to allow access only while its app is open, '
+            'or to require the unattended password.';
+      case 'consent_denied':
+        return 'The person at that machine declined the connection.';
+      default:
+        return null;
+    }
+  }
+
+  void _setPhase(int p) {
+    if (p <= _viewerPhase) return; // never go backwards within one attempt
+    _viewerPhase = p;
+    notifyListeners();
+  }
   String? _targetId;
   String? _viewerError;
 
@@ -347,6 +801,11 @@ class RemoteService extends ChangeNotifier {
   /// has a single monitor). Each entry: {'id':..., 'n': name}.
   List<Map<String, String>> hostMonitors = const [];
   String? _remoteHostOs;
+
+  /// The remote machine's own name, announced by the host once connected.
+  /// Null until it arrives, or against a host too old to send it — callers
+  /// fall back to the id rather than showing a blank where a name should be.
+  String? _remoteHostName;
   MediaStream? _remoteStream;
   SessionStats _stats = const SessionStats();
   Timer? _statsTimer;
@@ -364,6 +823,91 @@ class RemoteService extends ChangeNotifier {
     onFiles: _announceClipFiles,
   );
   bool _clipMonitorStarted = false;
+
+  // ---- Session audit trail (roadmap Phase 2) -------------------------------
+  // Start times per peer; the record is written on session END so one line
+  // holds start, end, duration and outcome.
+  final Map<String, DateTime> _auditHostStart = {};
+  DateTime? _auditViewerStart;
+
+  Future<void> _auditWrite({
+    required String role,
+    required String peerId,
+    required DateTime startedAt,
+    required String consent,
+    required String endReason,
+  }) async {
+    try {
+      await AuditLog.instance.record(
+        role: role,
+        peerId: peerId,
+        deviceId: agentId ?? '',
+        startedAt: startedAt,
+        endedAt: DateTime.now(),
+        consent: consent,
+        endReason: endReason,
+      );
+    } catch (_) {}
+  }
+
+
+  // ---- Custom alias / namespace (roadmap Phase 3) --------------------------
+  static const String _kAliasKey = 'deviceAlias';
+  String _deviceAlias = '';
+  String? _aliasError;
+
+  /// This machine's human-readable alias (empty = none).
+  String get deviceAlias => _deviceAlias;
+
+  /// Last alias-set failure reason (null = ok / not attempted).
+  String? get aliasError => _aliasError;
+
+  Future<void> loadDeviceAlias() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _deviceAlias = prefs.getString(_kAliasKey) ?? '';
+    } catch (_) {}
+  }
+
+  /// Claim (or clear, with '') a human-readable alias for this machine. Persists
+  /// locally and, if currently hosting, tells the relay immediately; otherwise
+  /// it is asserted on the next register.
+  Future<void> setDeviceAlias(String alias) async {
+    _deviceAlias = alias.trim();
+    _aliasError = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kAliasKey, _deviceAlias);
+    } catch (_) {}
+    _hostSignaling?.setAlias(_deviceAlias);
+    notifyListeners();
+  }
+
+  // ---- Relay certificate pin (Phase 1: TLS) --------------------------------
+  // The relay runs on a private address, so no public CA can issue for it; we
+  // pin its self-signed cert by SHA-256 instead. Learned on first wss connect
+  // and reused thereafter, so only the very first connection is unpinned.
+  static const String _kRelayPinKey = 'relayCertSha256';
+  String? _relayCertPin;
+
+  Future<String?> _loadRelayPin() async {
+    if (_relayCertPin != null) return _relayCertPin;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _relayCertPin = prefs.getString(_kRelayPinKey);
+    } catch (_) {}
+    return _relayCertPin;
+  }
+
+  Future<void> _saveRelayPin(String sha256) async {
+    _relayCertPin = sha256;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kRelayPinKey, sha256);
+      DiagLog.log('tls', 'stored relay cert pin $sha256');
+    } catch (_) {}
+  }
+
   // Clipboard image sync (chunked, since images are large).
   int _lastClipImgHash = 0;
   int _clipTick = 0;
@@ -425,6 +969,9 @@ class RemoteService extends ChangeNotifier {
   /// control channel. Null until the host announces it. Used by the viewer to
   /// translate the primary command modifier across platforms.
   String? get remoteHostOs => _remoteHostOs;
+
+  /// The remote machine's name, or null if the host has not announced one.
+  String? get remoteHostName => _remoteHostName;
   MediaStream? get remoteStream => _remoteStream;
   SessionStats get stats => _stats;
 
@@ -477,12 +1024,24 @@ class RemoteService extends ChangeNotifier {
         (machine != null && machine.id.isNotEmpty
             ? machine.id
             : await _persistentAgentId());
+    // Read the "Ask before allowing connections" setting LIVE, right as hosting
+    // starts — so the host's Accept/Dismiss prompt reflects the CURRENT toggle
+    // rather than a value a widget build may or may not have pushed onto the
+    // service. (connect_page also keeps this field updated for mid-session
+    // toggles.) This is authoritative: it no longer depends on any UI being
+    // built, and it is NOT clamped by unattended access — an unattended password
+    // governs reachability, this toggle governs prompting.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      promptOnConnect = prefs.getBool('askOnConnect') ?? true;
+    } catch (_) {}
     _hostStatus = HostStatus.starting;
     _hostError = null;
     DiagLog.log('host', 'startHosting relay=$relayUrl agentId=$agentId '
         'promptOnConnect=$promptOnConnect unattended=${password != null}');
     notifyListeners();
 
+    await _loadRelayPin();
     final signaling = SignalingService(
       serverUrl: relayUrl,
       onMessage: _onHostMessage,
@@ -497,6 +1056,8 @@ class RemoteService extends ChangeNotifier {
           version: AppConstants.appVersion,
         );
       },
+      relayCertPin: _relayCertPin,
+      onPinLearned: _saveRelayPin,
       onDisconnected: () {
         if (_hostStatus != HostStatus.offline) {
           _hostStatus = HostStatus.error;
@@ -522,7 +1083,20 @@ class RemoteService extends ChangeNotifier {
   /// the UI shows the single service-owned host to dial, WITHOUT registering a
   /// host. Used when the service transport owns hosting (TransportMode).
   Future<void> _showServiceIdentity() async {
-    if (!_uac.isSupported) return;
+    // macOS has no SYSTEM helper to ask, so this returned immediately and the
+    // share card rendered an empty id whenever the daemon owned hosting —
+    // which is the normal, correct state on an installed Mac. The daemon's
+    // identity comes from the files it and its worker publish instead.
+    if (!_uac.isSupported) {
+      final creds = HostMode.macDaemonCreds();
+      if (creds != null) {
+        _agentId = creds.id;
+        if (creds.password.isNotEmpty) _password = creds.password;
+        _hostStatus = HostStatus.online; // reachable via the daemon transport
+        notifyListeners();
+      }
+      return;
+    }
     try {
       final machine = await _uac.fetchMachineCreds();
       if (machine != null && machine.id.isNotEmpty) {
@@ -546,6 +1120,8 @@ class RemoteService extends ChangeNotifier {
       await peer.close();
     }
     _hostPeers.clear();
+    // Stopping hosting must never leave the screen blanked.
+    if (PrivacyMode.isOn) PrivacyMode.set(false);
     await _capture.stopCapture();
     await _hostSignaling?.disconnect();
     _hostSignaling = null;
@@ -564,19 +1140,83 @@ class RemoteService extends ChangeNotifier {
         _hostStatus = HostStatus.online;
         DiagLog.log('host', 'registered ok agentId=$_agentId — reachable');
         _startServerDiscovery();
+        // Re-assert our alias each time we (re)register, so a restart or a
+        // relay failover keeps the name bound to this machine (Phase 3).
+        if (_deviceAlias.isNotEmpty) {
+          _hostSignaling?.setAlias(_deviceAlias);
+        }
+        notifyListeners();
+        break;
+      case SignalingMessageType.aliasResult:
+        final ok = msg.payload?['ok'] == true;
+        _aliasError = ok ? null : (msg.payload?['error'] as String?);
+        if (ok) _deviceAlias = (msg.payload?['alias'] as String?) ?? _deviceAlias;
+        DiagLog.log('host',
+            ok ? 'alias set: $_deviceAlias' : 'alias rejected: $_aliasError');
         notifyListeners();
         break;
       case SignalingMessageType.peers:
         _onServerPeers(msg.payload);
         break;
+      case SignalingMessageType.presenceResult:
+        _onPresenceResult(msg.payload);
+        break;
       case SignalingMessageType.connect:
         // A controller wants in. msg.from is the controller's routing id.
         final controllerId = msg.from;
         if (controllerId == null) break;
-        DiagLog.log('host', 'incoming connect from=$controllerId '
-            'promptOnConnect=$promptOnConnect');
-        // Attended: ask the host user first (AnyDesk-style). Unattended access
-        // (promptOnConnect=false) accepts immediately with full permissions.
+        // How the controller authenticated decides whether we prompt at all:
+        // the unattended password IS the authorisation (nobody may be present),
+        // while the session password is an interactive request a human should
+        // be able to refuse. An older relay omits the field, and that falls back
+        // to "session" — the safer side, since it prompts.
+        final unattendedLogin = msg.payload is Map &&
+            (msg.payload as Map)['auth'] == 'unattended';
+        DiagLog.log(
+            'host',
+            'incoming connect from=$controllerId '
+                'auth=${unattendedLogin ? 'unattended' : 'session'} '
+                'promptOnConnect=$promptOnConnect');
+
+        if (unattendedLogin) {
+          // Unattended profile — deliberately separate from the interactive one.
+          permClipboard = unattendedAllowClipboard;
+          permFiles = unattendedAllowFiles;
+          permControl = unattendedAllowControl && !settingsViewOnly;
+          hostGrantsControl = permControl;
+          await _startHostOffer(controllerId);
+          break;
+        }
+        if (interactiveAccess == 'never') {
+          // Interactive access disabled: the unattended password is the only
+          // way in, so refuse rather than prompt.
+          DiagLog.log('host',
+              'connect REFUSED — interactive access is disabled on this host');
+          _hostSignaling?.sendBye(controllerId);
+          break;
+        }
+        // "Remember this decision" from an earlier prompt: apply it without
+        // asking again. Checked before promptOnConnect so a remembered Decline
+        // is honoured too, not just a remembered Accept.
+        final remembered = await ConsentStore.decisionFor(controllerId);
+        if (promptOnConnect && remembered != null) {
+          DiagLog.log(
+              'host',
+              'consent auto-answered from a remembered decision '
+                  'allow=${remembered.allow} control=${remembered.control}');
+          if (remembered.allow) {
+            permClipboard = defaultPermClipboard;
+            permFiles = defaultPermFiles;
+            // Honour the level that was REMEMBERED, not the generic default: a
+            // remembered view-only grant must not quietly become full control.
+            permControl = remembered.control && _hostAllowsControl;
+            hostGrantsControl = permControl;
+            await _startHostOffer(controllerId);
+          } else {
+            _hostSignaling?.sendBye(controllerId);
+          }
+          break;
+        }
         if (promptOnConnect) {
           // NOTE: the service-host runs HEADLESS as SYSTEM — a consent dialog
           // here is invisible and can never be accepted, so an incoming connect
@@ -585,11 +1225,27 @@ class RemoteService extends ChangeNotifier {
               'cannot be accepted; enable unattended access');
           _pendingConsent = ConsentRequest(controllerId);
           notifyListeners();
+          // On macOS the in-window dialog is not enough.
+          //
+          // A machine being used as a HOST normally has this app in the
+          // background or minimised, and the app cannot raise its own window
+          // (window_manager is not built in). So the dialog rendered somewhere
+          // nobody could see, the request timed out, and connecting to a Mac
+          // appeared to fail entirely unless "ask before allowing" was turned
+          // off — trading the security prompt away to get a working product.
+          //
+          // A native alert floats above everything and needs no window of ours.
+          unawaited(_showNativeConsentIfNeeded(controllerId));
         } else {
-          // Silent accept (unattended / never-ask) uses the default permissions.
-          permControl = defaultPermControl;
+          // Silent accept (unattended / never-ask) uses the default
+          // permissions — but the host's own "View only mode" still wins. It
+          // used to be ignored here, so a host set to view-only WITH the prompt
+          // turned off handed over full control anyway: the same bug the prompt
+          // path was fixed for.
           permClipboard = defaultPermClipboard;
           permFiles = defaultPermFiles;
+          permControl = _hostAllowsControl;
+          hostGrantsControl = permControl;
           await _startHostOffer(controllerId);
         }
         break;
@@ -606,7 +1262,16 @@ class RemoteService extends ChangeNotifier {
         }
         break;
       case SignalingMessageType.bye:
+        // If this viewer's consent prompt is still open, withdraw it. It used
+        // to stay up after the viewer cancelled, asking the host to decide
+        // about a request that no longer existed.
+        if (_pendingConsent?.controllerId == msg.from) {
+          DiagLog.log('host',
+              'viewer left while its consent prompt was open — withdrawing');
+          _pendingConsent = null;
+        }
         final peer = _hostPeers.remove(msg.from);
+        _onHostPeerGone();
         await peer?.close();
         _disablePrivacyIfNoViewers();
         notifyListeners();
@@ -636,9 +1301,10 @@ class RemoteService extends ChangeNotifier {
   }
 
   /// Force an immediate relay discovery poll (the Discovery page refresh button).
+  /// Does NOT clear the list — keep known peers visible while re-polling; the
+  /// grace eviction in _onServerPeers removes ones that are really gone. Clearing
+  /// made the list blink empty and rediscover slowly.
   void refreshDiscovery() {
-    _serverPeers.clear();
-    notifyListeners();
     _hostSignaling?.sendDiscover();
   }
 
@@ -653,6 +1319,7 @@ class RemoteService extends ChangeNotifier {
       final id = (p['id'] as String?)?.trim() ?? '';
       if (id.isEmpty || id == _agentId) continue;
       seen.add(id);
+      _serverPeerMiss[id] = 0;
       final name = (p['hostname'] as String?)?.trim();
       _serverPeers[id] = DiscoveredDevice(
         id: id,
@@ -662,8 +1329,19 @@ class RemoteService extends ChangeNotifier {
         lastSeen: now,
       );
     }
-    // Drop machines the relay no longer lists (went offline / left the network).
-    _serverPeers.removeWhere((id, _) => !seen.contains(id));
+    // Grace eviction: only drop a peer after 2 consecutive polls without it, so a
+    // single transient/empty relay reply can't wipe the list (the flicker cause).
+    final toRemove = <String>[];
+    for (final id in _serverPeers.keys) {
+      if (seen.contains(id)) continue;
+      final miss = (_serverPeerMiss[id] ?? 0) + 1;
+      _serverPeerMiss[id] = miss;
+      if (miss >= 2) toRemove.add(id);
+    }
+    for (final id in toRemove) {
+      _serverPeers.remove(id);
+      _serverPeerMiss.remove(id);
+    }
     notifyListeners();
   }
 
@@ -691,6 +1369,11 @@ class RemoteService extends ChangeNotifier {
     // than one monitor, the monitor list so the viewer can switch between them.
     peer.onDataChannelOpen = () async {
       peer.sendData(jsonEncode({'k': 'os', 'v': _osName()}));
+      // Tell the viewer what it was actually granted. Without this a view-only
+      // viewer sees its own toolbar saying "Control" while the host silently
+      // drops every click — enforcement that looks identical to a broken app.
+      peer.sendData(
+          jsonEncode({'k': 'grant', 'control': hostGrantsControl}));
       try {
         final mons = await _capture.getSources();
         if (mons.length > 1) {
@@ -710,11 +1393,26 @@ class RemoteService extends ChangeNotifier {
               RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
         _hostPeers.remove(controllerId)?.close();
+        _onHostPeerGone();
+        final st = _auditHostStart.remove(controllerId);
+        if (st != null) {
+          _auditWrite(
+            role: 'host',
+            peerId: controllerId,
+            startedAt: st,
+            consent: promptOnConnect ? 'accepted' : 'unattended',
+            endReason: 'peer_ended',
+          );
+        }
         _disablePrivacyIfNoViewers();
         notifyListeners();
       }
     };
     _hostPeers[controllerId] = peer;
+    _auditHostStart[controllerId] = DateTime.now();
+    // Rebuild the host UI so the live-session banner (and its End control)
+    // appears immediately. Removal already notifies via _onHostPeerGone.
+    notifyListeners();
 
     // Use iceTransportPolicy 'all': direct path for same-network peers (e.g.
     // <->Mac), automatic TURN-relay fallback when no direct path exists (e.g.
@@ -725,6 +1423,10 @@ class RemoteService extends ChangeNotifier {
       isOfferer: true,
     );
     await peer.addLocalStream(stream);
+    // Negotiate a voice channel up front. It carries nothing until someone
+    // turns the mic on — doing it now means enabling voice later is a
+    // replaceTrack rather than a renegotiation that could disturb the screen.
+    await peer.addVoiceTransceiver();
     final offer = await peer.createOffer();
     _hostSignaling?.sendOffer(controllerId, _sdpMap(offer));
     _ensureClipboardSync();
@@ -736,11 +1438,60 @@ class RemoteService extends ChangeNotifier {
   // VIEWER
   // =========================================================================
 
+  /// Phase 3: resolve an alias to a numeric ID over a short-lived signaling
+  /// connection. Returns null on not-found / error / timeout. Reuses the relay
+  /// cert pin so it's TLS-safe when the relay is on wss://.
+  Future<String?> resolveAliasToId(String relayUrl, String alias) async {
+    await _loadRelayPin();
+    final done = Completer<String?>();
+    SignalingService? sig;
+    sig = SignalingService(
+      serverUrl: relayUrl,
+      relayCertPin: _relayCertPin,
+      onPinLearned: _saveRelayPin,
+      onConnected: () => sig?.resolveAlias(alias),
+      onDisconnected: () {
+        if (!done.isCompleted) done.complete(null);
+      },
+      onMessage: (m) {
+        if (m.type == SignalingMessageType.resolveResult) {
+          final id = m.payload?['agent_id'] as String?;
+          if (!done.isCompleted) done.complete(id);
+        }
+      },
+    );
+    try {
+      await sig.connect();
+    } catch (_) {
+      if (!done.isCompleted) done.complete(null);
+    }
+    final result = await done.future.timeout(const Duration(seconds: 6),
+        onTimeout: () => null);
+    await sig.disconnect();
+    return result;
+  }
+
   Future<void> connectToHost({
     required String relayUrl,
     required String targetId,
     required String password,
   }) async {
+    // Phase 3: dial by human-readable alias. A numeric ID (once grouping is
+    // stripped) is all digits; anything with a letter is treated as an alias and
+    // resolved to its numeric ID first. Resolve BEFORE stripping so hyphens in
+    // an alias ("reception-pc") survive.
+    final raw = targetId.trim();
+    if (RegExp(r'[a-zA-Z]').hasMatch(raw)) {
+      final resolved = await resolveAliasToId(relayUrl, raw);
+      if (resolved == null || resolved.isEmpty) {
+        _viewerStatus = ViewerStatus.failed;
+        _viewerError = 'No device is using the alias "$raw".';
+        notifyListeners();
+        return;
+      }
+      DiagLog.log('viewer', 'alias "$raw" -> $resolved');
+      targetId = resolved;
+    }
     // The relay matches IDs exactly, so strip any grouping the user typed or
     // pasted ("532-034-441" / "532 034 441" → "532034441"). A legacy Mac host may
     // still be registered dashed; entering the dashes also works, but normalizing
@@ -756,18 +1507,25 @@ class RemoteService extends ChangeNotifier {
 
     _targetId = targetId;
     _viewerStatus = ViewerStatus.connecting;
+    _viewerPhase = 0; // new attempt — start the progress over
+    _remoteHostName = null; // never label a new machine with the last one's name
     _viewerError = null;
     DiagLog.log('viewer', 'connectToHost target=$targetId relay=$relayUrl '
         'autoReconnect=$autoReconnect tries=$_reconnectTries');
     notifyListeners();
 
+    await _loadRelayPin();
     final signaling = SignalingService(
       serverUrl: relayUrl,
       onMessage: _onViewerMessage,
       onConnected: () {
+        // Relay reached — the request can now be made. Real signal, not a timer.
+        _setPhase(1);
         // The viewer (controller) does not register; it just requests a peer.
         _viewerSignaling?.sendConnect(targetId, password);
       },
+      relayCertPin: _relayCertPin,
+      onPinLearned: _saveRelayPin,
       onDisconnected: () {
         if (_viewerStatus != ViewerStatus.idle) {
           _viewerStatus = ViewerStatus.failed;
@@ -794,6 +1552,24 @@ class RemoteService extends ChangeNotifier {
   /// doesn't lag); buttons, wheel and keys stay on the reliable channel so they
   /// are never lost or reordered.
   void sendViewerInput(InputEvent event) {
+    // VIEW-ONLY ENFORCEMENT. This is the one place every input path funnels
+    // through, so it is the only place the gate actually holds. The widget-level
+    // gate (RemoteViewWidget only wires its pointer/Focus listeners when
+    // !viewOnly) covers the mouse, but two producers never touch the widget and
+    // so bypassed it entirely: the OS-level keyboard hook (Windows AND macOS),
+    // which forwarded every keystroke, and sendKeyCombo() from the shortcuts
+    // menu (Ctrl+Alt+Del, Win+R, Alt+Tab). The host deliberately does not gate
+    // input (see the note in the isHost branch below), so anything sent from
+    // here is executed on the remote machine — which is why "View Only" still
+    // allowed typing and shortcuts on every platform pair.
+    if (inputBlocked) {
+      final now = _inputClock.elapsedMilliseconds;
+      if (now - _lastViewOnlyDropLogMs > 1000) {
+        _lastViewOnlyDropLogMs = now;
+        DiagLog.log('viewer', 'input ${event.kind} blocked — view-only is on');
+      }
+      return;
+    }
     // Track which keys the host currently believes are held so we can force a
     // release if our window loses focus (see [releaseHeldViewerKeys]). Both
     // input paths — the video's Focus handler and the Windows keyboard hook —
@@ -829,6 +1605,45 @@ class RemoteService extends ChangeNotifier {
   }
 
   int _lastInputDropLogMs = -10000;
+  int _lastViewOnlyHostDropMs = -10000;
+
+  /// The host's standing position on control: the "allow control" default AND
+  /// the host's own "View only mode". Either one off means no control.
+  bool get _hostAllowsControl => defaultPermControl && !settingsViewOnly;
+
+  /// HOST side: whether viewers connected to THIS machine may control it.
+  /// Mirrored from the host's own "View only mode" setting. The host is the
+  /// authority — a viewer cannot raise this for itself.
+  bool hostGrantsControl = true;
+
+  /// Whether a control-channel payload would actually CONTROL this machine, as
+  /// opposed to observing it or exchanging data. Mirrors isControlAttempt() in
+  /// agent/session/transport.go — keep the two in step.
+  ///
+  /// A denylist, deliberately: the four input kinds are defined in exactly one
+  /// place and are stable, while new non-control message kinds get added often.
+  /// Clipboard, chat, file transfer, monitor switch and quality keep working
+  /// while view-only, so a watcher stays useful.
+  bool _isControlAttempt(String raw) {
+    try {
+      final m = jsonDecode(raw);
+      if (m is! Map) return false;
+      switch (m['k']) {
+        case 'mv':
+        case 'btn':
+        case 'whl':
+        case 'key':
+          return true;
+        case 'cmd':
+          const mutating = {'lock', 'logoff', 'reboot', 'privacy', 'sas'};
+          return mutating.contains(m['c']);
+      }
+    } catch (_) {
+      // Undecodable payloads inject nothing downstream either.
+    }
+    return false;
+  }
+  int _lastViewOnlyDropLogMs = -10000;
 
   // Keys the host currently believes are pressed (by HID usage). Used to release
   // a modifier whose key-up was swallowed by a focus change.
@@ -863,6 +1678,18 @@ class RemoteService extends ChangeNotifier {
   }
 
   Future<void> disconnectViewer({bool keepAutoReconnect = false}) async {
+    // Stop renewing the host's privacy lease so its screen comes back even if
+    // the explicit "privacy off" never lands (closing app, dropped link).
+    _stopPrivacyKeepAlive();
+    // Forget the grant: the next host may allow something different, and a
+    // stale "view only" would mislabel a session that actually has control.
+    _hostGrantedControl = true;
+    // A dropped session must not leave the Record button lit for a recording
+    // that is no longer running.
+    recording = false;
+    // Release the microphone with the session — an open mic outliving the call
+    // it belonged to is the worst possible bug in a voice feature.
+    await _stopVoice();
     // A user-initiated disconnect cancels any pending auto-reconnect.
     if (!keepAutoReconnect) {
       autoReconnect = false;
@@ -876,7 +1703,21 @@ class RemoteService extends ChangeNotifier {
     }
     _statsTimerMaybeStop();
     final id = _targetId;
+    // Audit: close out the viewer-side session record.
+    final vst = _auditViewerStart;
+    if (vst != null) {
+      _auditViewerStart = null;
+      _auditWrite(
+        role: 'viewer',
+        peerId: id ?? '',
+        startedAt: vst,
+        consent: 'accepted',
+        endReason: keepAutoReconnect ? 'network_lost' : 'user_ended',
+      );
+    }
     if (id != null) _viewerSignaling?.sendBye(id);
+    _thumbTimer?.cancel();
+    _thumbTimer = null;
     await _viewerPeer?.close();
     _viewerPeer = null;
     await _viewerSignaling?.disconnect();
@@ -1086,10 +1927,62 @@ class RemoteService extends ChangeNotifier {
   /// Viewer: toggle privacy mode on the host (blank its screen + block its
   /// local input while you control it).
   bool privacyMode = false;
+  Timer? _privacyKeepAlive;
+
+  /// Whether this session is being recorded at the viewer's request.
+  ///
+  /// Recording happens on the HOST — it muxes the frames it has already encoded,
+  /// so there is no second encode and no quality loss — and the finished file is
+  /// sent here when it stops. flutter_webrtc cannot record on desktop
+  /// (startRecordToFile is unimplemented on Windows and macOS), so recording
+  /// locally would mean re-encoding polled screenshots: worse quality, far more
+  /// CPU, and a new failure surface next to the live stream.
+  bool recording = false;
+
+  /// Viewer: start or stop recording this session.
+  ///
+  /// The host is not asked to approve, because the viewer is already watching
+  /// every pixel live and a recording adds no new visibility. It is not hidden
+  /// either: the host's session bar turns red and says "Recording" for as long
+  /// as it runs, and the host can stop it whenever they like.
+  void setRecording(bool on) {
+    if (_viewerPeer == null) return;
+    recording = on;
+    _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': 'record', 'on': on}));
+    DiagLog.log('viewer', 'recording ${on ? "started" : "stopped"} by viewer');
+    notifyListeners();
+  }
+
   void setPrivacyMode(bool on) {
     privacyMode = on;
     _viewerPeer?.sendData(jsonEncode({'k': 'cmd', 'c': 'privacy', 'on': on}));
+    // The host treats privacy as a LEASE, not a latch: it restores the screen
+    // unless the viewer keeps re-asserting it. That is what makes a crashed or
+    // disconnected viewer safe — the host cannot be left blanked, because
+    // nothing has to notice the disconnect for the screen to come back.
+    _privacyKeepAlive?.cancel();
+    _privacyKeepAlive = null;
+    if (on) {
+      _privacyKeepAlive = Timer.periodic(const Duration(seconds: 4), (t) {
+        if (!privacyMode || _viewerPeer == null) {
+          t.cancel();
+          _privacyKeepAlive = null;
+          return;
+        }
+        _viewerPeer?.sendData(
+            jsonEncode({'k': 'cmd', 'c': 'privacy', 'on': true}));
+      });
+    }
     notifyListeners();
+  }
+
+  /// Stop renewing the privacy lease. Called when a viewer session ends, so the
+  /// host's screen comes back at the end of the lease even if the explicit
+  /// "privacy off" never reaches it.
+  void _stopPrivacyKeepAlive() {
+    _privacyKeepAlive?.cancel();
+    _privacyKeepAlive = null;
+    privacyMode = false;
   }
 
   // Windows viewer: seamless capture of OS-reserved key combos (Win+R, Alt+Tab…)
@@ -1100,7 +1993,9 @@ class RemoteService extends ChangeNotifier {
   bool get keyboardCaptureSupported => KeyboardHook.supported;
   void setKeyboardCapture(bool on) {
     keyboardCapture = on;
-    _keyHook.setCapture(on);
+    // Never arm the hook while view-only: it swallows the key locally and would
+    // send nothing, so the user would lose their own typing for no benefit.
+    _keyHook.setCapture(on && !inputBlocked);
     notifyListeners();
   }
 
@@ -1108,7 +2003,7 @@ class RemoteService extends ChangeNotifier {
   /// text field needs the keyboard (chat, transmit-login dialog), WITHOUT
   /// changing the user's keyboardCapture preference. Restores it on release.
   void pauseKeyboardCapture(bool pause) {
-    _keyHook.setCapture(pause ? false : keyboardCapture);
+    _keyHook.setCapture(pause ? false : (keyboardCapture && !inputBlocked));
   }
 
   /// Viewer: ask the host to stream a different monitor.
@@ -1194,12 +2089,45 @@ class RemoteService extends ChangeNotifier {
     }
   }
 
+  /// Maps a raw relay error into a clear, actionable viewer message, so a failed
+  /// connect never reads as a silent, indistinguishable "Connecting…". The RAW
+  /// reason still drives the retry/stop logic in the error handler; this only
+  /// changes what the user sees. The single most common failure — a stale saved
+  /// password after a host re-mint — now says exactly what to do.
+  String _friendlyConnectError(String? raw) {
+    final e = (raw ?? '').toLowerCase();
+    if (e.contains('password')) {
+      return 'Wrong password. Check the password shown on the host device and '
+          're-enter it.';
+    }
+    if (e.contains('too many')) {
+      return 'Too many wrong passwords — wait a minute, then try again.';
+    }
+    if (e.contains('not found') ||
+        e.contains('offline') ||
+        e.contains('disconnected') ||
+        e.contains('unavailable')) {
+      return 'That device is offline or not reachable right now.';
+    }
+    return (raw == null || raw.isEmpty) ? 'Connection rejected' : raw;
+  }
+
   Future<void> _onViewerMessage(SignalingMessage msg) async {
     switch (msg.type) {
+      // A viewer-only install never registers as a host, so presence replies
+      // arrive on THIS socket. Without this case they were silently dropped and
+      // saved devices stayed grey.
+      case SignalingMessageType.presenceResult:
+        _onPresenceResult(msg.payload);
+        break;
       case SignalingMessageType.connect:
         // Server confirmed the request was accepted; await the host's offer.
         break;
       case SignalingMessageType.offer:
+        // The host sent an offer: the relay accepted the password and the host
+        // agreed to the session. This is the real "verified" moment — the old
+        // screen claimed it on a timer, even for a password already rejected.
+        _setPhase(2);
         await _answerHostOffer(msg);
         break;
       case SignalingMessageType.candidate:
@@ -1218,6 +2146,20 @@ class RemoteService extends ChangeNotifier {
         // A deliberate end ('peer_left', e.g. the host rejected the request)
         // still tears down for good — and rejections also arrive before
         // autoReconnect is armed, so old servers without a reason are safe.
+        // A refusal is a DECISION, not a dropped link. Re-dialling one would
+        // hammer the host with requests it already turned down — and on a host
+        // set to prompt, that means repeated popups at someone who said no.
+        final refusal = _refusalMessage(msg.error);
+        if (refusal != null) {
+          autoReconnect = false;
+          await disconnectViewer();
+          // Set AFTER the teardown: disconnectViewer resets viewer state, so
+          // setting it first would wipe the very message we want shown.
+          _viewerError = refusal;
+          _viewerStatus = ViewerStatus.failed;
+          notifyListeners();
+          break;
+        }
         if (autoReconnect && msg.error != 'peer_left') {
           _onViewerConnectionLost();
         } else {
@@ -1226,7 +2168,7 @@ class RemoteService extends ChangeNotifier {
         break;
       case SignalingMessageType.error:
         _viewerStatus = ViewerStatus.failed;
-        _viewerError = msg.error ?? 'Connection rejected';
+        _viewerError = _friendlyConnectError(msg.error);
         DiagLog.log('viewer', 'recv error="${msg.error}" '
             'autoReconnect=$autoReconnect tries=$_reconnectTries');
         notifyListeners();
@@ -1257,8 +2199,18 @@ class RemoteService extends ChangeNotifier {
     peer.onDataMessage = (raw) => _handleData(raw, isHost: false);
     peer.onRemoteStream = (stream) {
       _remoteStream = stream;
+      _setPhase(3);
       _viewerStatus = ViewerStatus.connected;
+      _auditViewerStart ??= DateTime.now();
       DiagLog.log('viewer', 'connected — remote stream up (session live)');
+      // Grab a thumbnail a few seconds in (once the first real frames land) and
+      // refresh it periodically so the Home device card shows the actual screen.
+      _thumbTimer?.cancel();
+      _thumbTimer = Timer(const Duration(seconds: 3), () {
+        _captureThumb();
+        _thumbTimer = Timer.periodic(
+            const Duration(seconds: 20), (_) => _captureThumb());
+      });
       // Once a session is actually up, keep it alive across unexpected host
       // drops — most importantly a user switch, where the SYSTEM service kills
       // and relaunches the host in the new session under the SAME machine id.
@@ -1312,6 +2264,9 @@ class RemoteService extends ChangeNotifier {
       isOfferer: false,
     );
     await peer.setRemoteDescription(_sdpFrom(msg.payload));
+    // Adopt the audio section the host offered so we can speak back later
+    // without adding a second media section.
+    await peer.adoptVoiceTransceiver();
     final answer = await peer.createAnswer();
     _viewerSignaling?.sendAnswer(hostId, _sdpMap(answer));
   }
@@ -1388,11 +2343,42 @@ class RemoteService extends ChangeNotifier {
       return;
     }
 
+    // Host announces the access level it granted us. Absent (older host) means
+    // control, matching how it behaved before this existed.
+    if (m['k'] == 'grant') {
+      final granted = m['control'] != false;
+      if (granted != _hostGrantedControl) {
+        _hostGrantedControl = granted;
+        DiagLog.log('viewer', 'host granted ${granted ? 'full control' : 'VIEW ONLY'}');
+        notifyListeners();
+      }
+      return;
+    }
+
     // Host announces its OS so the viewer can map ⌘ ↔ Ctrl.
     if (m['k'] == 'os') {
       _remoteHostOs = m['v'] as String?;
-      if (kRemoteVerboseLog) debugPrint('[os] remote host is $_remoteHostOs');
+      // DiagLog, not debugPrint behind a verbose flag: this single value decides
+      // whether Ctrl is translated to Command for a macOS host, and when it is
+      // null every keyboard shortcut silently does nothing on the remote side.
+      // It was invisible in app.log, so "copy/paste doesn't work from Windows"
+      // could not be told apart from a broken key mapping without guessing.
+      DiagLog.log('viewer', 'remote host OS announced: $_remoteHostOs');
       notifyListeners();
+      return;
+    }
+
+    // Host announces its machine name, so a session can be labelled with
+    // something a person recognises instead of a nine-digit id. Especially
+    // worth it across an organisation, where the id says nothing about which
+    // desk the machine is on.
+    if (m['k'] == 'hostname') {
+      final name = (m['v'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) {
+        _remoteHostName = name;
+        DiagLog.log('viewer', 'remote machine name is $name');
+        notifyListeners();
+      }
       return;
     }
 
@@ -1459,10 +2445,23 @@ class RemoteService extends ChangeNotifier {
     }
 
     if (isHost) {
-      // NOTE: no host-side "control permission" gate here — it silently dropped
-      // ALL input if the flag was ever false (a footgun that broke clicking).
-      // View-only is enforced on the VIEWER side (it simply doesn't send input),
-      // which is the reliable place for it.
+      // HOST-SIDE view-only enforcement. Viewer-side view-only is a courtesy —
+      // the viewer simply stops sending — so it could never express "I am the
+      // host and I only want you to WATCH". A viewer that ignored the flag, or
+      // an older build, kept full control regardless of the host's wish.
+      //
+      // The earlier gate here was removed because it silently dropped ALL input
+      // whenever its flag was unset. That footgun is avoided by defaulting to
+      // ALLOW and only refusing when the host has explicitly granted view-only,
+      // and by logging the refusal instead of dropping in silence.
+      if (!hostGrantsControl && _isControlAttempt(raw)) {
+        final now = _inputClock.elapsedMilliseconds;
+        if (now - _lastViewOnlyHostDropMs > 1000) {
+          _lastViewOnlyHostDropMs = now;
+          DiagLog.log('host', 'input DROPPED — this host granted view-only');
+        }
+        return;
+      }
       final event = InputEvent.decode(raw);
       if (event != null) {
         _lastInputMs = _inputClock.elapsedMilliseconds;
@@ -1619,6 +2618,50 @@ class RemoteService extends ChangeNotifier {
   /// Whether the SYSTEM helper (and thus machine-wide multi-user access) is
   /// available on this host.
   bool get machineHelperSupported => _uac.isSupported;
+
+  /// Mirror the "Ask before allowing connections" toggle to the SYSTEM-service
+  /// transport (which owns hosting in TransportMode and can't see the app's
+  /// SharedPreferences) by writing %ProgramData%\NeevRemote\consent.txt. On a
+  /// Flutter-hosted box this is a harmless extra write; the in-app dialog still
+  /// governs there.
+  Future<void> syncConsentFlag(bool ask) => writeConsentFlag(ask);
+
+  /// Mirror the host's "View only mode" to the transport (see writeViewOnlyFlag).
+  Future<void> syncViewOnlyFlag(bool viewOnly) => writeViewOnlyFlag(viewOnly);
+
+  /// Mirror Interactive Access ('always' | 'when-open' | 'never').
+  Future<void> syncInteractiveAccess(String mode) =>
+      writeInteractiveAccess(mode);
+
+  /// Mirror both permission profiles. Unattended sessions and interactive ones
+  /// are granted separately: nobody is present to judge an unattended login.
+  Future<void> syncAccessProfiles({
+    required bool unattendedControl,
+    required bool unattendedClipboard,
+    required bool unattendedFiles,
+    required bool interactiveControl,
+    required bool interactiveClipboard,
+    required bool interactiveFiles,
+  }) async {
+    await writeAccessProfile(
+        unattended: true,
+        control: unattendedControl,
+        clipboard: unattendedClipboard,
+        files: unattendedFiles);
+    await writeAccessProfile(
+        unattended: false,
+        control: interactiveControl,
+        clipboard: interactiveClipboard,
+        files: interactiveFiles);
+  }
+
+  /// Host: interactive access policy, mirrored from settings.
+  String interactiveAccess = 'always';
+
+  /// Host: permissions granted to UNATTENDED sessions, mirrored from settings.
+  bool unattendedAllowControl = true;
+  bool unattendedAllowClipboard = true;
+  bool unattendedAllowFiles = true;
 
   /// Fetch the machine-wide id + password from the SYSTEM helper, or null when
   /// the helper isn't reachable. Lets the UI show the shared credentials.
@@ -2042,10 +3085,17 @@ class RemoteService extends ChangeNotifier {
     Uint8List? bytes;
     if (paths != null && index >= 0 && index < paths.length) {
       try {
-        bytes = await XFile(paths[index]).readAsBytes();
-      } catch (_) {}
+        // Verified read: a locked/0-byte source used to be served as a valid
+        // empty clipboard file, so the paste landed as an empty file.
+        bytes = await _readVerified(XFile(paths[index]));
+      } catch (e) {
+        // Was silently swallowed — a failed paste looked identical to a paste
+        // that was simply never made.
+        DiagLog.log('clip', 'clip pull "${paths[index]}" failed: $e');
+      }
     }
     if (bytes == null) {
+      DiagLog.log('clip', 'clip pull token=$token index=$index → reporting failure to peer');
       _sendClipCtl(jsonEncode({
         'k': 'clipfdat',
         'token': token,
@@ -2096,7 +3146,14 @@ class RemoteService extends ChangeNotifier {
       _clipRecv[key] = rec;
     }
     if (rec == null || total != rec.total || seq != rec.next) {
+      // Out-of-order/duplicate chunk: the transfer is unrecoverable. Dropping it
+      // silently left the pending delayed-render paste blocked in the native
+      // layer until the session ended — complete it as a FAILURE so Explorer
+      // returns instead of hanging.
+      DiagLog.log('clip',
+          'clip pull $key aborted: chunk seq=$seq total=$total (expected ${rec?.next}/${rec?.total})');
       _clipRecv.remove(key);
+      _completeClipRecv(token, index, false, null);
       return;
     }
     rec.buf.write(d);
@@ -2240,6 +3297,10 @@ class RemoteService extends ChangeNotifier {
   @override
   void dispose() {
     _statsTimerMaybeStop();
+    // Presence polls every 20s for the lifetime of the app; without this it
+    // outlives the service and keeps writing to a dead socket.
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
     _stopClipboardSync();
     _uac.dispose();
     _sessionWatcher.dispose();

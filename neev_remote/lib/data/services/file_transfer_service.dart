@@ -1,13 +1,19 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:uuid/uuid.dart';
 
+import '../../core/diag_log.dart';
 import 'file_store.dart';
 
 enum FileDirection { incoming, outgoing }
 
-enum FileStatus { active, done, error }
+// active = bytes moving; sent = all bytes delivered to the channel but the host
+// has NOT yet confirmed a distinct file was saved (never show this as success);
+// done = host confirmed the file is fully + uniquely written (or, for an incoming
+// transfer, we wrote it); error = failed/cancelled.
+enum FileStatus { active, sent, done, error }
 
 /// One file transfer, either being sent to or received from the remote peer.
 class FileTransfer {
@@ -31,6 +37,10 @@ class FileTransfer {
   FileStatus status;
   String? savedPath; // where an incoming file landed
   String? error;
+  // Outgoing only: bytes delivered but the host never confirmed within the ack
+  // timeout. Not a failure (it may well have saved) — just not confirmed. Shown
+  // as "Delivered (unconfirmed)" so it never spins "confirming…" forever.
+  bool unconfirmed = false;
   // True when this transfer is a clipboard mirror (copy→paste): the receiver
   // stages it to temp and puts it on the OS clipboard instead of Downloads.
   bool clipboard;
@@ -43,12 +53,29 @@ class _Incoming {
   _Incoming(this.ft) : buf = BytesBuilder(copy: false);
   final FileTransfer ft;
   final BytesBuilder buf;
+  // Bytes at the last {t:'prog'} ack we sent back to the sender, so we ack the
+  // sender's flow-control window about once per _progInterval (not per chunk).
+  int lastProg = 0;
+  /// The sender said it was finished while bytes were still outstanding — its
+  /// control message overtook its own data. Set so the arriving tail knows to
+  /// finalise rather than wait for an 'end' that has already been and gone.
+  bool endSeen = false;
+  /// Bounds that wait, so a genuinely truncated transfer still fails.
+  Timer? tailTimer;
+  // Unique destination path, reserved (atomically created) the MOMENT the offer
+  // arrives — keyed off this transfer, never a shared/reused path. Because the
+  // placeholder exists on disk before the next offer is handled, two rapid
+  // transfers can never resolve to the same name and clobber each other.
+  Future<String>? reserved;
 }
 
 /// Chunked file transfer over a text data channel. Wire messages (all JSON):
 ///   {k:'ft', t:'offer', id, name, size}   announce a transfer
 ///   {k:'ft', t:'data',  id, seq, d}       base64 chunk (ordered)
-///   {k:'ft', t:'end',   id}               transfer complete
+///   {k:'ft', t:'end',   id}               sender finished pushing bytes
+///   {k:'ft', t:'saved', id, path}         RECEIVER→sender: file fully + uniquely
+///                                         written (the only thing that turns a
+///                                         send from "Delivered" into confirmed)
 ///   {k:'ft', t:'cancel',id}               aborted
 /// Phase 1 buffers each transfer in memory (see [maxFile]); streaming to disk
 /// is a later refinement.
@@ -83,8 +110,10 @@ class FileTransferManager {
   /// the ~256 KB channel limit.
   static const int rawChunk = 36 * 1024;
 
-  /// Pause sending while more than this many bytes are queued locally.
-  static const int _highWater = 4 * 1024 * 1024;
+  /// If the receiver stops acking for this long the peer isn't receiving — abort
+  /// the transfer as failed. NEVER force-send into a full buffer (that's what
+  /// corrupted the channel and broke every later transfer).
+  static const Duration _drainTimeout = Duration(seconds: 30);
 
   /// In-memory size cap. Raised to 2 GB (was 200 MB, which silently rejected
   /// real installers — .dmg/.pkg/.exe — so they "failed both ways"). Matches the
@@ -92,9 +121,63 @@ class FileTransferManager {
   /// bytes sit in memory; multi-GB streaming-to-disk is a later refinement.
   static const int maxFile = 2 * 1024 * 1024 * 1024;
 
+  /// How long to wait for outstanding bytes after the sender says it finished.
+  ///
+  /// Only reached when the sender's 'end' overtook its own data. Generous
+  /// enough to cover a slow tail on a large file, bounded so a genuinely
+  /// truncated transfer still fails rather than hanging as "receiving" forever.
+  static const Duration _tailGrace = Duration(seconds: 20);
+
   final _uuid = const Uuid();
   final List<FileTransfer> transfers = [];
   final Map<String, _Incoming> _incoming = {};
+
+  /// Per-transfer ack timers (outgoing). Keyed by transfer id — NEVER a single
+  /// shared slot — so each send independently waits for its own {t:'saved'} and
+  /// each independently falls back to "unconfirmed" if the host never acks.
+  final Map<String, Timer> _ackTimers = {};
+
+  /// How long an outgoing transfer waits for the host's saved-ack before it
+  /// stops showing "confirming…" and settles as delivered-but-unconfirmed.
+  static const Duration _ackTimeout = Duration(seconds: 30);
+
+  /// Receiver-driven flow control (the ONLY reliable backpressure). The viewer's
+  /// SCTP `bufferedAmount` reads 0 on some platforms (flutter_webrtc Windows), so
+  /// the old drain loop never engaged and a large file was dumped whole into the
+  /// ~16 MB SCTP buffer → overflow → the channel/peer tore down and the WHOLE
+  /// session died (large uploads killed everything; small files fit, so they
+  /// "worked"). Instead the RECEIVER acks bytes-written every [_progInterval];
+  /// the sender never runs more than [_sendWindow] ahead of the last ack. This
+  /// paces to the real drain rate on ANY link and can never flood the buffer.
+  static const int _sendWindow = 2 * 1024 * 1024; // 2 MB in flight, max
+  static const int _progInterval = 1024 * 1024; // receiver acks every 1 MB
+  /// Grace before assuming the receiver doesn't ack (older build) and falling
+  /// back to fixed-rate pacing instead of blocking on acks that never come.
+  static const int _noAckGraceMs = 400;
+
+  /// Per outgoing id: bytes the RECEIVER has confirmed writing (from {t:'prog'}),
+  /// and whether any prog ack was ever seen (else the peer is an old build and we
+  /// pace by time instead). Cleared when the transfer settles.
+  final Map<String, int> _sendAcked = {};
+  final Map<String, bool> _sendProgSeen = {};
+
+  /// Record a transfer that failed locally, before a single byte went out (the
+  /// file couldn't be read: locked by another app, or 0 bytes). Nothing is sent
+  /// to the peer — this exists so the failure is VISIBLE in the transfer list
+  /// instead of the file silently never appearing on the other side.
+  void failLocal(String name, String reason) {
+    transfers.insert(
+        0,
+        FileTransfer(
+          id: _uuid.v4(),
+          name: name,
+          size: 0,
+          direction: FileDirection.outgoing,
+          status: FileStatus.error,
+          error: reason,
+        ));
+    onChange();
+  }
 
   /// Send [bytes] as [name] to the peer. Returns the transfer, or null if the
   /// file is too large.
@@ -131,18 +214,62 @@ class FileTransferManager {
       seq++;
       t.transferred = end;
       onChange();
-      // Yield, and back off if the local send buffer is backing up.
+      // Receiver-driven backpressure: never run more than [_sendWindow] ahead of
+      // the bytes the RECEIVER has confirmed writing ({t:'prog'} acks). This is
+      // the real pacing — it adapts to the actual drain rate on any link and can
+      // never dump the whole file into the ~16 MB SCTP buffer (the overflow that
+      // tore down the channel and killed the session). `bufferedAmount` is NOT
+      // used to gate here: it reads 0 on flutter_webrtc Windows, which is exactly
+      // why the old loop never engaged. Yield once so inbound prog acks land.
       await Future<void>.delayed(Duration.zero);
-      var guard = 0;
-      while (buffered() > _highWater && guard < 4000) {
-        await Future<void>.delayed(const Duration(milliseconds: 8));
-        guard++;
+      var stalledMs = 0;
+      while (t.transferred - (_sendAcked[id] ?? 0) > _sendWindow) {
+        if (t.status == FileStatus.error) return t; // cancelled
+        // Older host that never sends prog acks → don't block forever waiting on
+        // acks that won't come; fall back to fixed-rate pacing (still no dump).
+        if (!(_sendProgSeen[id] ?? false) && stalledMs >= _noAckGraceMs) break;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        stalledMs += 10;
+        if ((_sendProgSeen[id] ?? false) &&
+            stalledMs > _drainTimeout.inMilliseconds) {
+          // Receiver WAS acking, then stopped for the whole window → it really
+          // died. Tell the host to drop the partial and fail cleanly.
+          send(jsonEncode({'k': 'ft', 't': 'cancel', 'id': id}));
+          t.status = FileStatus.error;
+          t.error = 'Transfer stalled — the other side stopped receiving.';
+          DiagLog.log('ft', 'send STALLED id=$id at ${t.transferred}/${t.size} '
+              '— no ack progress in ${_drainTimeout.inSeconds}s, cancelled');
+          onChange();
+          return t;
+        }
+      }
+      // No-ack fallback pace: without receiver feedback, cap the raw rate so we
+      // still never flood SCTP (~36 KB / 4 ms ≈ 9 MB/s, steady).
+      if (!(_sendProgSeen[id] ?? false)) {
+        await Future<void>.delayed(const Duration(milliseconds: 4));
       }
     }
     if (t.status == FileStatus.error) return t;
     send(jsonEncode({'k': 'ft', 't': 'end', 'id': id}));
     t.transferred = t.size;
-    t.status = FileStatus.done;
+    // NOT "done" — bytes are on the channel, but the host hasn't confirmed a
+    // distinct file was saved yet. Only a {t:'saved'} ack (handled below) flips
+    // this to done. If the host never acks (e.g. an older build), it stays
+    // "Delivered — confirming…", which is honest, not a false "Sent".
+    t.status = FileStatus.sent;
+    DiagLog.log('ft', 'sent end id=$id name=$name size=${bytes.length}');
+    // Arm a per-id timeout so this transfer can never spin "confirming…"
+    // forever if the ack is lost/never sent — it settles as "unconfirmed".
+    _ackTimers[id]?.cancel();
+    _ackTimers[id] = Timer(_ackTimeout, () {
+      _ackTimers.remove(id);
+      if (t.status == FileStatus.sent) {
+        t.unconfirmed = true;
+        DiagLog.log('ft', 'ack TIMEOUT id=$id — no saved/failed in '
+            '${_ackTimeout.inSeconds}s');
+        onChange();
+      }
+    });
     onChange();
     return t;
   }
@@ -174,7 +301,21 @@ class FileTransferManager {
           return;
         }
         transfers.insert(0, ft);
-        _incoming[id] = _Incoming(ft);
+        final inc = _Incoming(ft);
+        // Reserve a UNIQUE destination now, at offer time (not at 'end'), so the
+        // placeholder is on disk before any later transfer picks a name. This is
+        // what makes rapid back-to-back sends land as separate files instead of
+        // overwriting one shared slot.
+        DiagLog.log('ft', 'recv offer id=$id name=$name size=$size');
+        if (store.supported) {
+          inc.reserved = store.reserveUnique(name);
+          inc.reserved!.then((p) {
+            DiagLog.log('ft', 'reserved id=$id path=$p');
+          }).catchError((e) {
+            DiagLog.log('ft', 'reserve FAILED id=$id err=$e');
+          });
+        }
+        _incoming[id] = inc;
         onChange();
         break;
       case 'data':
@@ -184,17 +325,113 @@ class FileTransferManager {
         final bytes = base64Decode(d);
         inc.buf.add(bytes);
         inc.ft.transferred += bytes.length;
+        // The tail of a transfer whose 'end' already overtook it. Finalise as
+        // soon as the offered byte count is complete, rather than waiting out
+        // the grace timer for a file that has fully arrived.
+        if (inc.endSeen && inc.ft.size > 0 && inc.buf.length >= inc.ft.size) {
+          _incoming.remove(id);
+          inc.tailTimer?.cancel();
+          DiagLog.log('ft', 'tail completed id=$id — finishing');
+          _finishIncoming(inc);
+          return;
+        }
+        // Drive the SENDER's flow control: ack bytes-received every ~1 MB so it
+        // paces to our drain rate instead of dumping the whole file (which
+        // overflowed SCTP and killed the session). Cheap control message.
+        if (inc.ft.transferred - inc.lastProg >= _progInterval) {
+          inc.lastProg = inc.ft.transferred;
+          send(jsonEncode(
+              {'k': 'ft', 't': 'prog', 'id': id, 'recv': inc.ft.transferred}));
+        }
         onChange();
         break;
+      case 'prog':
+        // Sender side: the receiver confirmed it has written this many bytes.
+        // Advances the flow-control window in sendFile so we send more.
+        final recv = m['recv'] as int?;
+        if (recv != null) {
+          _sendProgSeen[id] = true;
+          if (recv > (_sendAcked[id] ?? 0)) _sendAcked[id] = recv;
+        }
+        break;
       case 'end':
-        final inc = _incoming.remove(id);
-        if (inc != null) _finishIncoming(inc);
+        DiagLog.log('ft', 'recv end id=$id');
+        final inc = _incoming[id];
+        if (inc == null) {
+          DiagLog.log('ft', 'recv end id=$id but NO pending incoming (dropped)');
+          break;
+        }
+        // Do NOT finalise on 'end' alone when bytes are still outstanding.
+        //
+        // The sender's control messages and its data can travel independent
+        // priority lanes, so 'end' could arrive ahead of the tail of a large
+        // file. Finalising here wrote a short file and reported an incomplete
+        // transfer — which is how a screen recording, the biggest thing this
+        // moves, failed as a transfer error. Hosts now order 'end' behind the
+        // data, but an older host does not, so wait for the offered byte count
+        // before giving up.
+        if (inc.ft.size > 0 && inc.buf.length < inc.ft.size) {
+          inc.endSeen = true;
+          DiagLog.log('ft',
+              'end arrived early id=$id (${inc.buf.length}/${inc.ft.size}) — '
+              'waiting for the tail');
+          inc.tailTimer?.cancel();
+          inc.tailTimer = Timer(_tailGrace, () {
+            final still = _incoming.remove(id);
+            if (still != null) {
+              DiagLog.log('ft', 'tail never arrived id=$id');
+              _finishIncoming(still); // reports the real shortfall
+            }
+          });
+          break;
+        }
+        _incoming.remove(id);
+        inc.tailTimer?.cancel();
+        _finishIncoming(inc);
+        break;
+      case 'saved':
+        // RECEIVER confirmed a distinct file was fully written. Flip the matching
+        // OUTGOING transfer from "sent" (delivered) to done (confirmed). This is
+        // the ONLY place a send is allowed to show success.
+        DiagLog.log('ft', 'recv saved id=$id');
+        _ackTimers.remove(id)?.cancel();
+        _sendAcked.remove(id);
+        _sendProgSeen.remove(id);
+        for (final tr in transfers) {
+          if (tr.id == id && tr.direction == FileDirection.outgoing) {
+            tr.savedPath = m['path'] as String?;
+            tr.unconfirmed = false;
+            tr.status = FileStatus.done;
+            onChange();
+            break;
+          }
+        }
+        break;
+      case 'failed':
+        // RECEIVER couldn't save (write/reserve error). Surface a real failure
+        // on the sender instead of an endless "confirming…".
+        DiagLog.log('ft', 'recv failed id=$id err=${m['err']}');
+        _ackTimers.remove(id)?.cancel();
+        _sendAcked.remove(id);
+        _sendProgSeen.remove(id);
+        for (final tr in transfers) {
+          if (tr.id == id && tr.direction == FileDirection.outgoing) {
+            tr.status = FileStatus.error;
+            tr.error = (m['err'] as String?) ?? 'Host could not save the file';
+            onChange();
+            break;
+          }
+        }
         break;
       case 'cancel':
         final inc = _incoming.remove(id);
         if (inc != null) {
           inc.ft.status = FileStatus.error;
           inc.ft.error = 'Cancelled by sender';
+          // Drop the empty placeholder we reserved at offer time.
+          if (store.supported) {
+            inc.reserved?.then((p) => store.deleteQuietly(p)).catchError((_) {});
+          }
           onChange();
         }
         break;
@@ -204,31 +441,64 @@ class FileTransferManager {
   Future<void> _finishIncoming(_Incoming inc) async {
     try {
       final bytes = inc.buf.takeBytes();
-      if (inc.ft.clipboard) {
-        // Clipboard mirror: save to Downloads (ALWAYS visible + findable) AND
-        // put it on the OS clipboard for Ctrl+V. Downloads is the reliable
-        // fallback because CF_HDROP clipboard paste is fragile across the
-        // SYSTEM / cross-user boundary, whereas a saved file always lands.
-        String? path;
-        if (store.supported) {
-          path = await store.saveToDownloads(inc.ft.name, bytes);
-        }
-        inc.ft.savedPath = path;
-        if (path != null) await onClipboardFile?.call(path);
-      } else if (store.supported) {
-        inc.ft.savedPath = await store.saveToDownloads(inc.ft.name, bytes);
+      // A short transfer must NOT be saved as a complete file.
+      //
+      // 'end' and the data chunks travel on different priority lanes, so 'end'
+      // can arrive before the tail of a large file. Until now this wrote
+      // whatever had turned up, marked it done, and acked 'saved' — so a
+      // truncated download looked identical to a good one. That matters most
+      // for the biggest thing this app sends: a session recording, which would
+      // simply refuse to play with no indication why.
+      //
+      // This is the receiving half of the bug already fixed on the sending side,
+      // where short reads were being reported as successful transfers.
+      if (inc.ft.size > 0 && bytes.length != inc.ft.size) {
+        throw StateError(
+            'incomplete transfer: received ${bytes.length} of ${inc.ft.size} bytes');
       }
-      inc.ft.transferred = inc.ft.size == 0 ? bytes.length : inc.ft.size;
+      String? path;
+      if (store.supported) {
+        // Write to the destination reserved at offer time (unique per transfer).
+        // Fall back to reserving now only if the offer path somehow wasn't set.
+        path = await (inc.reserved ?? store.reserveUnique(inc.ft.name));
+        await store.writeReserved(path, bytes);
+        DiagLog.log('ft',
+            'wrote id=${inc.ft.id} bytes=${bytes.length} path=$path');
+        // Clipboard mirror also lands in Downloads (always findable) AND on the
+        // OS clipboard for Ctrl+V — CF_HDROP paste is fragile across the
+        // SYSTEM / cross-user boundary, so the saved file is the reliable path.
+        if (inc.ft.clipboard) await onClipboardFile?.call(path);
+      }
+      inc.ft.savedPath = path;
+      // Report what ACTUALLY arrived. This used to assign the offered size
+      // whichever number of bytes turned up, which is how a short file could
+      // show a full progress bar.
+      inc.ft.transferred = bytes.length;
       inc.ft.status = FileStatus.done;
+      // Tell the sender the file is fully + uniquely saved, so its status can go
+      // from "Delivered" to confirmed. Without this the sender can only ever
+      // guess — which is how 4 overwrites previously showed as 5 "Sent".
+      if (path != null) {
+        send(jsonEncode(
+            {'k': 'ft', 't': 'saved', 'id': inc.ft.id, 'path': path}));
+        DiagLog.log('ft', 'ack saved id=${inc.ft.id}');
+      }
     } catch (e) {
       inc.ft.status = FileStatus.error;
       inc.ft.error = e.toString();
+      DiagLog.log('ft', 'receive FAILED id=${inc.ft.id} err=$e');
+      // Tell the sender it failed so it doesn't spin "confirming…" forever.
+      send(jsonEncode(
+          {'k': 'ft', 't': 'failed', 'id': inc.ft.id, 'err': e.toString()}));
     }
     onChange();
   }
 
   void clearFinished() {
-    transfers.removeWhere((t) => t.status != FileStatus.active);
+    // Keep "active" AND "sent" (delivered-but-unconfirmed) rows — only remove
+    // truly finished ones (host-confirmed done, or failed).
+    transfers.removeWhere(
+        (t) => t.status == FileStatus.done || t.status == FileStatus.error);
     onChange();
   }
 }

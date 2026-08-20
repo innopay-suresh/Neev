@@ -110,6 +110,18 @@ class AppSettings {
   final bool askOnConnect; // prompt before allowing an incoming connection
   final bool soundOnConnect; // play a sound on an incoming connection
   final bool defaultAllowControl; // default: let viewers control this device
+
+  /// Interactive Access (AnyDesk model): 'always' | 'when-open' | 'never'.
+  /// 'never' means the unattended password is the ONLY way in — an interactive
+  /// request with the session password is refused rather than prompted.
+  final String interactiveAccess;
+
+  /// Permissions granted to UNATTENDED sessions (no human present to judge).
+  /// Kept separate from interactive sessions so an unmanned machine can be
+  /// handed a narrower grant.
+  final bool unattendedAllowControl;
+  final bool unattendedAllowClipboard;
+  final bool unattendedAllowFiles;
   final bool defaultAllowClipboard; // default: share the clipboard
   final bool defaultAllowFiles; // default: allow file transfer
   final bool lockOnSessionEnd; // lock this device when the last viewer leaves
@@ -129,9 +141,13 @@ class AppSettings {
     // Auto-accept incoming connections by default so a session isn't stuck
     // "Connecting…" waiting for someone to click Accept on the host. Turn on
     // "Ask before allowing connections" in Settings → Security for a prompt.
-    this.askOnConnect = false,
+    this.askOnConnect = true,
     this.soundOnConnect = true,
     this.defaultAllowControl = true,
+    this.interactiveAccess = 'always',
+    this.unattendedAllowControl = true,
+    this.unattendedAllowClipboard = true,
+    this.unattendedAllowFiles = true,
     this.defaultAllowClipboard = true,
     this.defaultAllowFiles = true,
     this.lockOnSessionEnd = false,
@@ -151,6 +167,10 @@ class AppSettings {
     bool? askOnConnect,
     bool? soundOnConnect,
     bool? defaultAllowControl,
+    String? interactiveAccess,
+    bool? unattendedAllowControl,
+    bool? unattendedAllowClipboard,
+    bool? unattendedAllowFiles,
     bool? defaultAllowClipboard,
     bool? defaultAllowFiles,
     bool? lockOnSessionEnd,
@@ -167,6 +187,12 @@ class AppSettings {
       askOnConnect: askOnConnect ?? this.askOnConnect,
       soundOnConnect: soundOnConnect ?? this.soundOnConnect,
       defaultAllowControl: defaultAllowControl ?? this.defaultAllowControl,
+      interactiveAccess: interactiveAccess ?? this.interactiveAccess,
+      unattendedAllowControl:
+          unattendedAllowControl ?? this.unattendedAllowControl,
+      unattendedAllowClipboard:
+          unattendedAllowClipboard ?? this.unattendedAllowClipboard,
+      unattendedAllowFiles: unattendedAllowFiles ?? this.unattendedAllowFiles,
       defaultAllowClipboard:
           defaultAllowClipboard ?? this.defaultAllowClipboard,
       defaultAllowFiles: defaultAllowFiles ?? this.defaultAllowFiles,
@@ -195,6 +221,10 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   static const _kAsk = 'askOnConnect';
   static const _kSound = 'soundOnConnect';
   static const _kPermControl = 'defaultAllowControl';
+  static const _kInteractive = 'interactiveAccess';
+  static const _kUnControl = 'unattendedAllowControl';
+  static const _kUnClip = 'unattendedAllowClipboard';
+  static const _kUnFiles = 'unattendedAllowFiles';
   static const _kPermClip = 'defaultAllowClipboard';
   static const _kPermFiles = 'defaultAllowFiles';
   static const _kLockEnd = 'lockOnSessionEnd';
@@ -212,6 +242,10 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
       askOnConnect: prefs.getBool(_kAsk),
       soundOnConnect: prefs.getBool(_kSound),
       defaultAllowControl: prefs.getBool(_kPermControl),
+      interactiveAccess: prefs.getString(_kInteractive),
+      unattendedAllowControl: prefs.getBool(_kUnControl),
+      unattendedAllowClipboard: prefs.getBool(_kUnClip),
+      unattendedAllowFiles: prefs.getBool(_kUnFiles),
       defaultAllowClipboard: prefs.getBool(_kPermClip),
       defaultAllowFiles: prefs.getBool(_kPermFiles),
       lockOnSessionEnd: prefs.getBool(_kLockEnd),
@@ -230,6 +264,10 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     await prefs.setBool(_kAsk, state.askOnConnect);
     await prefs.setBool(_kSound, state.soundOnConnect);
     await prefs.setBool(_kPermControl, state.defaultAllowControl);
+    await prefs.setString(_kInteractive, state.interactiveAccess);
+    await prefs.setBool(_kUnControl, state.unattendedAllowControl);
+    await prefs.setBool(_kUnClip, state.unattendedAllowClipboard);
+    await prefs.setBool(_kUnFiles, state.unattendedAllowFiles);
     await prefs.setBool(_kPermClip, state.defaultAllowClipboard);
     await prefs.setBool(_kPermFiles, state.defaultAllowFiles);
     await prefs.setBool(_kLockEnd, state.lockOnSessionEnd);
@@ -248,6 +286,21 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
 
   void setAskOnConnect(bool v) {
     state = state.copyWith(askOnConnect: v);
+    _save();
+  }
+
+  /// Interactive Access: 'always' | 'when-open' | 'never'.
+  void setInteractiveAccess(String v) {
+    state = state.copyWith(interactiveAccess: v);
+    _save();
+  }
+
+  void setUnattendedPerms({bool? control, bool? clipboard, bool? files}) {
+    state = state.copyWith(
+      unattendedAllowControl: control,
+      unattendedAllowClipboard: clipboard,
+      unattendedAllowFiles: files,
+    );
     _save();
   }
 

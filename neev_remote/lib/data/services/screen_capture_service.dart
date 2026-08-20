@@ -1,6 +1,23 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+
+/// Thrown when macOS has not granted Screen Recording, so capture cannot start.
+///
+/// This exists because the alternative is not an error — it is a process
+/// abort. See [ScreenCaptureService.getSources].
+class ScreenPermissionDenied implements Exception {
+  const ScreenPermissionDenied();
+
+  @override
+  String toString() =>
+      'Screen Recording permission is required to share this screen. '
+      'Grant it in System Settings → Privacy & Security → Screen Recording, '
+      'then reopen Neev Remote.';
+}
 
 /// A capturable screen/window source on the host.
 class CaptureSource {
@@ -27,8 +44,55 @@ class ScreenCaptureService {
   bool get isCapturing => _isCapturing;
   MediaStream? get stream => _stream;
 
+  static const MethodChannel _permission =
+      MethodChannel('neev_remote/screenpermission');
+
+  /// True when macOS has granted Screen Recording. Always true off macOS.
+  ///
+  /// Checked with CGPreflightScreenCaptureAccess, which never prompts and never
+  /// touches the capture stack.
+  static Future<bool> hasPermission() async {
+    if (kIsWeb || !Platform.isMacOS) return true;
+    try {
+      return await _permission.invokeMethod<bool>('check') ?? false;
+    } catch (_) {
+      // No channel (older build / test harness) — don't block hosting on a
+      // check that isn't there.
+      return true;
+    }
+  }
+
+  /// Shows the macOS Screen Recording prompt. Returns true if already granted.
+  ///
+  /// A FIRST grant does not apply to the running process — macOS only honours
+  /// it for a newly launched one — so callers must still treat capture as
+  /// unavailable until the app restarts.
+  static Future<bool> requestPermission() async {
+    if (kIsWeb || !Platform.isMacOS) return true;
+    try {
+      return await _permission.invokeMethod<bool>('request') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Enumerates available screens (and windows) on the host.
+  ///
+  /// Throws [ScreenPermissionDenied] rather than calling into flutter_webrtc
+  /// without the grant. That call does not fail politely: on a Mac without
+  /// Screen Recording, ObjCDesktopMediaList::UpdateSourceList calls abort() and
+  /// takes the whole app down with SIGABRT. What that looked like in the field
+  /// was not a permission problem at all — the app died the instant hosting
+  /// started, relaunched, re-registered with the relay, and every viewer that
+  /// dialed it hung at "Requesting the device" because the host aborted before
+  /// it could show the consent prompt.
   Future<List<CaptureSource>> getSources({bool includeWindows = false}) async {
+    if (!await hasPermission()) {
+      // Ask once; the answer only takes effect for a new process, so this call
+      // still throws and the caller reports why.
+      await requestPermission();
+      throw const ScreenPermissionDenied();
+    }
     final types = <SourceType>[
       SourceType.Screen,
       if (includeWindows) SourceType.Window,
@@ -50,6 +114,15 @@ class ScreenCaptureService {
   }) async {
     if (_isCapturing) {
       await stopCapture();
+    }
+
+    // Guard here too, not only in getSources: a caller passing an explicit
+    // sourceId (a saved monitor choice, a viewer's monitor switch) would skip
+    // enumeration entirely and reach getDisplayMedia — which aborts just the
+    // same on a Mac without the grant.
+    if (!await hasPermission()) {
+      await requestPermission();
+      throw const ScreenPermissionDenied();
     }
 
     var id = sourceId;

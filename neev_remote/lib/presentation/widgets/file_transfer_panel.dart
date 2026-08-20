@@ -12,17 +12,19 @@ String _fmtBytes(int b) {
   return '$b B';
 }
 
-/// Opens a native file picker and sends the chosen file to the connected peer.
+/// Opens a native MULTI-file picker and queues every chosen file to the peer.
+/// One file failing doesn't stop the rest (the queue is fault-isolated).
 Future<void> pickAndSendFile(BuildContext context, RemoteService service) async {
-  final XFile? file = await openFile();
-  if (file == null) return;
-  final bytes = await file.readAsBytes();
-  final t = await service.sendFile(file.name, bytes);
-  if (t == null && context.mounted) {
+  final List<XFile> files = await openFiles();
+  if (files.isEmpty) return;
+  if (context.mounted && files.length > 1) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('File is too large (200 MB max)')),
+      SnackBar(
+          content: Text('Queued ${files.length} files'),
+          duration: const Duration(seconds: 2)),
     );
   }
+  await service.sendFilesQueued(files);
 }
 
 /// Export (send a file to the other computer) + Import (ask the other computer
@@ -76,7 +78,10 @@ class FileTransferList extends StatelessWidget {
   Widget build(BuildContext context) {
     final transfers = service.fileTransfers;
     if (transfers.isEmpty) return const SizedBox.shrink();
-    final anyDone = transfers.any((t) => t.status != FileStatus.active);
+    // "Clear finished" only removes host-confirmed (done) or failed rows — match
+    // clearFinished(), so it doesn't offer to clear rows it won't actually clear.
+    final anyDone = transfers.any(
+        (t) => t.status == FileStatus.done || t.status == FileStatus.error);
     return Container(
       width: 320,
       constraints: const BoxConstraints(maxHeight: 260),
@@ -137,7 +142,11 @@ class _TransferTile extends StatelessWidget {
       FileStatus.error => t.error ?? 'Failed',
       FileStatus.done => incoming
           ? (t.savedPath != null ? 'Saved to Downloads/NeevRemote' : 'Received')
-          : 'Sent',
+          : 'Saved on host',
+      // Bytes delivered; waiting for the host to confirm the save — or, once the
+      // ack times out, settled as delivered-but-unconfirmed (never spins forever).
+      FileStatus.sent =>
+        t.unconfirmed ? 'Delivered (unconfirmed)' : 'Delivered — confirming…',
       FileStatus.active =>
         '${_fmtBytes(t.transferred)} / ${_fmtBytes(t.size)}',
     };

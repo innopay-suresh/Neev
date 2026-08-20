@@ -29,6 +29,11 @@ const (
 	// Controller → Server
 	MsgConnect  MessageType = "connect"  // controller requests to connect to agentID
 	MsgDiscover MessageType = "discover" // client asks who else is on its network
+	// Presence: "are these specific device ids online right now?" Discovery only
+	// covers machines sharing the requester's public IP, so a saved device on
+	// another network always looked offline — every address-book entry showed
+	// Offline even while it was reachable and being connected to.
+	MsgPresence MessageType = "presence"
 
 	// Server → both peers (SDP / ICE exchange)
 	MsgOffer     MessageType = "offer"     // SDP offer (controller → agent via server)
@@ -36,12 +41,38 @@ const (
 	MsgCandidate MessageType = "candidate" // ICE candidate (either direction)
 
 	// Server → client (control messages)
-	MsgRegistered MessageType = "registered"  // response to register, carries assigned ID
-	MsgClientCert MessageType = "client_cert" // server pushes a new client cert bundle
-	MsgPeers      MessageType = "peers"       // response to discover: same-network hosts
-	MsgError      MessageType = "error"
-	MsgBye        MessageType = "bye" // session ended
+	MsgRegistered     MessageType = "registered"      // response to register, carries assigned ID
+	MsgClientCert     MessageType = "client_cert"     // server pushes a new client cert bundle
+	MsgPeers          MessageType = "peers"           // response to discover: same-network hosts
+	MsgPresenceResult MessageType = "presence_result" // which of the asked-for ids are online
+	MsgError          MessageType = "error"
+	MsgBye            MessageType = "bye" // session ended
+
+	// Custom alias / namespace (roadmap Phase 3)
+	MsgSetAlias      MessageType = "set_alias"      // agent claims a human-readable name
+	MsgResolveAlias  MessageType = "resolve_alias"  // viewer asks: what ID is this alias?
+	MsgAliasResult   MessageType = "alias_result"   // server → agent: set_alias outcome
+	MsgResolveResult MessageType = "resolve_result" // server → viewer: resolved ID (or empty)
 )
+
+// AliasPayload carries an alias for set/resolve requests.
+type AliasPayload struct {
+	Alias string `json:"alias"`
+}
+
+// AliasResultPayload reports a set_alias outcome.
+type AliasResultPayload struct {
+	Alias string `json:"alias"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// ResolveResultPayload returns the ID an alias points to ("" = not found).
+type ResolveResultPayload struct {
+	Alias   string `json:"alias"`
+	AgentID string `json:"agent_id"`
+	Error   string `json:"error,omitempty"`
+}
 
 // Message is the universal signaling envelope.
 type Message struct {
@@ -93,6 +124,33 @@ type client struct {
 	mu        sync.Mutex
 }
 
+
+// normAgentID is the single key form for the agent registry.
+//
+// The relay MINTS ids as NNN-NNN-NNN (see session/registry.go), and the desktop
+// app strips every non-alphanumeric character before dialing one. So a machine
+// registered as "106-198-026" was looked up as "106198026", missed, and the
+// viewer got "agent not found or offline" — while the device list showed it
+// cheerfully Online, because listing reads the registry and dialing reads the
+// map key. It only surfaced once real daemons started hosting: an app-hosted id
+// is nine plain digits, which survives the client's stripping unchanged.
+//
+// Normalizing both sides here fixes every client already installed, without an
+// app update, and is a no-op for ids that were already bare digits.
+func normAgentID(id string) string {
+	var b strings.Builder
+	b.Grow(len(id))
+	for _, r := range id {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		}
+	}
+	return b.String()
+}
+
 func (c *client) send(msg Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -109,7 +167,7 @@ type Hub struct {
 	clientCA *serverauth.ClientCA
 
 	// Brute-force protection: TargetID -> failed attempts
-	failCount map[string]int
+	failCount map[string]failRecord
 	failMutex sync.Mutex
 }
 
@@ -120,7 +178,7 @@ func NewHub(registry *session.Registry, cfg *config.Config, clientCA *serverauth
 		registry:  registry,
 		cfg:       cfg,
 		clientCA:  clientCA,
-		failCount: make(map[string]int),
+		failCount: make(map[string]failRecord),
 	}
 }
 
@@ -216,7 +274,7 @@ func (h *Hub) pushClientCertBundle(agentID string, bundle *serverauth.ClientCert
 		return
 	}
 	h.mu.RLock()
-	cli, ok := h.agents[agentID]
+	cli, ok := h.agents[normAgentID(agentID)]
 	h.mu.RUnlock()
 	if !ok || cli == nil {
 		return
@@ -233,7 +291,7 @@ func (h *Hub) disconnectAgent(agentID, reason string) {
 		return
 	}
 	h.mu.RLock()
-	cli, ok := h.agents[agentID]
+	cli, ok := h.agents[normAgentID(agentID)]
 	h.mu.RUnlock()
 	if !ok || cli == nil || cli.conn == nil {
 		return
@@ -280,8 +338,14 @@ func (h *Hub) HandleWS(c *websocket.Conn) {
 			h.handleConnect(ctx, cli, msg)
 		case MsgDiscover:
 			h.handleDiscover(cli)
+		case MsgPresence:
+			h.handlePresence(cli, msg.Payload)
 		case MsgOffer, MsgAnswer, MsgCandidate:
 			h.handleRelay(ctx, cli, msg)
+		case MsgSetAlias:
+			h.handleSetAlias(ctx, cli, msg)
+		case MsgResolveAlias:
+			h.handleResolveAlias(ctx, cli, msg)
 		case MsgBye:
 			cli.saidBye = true
 			return
@@ -327,7 +391,7 @@ func (h *Hub) handleRegister(ctx context.Context, cli *client, msg Message) {
 	} else if id := strings.TrimSpace(payload.AgentID); id != "" {
 		// Honour a client-supplied persistent ID so an install keeps the same
 		// ID across restarts/reconnects (new or already known). A later
-		// h.agents[id] = cli simply replaces any stale prior connection; that
+		// h.agents[normAgentID(id)] = cli simply replaces any stale prior connection; that
 		// connection's own disconnect is guarded against removing the newer
 		// entry, so re-registration after a dropped session "just works"
 		// without the user having to refresh their ID.
@@ -439,7 +503,7 @@ func (h *Hub) handleRegister(ctx context.Context, cli *client, msg Message) {
 	}
 
 	h.mu.Lock()
-	h.agents[agentID] = cli
+	h.agents[normAgentID(agentID)] = cli
 	h.mu.Unlock()
 
 	payload2, _ := json.Marshal(RegisteredPayload{AgentID: agentID, ClientCert: certBundle})
@@ -456,6 +520,56 @@ func (h *Hub) handleHeartbeat(ctx context.Context, cli *client) {
 	}
 }
 
+// handleSetAlias lets a registered agent claim a human-readable name (Phase 3).
+func (h *Hub) handleSetAlias(ctx context.Context, cli *client, msg Message) {
+	if cli.agentID == "" {
+		_ = cli.send(errMsg("register before setting an alias"))
+		return
+	}
+	var p AliasPayload
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		_ = cli.send(errMsg("invalid set_alias payload"))
+		return
+	}
+	res := AliasResultPayload{}
+	if strings.TrimSpace(p.Alias) == "" {
+		// Empty alias clears it.
+		if err := h.registry.ClearAlias(ctx, cli.agentID); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+		}
+	} else if err := h.registry.SetAlias(ctx, cli.agentID, p.Alias); err != nil {
+		res.Alias = p.Alias
+		res.Error = err.Error()
+	} else {
+		norm, _ := session.NormalizeAlias(p.Alias)
+		res.Alias = norm
+		res.OK = true
+	}
+	body, _ := json.Marshal(res)
+	_ = cli.send(Message{Type: MsgAliasResult, Payload: body})
+}
+
+// handleResolveAlias answers "what agent ID does this alias point to?" (Phase 3).
+// Anyone may resolve — an alias is a public dialing name, like DNS.
+func (h *Hub) handleResolveAlias(ctx context.Context, cli *client, msg Message) {
+	var p AliasPayload
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		_ = cli.send(errMsg("invalid resolve_alias payload"))
+		return
+	}
+	res := ResolveResultPayload{Alias: p.Alias}
+	id, err := h.registry.ResolveAlias(ctx, p.Alias)
+	if err != nil {
+		res.Error = err.Error()
+	} else {
+		res.AgentID = id // "" when not found
+	}
+	body, _ := json.Marshal(res)
+	_ = cli.send(Message{Type: MsgResolveResult, Payload: body})
+}
+
 func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	var payload ConnectPayload
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -464,10 +578,20 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	}
 
 	h.failMutex.Lock()
-	fails := h.failCount[payload.TargetID]
+	rec := h.failCount[payload.TargetID]
+	// Failures EXPIRE. Without this the counter only ever reset on a correct
+	// password — but the check below runs BEFORE the password is verified, so
+	// once a target reached 5 failures nothing could ever clear it and that
+	// machine became permanently unreachable until the relay restarted. A stale
+	// saved password was enough to brick a device for good.
+	if !rec.last.IsZero() && time.Since(rec.last) > failWindow {
+		rec = failRecord{}
+		delete(h.failCount, payload.TargetID)
+	}
+	locked := rec.count >= maxConnectFails && time.Since(rec.last) < lockoutFor
 	h.failMutex.Unlock()
 
-	if fails >= 5 {
+	if locked {
 		_ = h.registry.AddAuditEvent(ctx, &session.AuditEvent{
 			Type:    "session.connect",
 			Actor:   cli.agentID,
@@ -476,9 +600,11 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 			IP:      cli.conn.RemoteAddr().String(),
 			Details: map[string]any{"reason": "too_many_failed_attempts"},
 		})
-		_ = cli.send(errMsg("too many failed attempts. Try again later."))
-		// Exponential backoff or simple lockout could be added here
-		time.Sleep(2 * time.Second)
+		wait := int((lockoutFor - time.Since(rec.last)).Seconds()) + 1
+		// Say HOW LONG. "Try again later" with no number, on a lockout that in
+		// practice never ended, gave the user nothing to act on.
+		_ = cli.send(errMsg(fmt.Sprintf(
+			"too many failed attempts — try again in %d seconds", wait)))
 		return
 	}
 
@@ -498,13 +624,26 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	}
 
 	// Verify Argon2id password hash against either the session hash or the unattended hash
+	// Track WHICH credential authenticated. The host needs this: an unattended
+	// login is meant to proceed with no prompt (nobody may be at the machine),
+	// while a session-password login is an interactive request that a person
+	// should still be able to accept or refuse. The relay knew this all along
+	// and discarded it, which forced the host into a single all-or-nothing
+	// "ask everyone / ask nobody" switch.
+	authMode := "session"
 	ok, err := auth.VerifyPassword(payload.PasswordHash, info.PasswordHash)
 	if (err != nil || !ok) && info.UnattendedHash != "" {
 		ok, err = auth.VerifyPassword(payload.PasswordHash, info.UnattendedHash)
+		if err == nil && ok {
+			authMode = "unattended"
+		}
 	}
 	if err != nil || !ok {
 		h.failMutex.Lock()
-		h.failCount[payload.TargetID]++
+		r := h.failCount[payload.TargetID]
+		r.count++
+		r.last = time.Now()
+		h.failCount[payload.TargetID] = r
 		h.failMutex.Unlock()
 		log.Warn().Str("target", payload.TargetID).Str("ip", cli.conn.RemoteAddr().String()).Msg("invalid password attempt")
 		_ = h.registry.AddAuditEvent(ctx, &session.AuditEvent{
@@ -525,7 +664,7 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	h.failMutex.Unlock()
 
 	h.mu.RLock()
-	target, targetOk := h.agents[payload.TargetID]
+	target, targetOk := h.agents[normAgentID(payload.TargetID)]
 	h.mu.RUnlock()
 
 	if !targetOk {
@@ -574,11 +713,17 @@ func (h *Hub) handleConnect(ctx context.Context, cli *client, msg Message) {
 	target.sessionID = createdSession.ID
 
 	h.mu.Lock()
-	h.agents[controllerID] = cli
+	h.agents[normAgentID(controllerID)] = cli
 	h.mu.Unlock()
 
-	// Forward connect request to the target agent — it will show a consent prompt or just accept.
-	connectFwd, _ := json.Marshal(payload)
+	// Forward connect request to the target agent — it will show a consent prompt
+	// or just accept, depending on how the controller authenticated (above).
+	fwd := map[string]any{}
+	if raw, e := json.Marshal(payload); e == nil {
+		_ = json.Unmarshal(raw, &fwd)
+	}
+	fwd["auth"] = authMode
+	connectFwd, _ := json.Marshal(fwd)
 	_ = target.send(Message{
 		Type:    MsgConnect,
 		From:    controllerID,
@@ -646,6 +791,65 @@ func (h *Hub) handleDiscover(cli *client) {
 	_ = cli.send(Message{Type: MsgPeers, Payload: payload})
 }
 
+// maxPresenceIDs caps one request. A device id is the only thing needed to ask,
+// so an uncapped query would let a caller sweep the id space for live machines;
+// this keeps a request to the size of a real address book.
+const maxPresenceIDs = 200
+
+// Connect rate limiting.
+const (
+	// maxConnectFails is how many bad passwords trip the lockout.
+	maxConnectFails = 5
+	// lockoutFor is how long a tripped target refuses connects. Long enough to
+	// make guessing impractical, short enough that a user who fixed their
+	// password is not stuck waiting.
+	lockoutFor = 60 * time.Second
+	// failWindow forgets old failures entirely, so occasional typos spread over
+	// a long session never accumulate into a lockout.
+	failWindow = 10 * time.Minute
+)
+
+// failRecord tracks failed connect attempts for one target.
+type failRecord struct {
+	count int
+	last  time.Time
+}
+
+// handlePresence answers "which of these ids are online?" for ids the caller
+// already knows. Unlike discovery it is not limited to the caller's public IP —
+// that limit is why saved devices on other networks always showed as offline —
+// but it deliberately answers ONLY about ids that were asked for, so nothing is
+// enumerable and no list of machines is ever handed out.
+func (h *Hub) handlePresence(cli *client, raw json.RawMessage) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return
+	}
+	if len(req.IDs) > maxPresenceIDs {
+		req.IDs = req.IDs[:maxPresenceIDs]
+	}
+	online := make([]string, 0, len(req.IDs))
+	h.mu.RLock()
+	for _, id := range req.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		other, ok := h.agents[normAgentID(id)]
+		// Only registered HOSTS count as present; a controller being connected
+		// says nothing about whether that machine can be reached.
+		if !ok || other.conn == nil || other.role != "agent" {
+			continue
+		}
+		online = append(online, id)
+	}
+	h.mu.RUnlock()
+	payload, _ := json.Marshal(map[string]any{"online": online})
+	_ = cli.send(Message{Type: MsgPresenceResult, Payload: payload})
+}
+
 // hostOnly strips the port from an "ip:port" (v4 or v6) address.
 func hostOnly(addr string) string {
 	if addr == "" {
@@ -662,7 +866,7 @@ func (h *Hub) handleRelay(ctx context.Context, cli *client, msg Message) {
 		return
 	}
 	h.mu.RLock()
-	dest, ok := h.agents[msg.To]
+	dest, ok := h.agents[normAgentID(msg.To)]
 	h.mu.RUnlock()
 	if !ok {
 		_ = cli.send(errMsg("destination not connected"))
@@ -678,8 +882,8 @@ func (h *Hub) disconnect(ctx context.Context, cli *client) {
 	}
 	shouldClear := false
 	h.mu.Lock()
-	if current, ok := h.agents[cli.agentID]; ok && current == cli {
-		delete(h.agents, cli.agentID)
+	if current, ok := h.agents[normAgentID(cli.agentID)]; ok && current == cli {
+		delete(h.agents, normAgentID(cli.agentID))
 		shouldClear = true
 	}
 	h.mu.Unlock()
@@ -708,7 +912,7 @@ func (h *Hub) disconnect(ctx context.Context, cli *client) {
 	// the latter.
 	peerID := peerOf(cli.agentID)
 	h.mu.RLock()
-	peer, ok := h.agents[peerID]
+	peer, ok := h.agents[normAgentID(peerID)]
 	h.mu.RUnlock()
 	if ok {
 		reason := "peer_dropped"

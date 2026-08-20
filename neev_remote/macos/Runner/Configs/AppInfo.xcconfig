@@ -5,7 +5,9 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = neev_remote
+// Shown by Spotlight, Finder and the Dock. It was the Flutter package name,
+// so the app listed itself as "neev_remote". No space, matching the wordmark.
+PRODUCT_NAME = NeevRemote
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = com.neev.neevRemote

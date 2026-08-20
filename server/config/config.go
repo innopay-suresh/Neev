@@ -21,8 +21,14 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host              string   `yaml:"host"`
-	Port              int      `yaml:"port"`
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+	// TLSPort, when >0 with TLSCert/TLSKey set, adds a SECOND listener speaking
+	// wss on this port WITHOUT disturbing the plaintext ws:// listener on Port.
+	// This is what lets us roll out TLS without a flag-day: legacy ws:// clients
+	// keep using Port while new builds move to wss on TLSPort; Port is retired
+	// only once every client is migrated. (Phase 1 security rollout.)
+	TLSPort           int      `yaml:"tls_port"`
 	TLSCert           string   `yaml:"tls_cert"`
 	TLSKey            string   `yaml:"tls_key"`
 	TLSClientCA       string   `yaml:"tls_client_ca"`

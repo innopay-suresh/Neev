@@ -43,9 +43,16 @@
     <true/>
     <key>ProcessType</key>
     <string>Interactive</string>
-    <key>StandardErrorPath</key>
-    <string>/Library/Application Support/NeevRemote/worker.err.log</string>
-    <key>StandardOutPath</key>
-    <string>/Library/Application Support/NeevRemote/worker.out.log</string>
+    <!-- NO StandardOutPath/StandardErrorPath.
+         This agent runs as the LOGGED-IN USER (Aqua), but
+         /Library/Application Support/NeevRemote is created by the installer as
+         root and is not user-writable. launchd could not create the log files,
+         so it failed the job during setup with EX_CONFIG (78) BEFORE ever
+         running the binary — the worker never started, there was no capture,
+         and a session stalled right after the host accepted it. The transport
+         hid the problem by working fine, because it runs as root.
+         The agent does its own file logging and already falls back to a
+         per-user temp file when the shared directory is not writable, so
+         nothing is lost by leaving this to it. -->
 </dict>
 </plist>

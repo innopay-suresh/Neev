@@ -4,9 +4,11 @@
 package input
 
 import (
-	"log"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 /*
@@ -31,14 +33,29 @@ static double getScreenHeight() {
     return CGRectGetHeight(CGDisplayBounds(CGMainDisplayID()));
 }
 
+// Stamp every event WE inject so privacy mode's input tap can tell remote input
+// (let through) from the local user's physical input (blocked). Must match
+// NEEV_INJECTED_TAG in privacy_darwin.go and InputInjector.injectedTag in the app.
+#define NEEV_INJECTED_TAG 0x4E56494E4ALL
+
+static void neev_tag_injected(CGEventRef e) {
+    CGEventSetIntegerValueField(e, kCGEventSourceUserData, NEEV_INJECTED_TAG);
+}
+
 static void injectMouseMove(double x, double y) {
     CGPoint pt = CGPointMake(x, y);
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, pt, kCGMouseButtonLeft);
     if (event) {
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
 }
+
+// gInjectFlags mirrors the held modifiers for MOUSE events, so Command-click
+// and Shift-click behave as the viewer intends rather than as bare clicks.
+static uint64_t gInjectFlags = 0;
+static void setInjectFlags(uint64_t f) { gInjectFlags = f; }
 
 static void injectMouseButton(int button, int isDown, double x, double y) {
     CGEventType eventType;
@@ -53,6 +70,8 @@ static void injectMouseButton(int button, int isDown, double x, double y) {
     CGPoint pt = CGPointMake(x, y);
     CGEventRef event = CGEventCreateMouseEvent(NULL, eventType, pt, (CGMouseButton)button);
     if (event) {
+        if (gInjectFlags) CGEventSetFlags(event, (CGEventFlags)gInjectFlags);
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
@@ -61,14 +80,23 @@ static void injectMouseButton(int button, int isDown, double x, double y) {
 static void injectScroll(int dx, int dy) {
     CGEventRef event = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitLine, 2, dy, dx);
     if (event) {
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
 }
 
-static void injectKey(int keyCode, int isDown) {
+// flags carries the CURRENTLY HELD modifiers.
+//
+// A synthetic key event does not inherit them. Posting Command-down and then
+// C-down produced a plain "c": every shortcut on a Mac host was dead, while
+// right-click menu copy worked because it involves no modifier. CGEventSetFlags
+// is the only thing that binds them together.
+static void injectKeyFlags(int keyCode, int isDown, uint64_t flags) {
     CGEventRef event = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)keyCode, isDown ? true : false);
     if (event) {
+        if (flags) CGEventSetFlags(event, (CGEventFlags)flags);
+        neev_tag_injected(event);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
@@ -79,7 +107,45 @@ import "C"
 var (
 	initOnce      sync.Once
 	hasPermission int32
+	// lastPermCheck is the last time Accessibility was re-read, and lastDropLog
+	// the last time a dropped-input warning was written.
+	lastPermCheck atomic.Int64
+	lastDropLog   atomic.Int64
 )
+
+// permRecheckEvery bounds how often AXIsProcessTrustedWithOptions is called on
+// the input path. The check is cheap, but input arrives at mouse-move rates.
+const permRecheckEvery = 2 * time.Second
+
+// accessibilityGranted re-reads the CURRENT Accessibility state, never
+// prompting.
+//
+// This used to be read ONCE at startup and cached forever. A worker that
+// started before the grant applied therefore dropped every mouse and keyboard
+// event for the rest of its life, silently — InjectEvent returned nil, so
+// nothing upstream ever saw a failure. What the user experienced was video
+// arriving normally with clicks doing nothing, and no log line anywhere saying
+// why. The original caching existed to avoid prompt spam, which is preserved
+// here by passing promptUser=0: this asks, it never prompts.
+func accessibilityGranted() bool {
+	now := time.Now().UnixNano()
+	if atomic.LoadInt32(&hasPermission) == 1 {
+		return true // a granted state never revokes itself mid-session
+	}
+	last := lastPermCheck.Load()
+	if now-last < int64(permRecheckEvery) {
+		return false
+	}
+	if !lastPermCheck.CompareAndSwap(last, now) {
+		return false // another goroutine is checking
+	}
+	if C.checkAccessibility(0) == 1 {
+		atomic.StoreInt32(&hasPermission, 1)
+		log.Info().Msg("input: Accessibility granted — viewer clicks and keys now reach this Mac")
+		return true
+	}
+	return false
+}
 
 // darwinInjector implements Injector using macOS Core Graphics CGEvent API.
 type darwinInjector struct {
@@ -89,27 +155,39 @@ type darwinInjector struct {
 
 func newPlatformInjector() (Injector, error) {
 	initOnce.Do(func() {
-		log.Println("[input] macOS input injector initialized - testing Accessibility permission...")
-		ret := C.checkAccessibility(1)
-		if ret == 1 {
+		// zerolog, not the stdlib logger: setupFileLog only redirects zerolog,
+		// so stdlib output went to a stderr that a LaunchAgent discards. The one
+		// message that says whether input can work at all was written to
+		// nowhere, which is why "clicks do nothing" could not be diagnosed from
+		// the logs.
+		if C.checkAccessibility(1) == 1 {
 			atomic.StoreInt32(&hasPermission, 1)
-			log.Println("[input] ✅ Accessibility permission available")
+			log.Info().Msg("input: Accessibility granted — viewer input will reach this Mac")
 		} else {
 			atomic.StoreInt32(&hasPermission, 0)
-			log.Println("[input] ⚠️  Accessibility permission denied - input injection disabled")
+			log.Error().Msg("input: NO ACCESSIBILITY PERMISSION — viewer clicks and keys will " +
+				"do nothing. Grant Accessibility to /Library/Application Support/NeevRemote/" +
+				"neev-agent in System Settings → Privacy & Security. Re-checked automatically; " +
+				"no restart needed once granted")
 		}
 	})
 
 	w := float64(C.getScreenWidth())
 	h := float64(C.getScreenHeight())
-	log.Printf("[input] Configured for screen size: %.0fx%.0f\n", w, h)
+	log.Info().Float64("width", w).Float64("height", h).Msg("input: injector configured for screen size")
 	return &darwinInjector{screenWidth: w, screenHeight: h}, nil
 }
 
 func (d *darwinInjector) InjectEvent(e Event) error {
-	if atomic.LoadInt32(&hasPermission) == 0 {
-		// Do not dynamically check; if the OS doesn't recognize the signature,
-		// calling checkAccessibility repeatedly can spam the user with prompts.
+	if !accessibilityGranted() {
+		// Say so, at most once a minute. Silently discarding input is what made
+		// this cost a day: every layer above reported success.
+		now := time.Now().UnixNano()
+		if last := lastDropLog.Load(); now-last > int64(time.Minute) &&
+			lastDropLog.CompareAndSwap(last, now) {
+			log.Error().Msg("input: DROPPING viewer input — no Accessibility permission for " +
+				"/Library/Application Support/NeevRemote/neev-agent")
+		}
 		return nil
 	}
 
@@ -126,7 +204,9 @@ func (d *darwinInjector) InjectEvent(e Event) error {
 	case EventKeyDown, EventKeyUp:
 		isDown := e.Type == EventKeyDown
 		cgCode := mapJSCodeToCG(e.Code, e.KeyCode)
-		C.injectKey(C.int(cgCode), C.int(boolToInt(isDown)))
+		flags := trackModifier(cgCode, isDown)
+		C.setInjectFlags(C.uint64_t(flags))
+		C.injectKeyFlags(C.int(cgCode), C.int(boolToInt(isDown)), C.uint64_t(flags))
 	case EventKeyChar:
 		return nil
 	}
@@ -139,7 +219,12 @@ func (d *darwinInjector) denormalize(nx, ny float64) (float64, float64) {
 	return x, y
 }
 
-func (d *darwinInjector) Close() error { return nil }
+// Close releases any modifier still held, so a session that ends mid-shortcut
+// cannot leave the host with Command stuck down.
+func (d *darwinInjector) Close() error {
+	releaseAllModifiers()
+	return nil
+}
 
 func boolToInt(b bool) int {
 	if b {
@@ -173,4 +258,69 @@ func mapJSCodeToCG(code string, fallback int) int {
 	}
 	// Fallback to basic mapping if code is empty (though it will likely be wrong for letters)
 	return fallback
+}
+
+// Modifier tracking.
+//
+// macOS does not derive a synthetic event's modifiers from previously posted
+// key events — each event carries its own flags. Without this, every keyboard
+// shortcut on a Mac host silently degraded to the bare key: Command-C copied
+// nothing, and the viewer had no way to tell.
+const (
+	cgFlagAlphaShift = 0x00010000 // caps lock
+	cgFlagShift      = 0x00020000
+	cgFlagControl    = 0x00040000
+	cgFlagAlternate  = 0x00080000 // option
+	cgFlagCommand    = 0x00100000
+)
+
+// heldFlags is the set of modifiers currently down, as CGEventFlags bits.
+var heldFlags atomic.Uint64
+
+// modifierBit maps a macOS virtual keycode to the flag it contributes, or 0.
+func modifierBit(cgCode int) uint64 {
+	switch cgCode {
+	case 55, 54: // left / right Command
+		return cgFlagCommand
+	case 56, 60: // left / right Shift
+		return cgFlagShift
+	case 58, 61: // left / right Option
+		return cgFlagAlternate
+	case 59, 62: // left / right Control
+		return cgFlagControl
+	case 57: // Caps Lock
+		return cgFlagAlphaShift
+	}
+	return 0
+}
+
+// trackModifier updates the held set for a key transition and returns the flags
+// that should be attached to this and subsequent events.
+//
+// A modifier's OWN key-down must already carry its bit — macOS expects the
+// Command-down event itself to have the Command flag set — so the set is
+// updated before the value is returned.
+func trackModifier(cgCode int, down bool) uint64 {
+	bit := modifierBit(cgCode)
+	if bit == 0 {
+		return heldFlags.Load()
+	}
+	for {
+		cur := heldFlags.Load()
+		next := cur | bit
+		if !down {
+			next = cur &^ bit
+		}
+		if heldFlags.CompareAndSwap(cur, next) {
+			return next
+		}
+	}
+}
+
+// releaseAllModifiers clears the held set. Called when a session ends so a
+// modifier held at disconnect cannot leave the host stuck with, say, Command
+// down forever.
+func releaseAllModifiers() {
+	heldFlags.Store(0)
+	C.setInjectFlags(0)
 }

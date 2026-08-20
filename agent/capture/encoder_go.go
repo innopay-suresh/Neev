@@ -1,10 +1,9 @@
-//go:build cgo && (darwin || linux)
-// +build cgo,darwin linux
+//go:build cgo && linux
+// +build cgo,linux
 
 package capture
 
 /*
-#cgo darwin  pkg-config: libavcodec libavutil libswscale x264
 #cgo linux   pkg-config: libavcodec libavutil libswscale x264
 
 #include "encoder.h"

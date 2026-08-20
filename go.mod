@@ -4,6 +4,7 @@ go 1.23.0
 
 require (
 	github.com/atotto/clipboard v0.1.4
+	github.com/gen2brain/malgo v0.11.25
 	github.com/gofiber/fiber/v2 v2.52.5
 	github.com/gofiber/websocket/v2 v2.2.1
 	github.com/gorilla/websocket v1.5.3
@@ -17,6 +18,7 @@ require (
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/crypto v0.38.0
 	gopkg.in/yaml.v3 v3.0.1
+	layeh.com/gopus v0.0.0-20210501142526-1ee02d434e32
 )
 
 require (

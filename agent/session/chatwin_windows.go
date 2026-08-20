@@ -19,21 +19,23 @@ import (
 // → viewers. The viewer, controlling the host, can also see/use it on-screen.
 
 var (
-	modUser32Chat        = syscall.NewLazyDLL("user32.dll")
-	procCreateWindowExWC = modUser32Chat.NewProc("CreateWindowExW")
-	procDefWindowProcWC  = modUser32Chat.NewProc("DefWindowProcW")
-	procRegisterClassWC  = modUser32Chat.NewProc("RegisterClassW")
-	procShowWindowC      = modUser32Chat.NewProc("ShowWindow")
-	procMoveWindowC      = modUser32Chat.NewProc("MoveWindow")
-	procSendMessageWC    = modUser32Chat.NewProc("SendMessageW")
-	procGetWindowTextWC  = modUser32Chat.NewProc("GetWindowTextW")
-	procSetWindowTextWC  = modUser32Chat.NewProc("SetWindowTextW")
-	procGetClientRectC   = modUser32Chat.NewProc("GetClientRect")
-	procPeekMessageWC    = modUser32Chat.NewProc("PeekMessageW")
+	modUser32Chat         = syscall.NewLazyDLL("user32.dll")
+	procCreateWindowExWC  = modUser32Chat.NewProc("CreateWindowExW")
+	procDefWindowProcWC   = modUser32Chat.NewProc("DefWindowProcW")
+	procRegisterClassWC   = modUser32Chat.NewProc("RegisterClassW")
+	procShowWindowC       = modUser32Chat.NewProc("ShowWindow")
+	procSetForegroundWC   = modUser32Chat.NewProc("SetForegroundWindow")
+	procBringToTopC       = modUser32Chat.NewProc("BringWindowToTop")
+	procMoveWindowC       = modUser32Chat.NewProc("MoveWindow")
+	procSendMessageWC     = modUser32Chat.NewProc("SendMessageW")
+	procGetWindowTextWC   = modUser32Chat.NewProc("GetWindowTextW")
+	procSetWindowTextWC   = modUser32Chat.NewProc("SetWindowTextW")
+	procGetClientRectC    = modUser32Chat.NewProc("GetClientRect")
+	procPeekMessageWC     = modUser32Chat.NewProc("PeekMessageW")
 	procTranslateMessageC = modUser32Chat.NewProc("TranslateMessage")
 	procDispatchMessageWC = modUser32Chat.NewProc("DispatchMessageW")
-	procLoadCursorWC     = modUser32Chat.NewProc("LoadCursorW")
-	procGetStockObjectC  = syscall.NewLazyDLL("gdi32.dll").NewProc("GetStockObject")
+	procLoadCursorWC      = modUser32Chat.NewProc("LoadCursorW")
+	procGetStockObjectC   = syscall.NewLazyDLL("gdi32.dll").NewProc("GetStockObject")
 	procGetModuleHandleWC = syscall.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW")
 )
 
@@ -90,9 +92,15 @@ func chatShow(text string) {
 }
 
 // chatEnsureShown pops the window to the foreground when a message arrives.
+// Force it visible AND foreground/top — the plain ShowWindow could leave it
+// behind other windows or minimised, which reads as "message received but no
+// popup". SW_RESTORE (9) un-minimises; SetForegroundWindow + BringWindowToTop
+// raise it.
 func chatEnsureShown() {
 	if chatParent != 0 {
-		procShowWindowC.Call(chatParent, swShow)
+		procShowWindowC.Call(chatParent, 9 /*SW_RESTORE*/)
+		procBringToTopC.Call(chatParent)
+		procSetForegroundWC.Call(chatParent)
 	}
 }
 

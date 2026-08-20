@@ -4,13 +4,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -23,15 +24,31 @@ import (
 // the user's desktop and streams the chosen file back. The 'file' channel is
 // reliable + ordered, so chunks arrive/append in order.
 type fileReceiver struct {
-	conn net.Conn // to send export data back to the transport
+	conn *ipc.Conn // acks/export back to the transport (writes serialized)
 	mu   sync.Mutex
-	open map[string]*os.File
+	open map[string]*recvFile
 	dir  string
 	seq  atomic.Uint64
 }
 
-func newFileReceiver(conn net.Conn) *fileReceiver {
-	return &fileReceiver{conn: conn, open: map[string]*os.File{}, dir: downloadsDir()}
+// recvFile tracks one in-flight incoming transfer: the open handle, its final
+// unique path, the announced size, and bytes written so far — so 'end' can
+// verify the file is complete (not silently truncated) before acking.
+type recvFile struct {
+	f        *os.File
+	path     string
+	size     int64
+	written  int64
+	lastLog  int64 // bytes at last progress log (so a stalled large file is visible)
+	lastProg int64 // bytes at last {t:prog} ack sent to the viewer (flow control)
+}
+
+func newFileReceiver(conn *ipc.Conn) *fileReceiver {
+	return &fileReceiver{
+		conn: conn,
+		open: map[string]*recvFile{},
+		dir:  downloadsDir(),
+	}
 }
 
 // downloadsDir returns the user's Downloads folder (the worker runs as that
@@ -71,10 +88,13 @@ func (f *fileReceiver) handle(payload []byte) bool {
 		file, err := os.Create(path)
 		if err != nil {
 			log.Warn().Err(err).Str("name", m.Name).Msg("worker: create received file failed")
+			// Tell the viewer immediately instead of leaving it to time out.
+			f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": m.ID,
+				"err": "host could not create the file"})
 			return true
 		}
 		f.mu.Lock()
-		f.open[m.ID] = file
+		f.open[m.ID] = &recvFile{f: file, path: path, size: m.Size}
 		f.mu.Unlock()
 		log.Info().Str("path", path).Int64("size", m.Size).Msg("worker: receiving file")
 	case "data":
@@ -83,27 +103,154 @@ func (f *fileReceiver) handle(payload []byte) bool {
 			return true
 		}
 		f.mu.Lock()
-		file := f.open[m.ID]
+		rf := f.open[m.ID]
 		f.mu.Unlock()
-		if file != nil {
-			_, _ = file.Write(raw)
+		if rf != nil {
+			n, werr := rf.f.Write(raw)
+			rf.written += int64(n)
+			if werr != nil {
+				log.Warn().Err(werr).Str("id", m.ID).Msg("worker: write received chunk failed")
+				f.fail(m.ID, "write error: "+werr.Error())
+				return true
+			}
+			// Flow-control ack every ~1 MB: tell the viewer how much we've written
+			// so it paces to our real drain rate instead of dumping the whole file
+			// into the ~16 MB SCTP buffer (that overflow tore down the channel and
+			// killed the session — large uploads died, small ones fit). Small hi-
+			// lane message; ordered after the chunk it acks.
+			if rf.written-rf.lastProg >= 1024*1024 {
+				rf.lastProg = rf.written
+				f.sendFT(map[string]interface{}{"k": "ft", "t": "prog",
+					"id": m.ID, "recv": rf.written})
+			}
+			if rf.written-rf.lastLog >= 8*1024*1024 {
+				// Progress every ~8 MB so a large-file receive is observable and a
+				// stall shows exactly how far it got.
+				rf.lastLog = rf.written
+				log.Info().Str("id", m.ID).Int64("written", rf.written).Int64("size", rf.size).
+					Msg("worker: receiving file progress")
+			}
 		}
-	case "end", "cancel":
+	case "end":
 		f.mu.Lock()
-		file := f.open[m.ID]
+		rf := f.open[m.ID]
 		delete(f.open, m.ID)
 		f.mu.Unlock()
-		if file != nil {
-			_ = file.Close()
-			log.Info().Str("id", m.ID).Str("t", m.T).Msg("worker: file transfer finished")
+		if rf == nil {
+			return true
+		}
+		_ = rf.f.Close()
+		// Truncation guard: if what we wrote doesn't match the announced size, the
+		// transfer was interrupted — report FAILED and delete the partial file
+		// rather than leave corrupt data on disk that looks like a real download.
+		// NOTE: compare unconditionally. The old `rf.size > 0 &&` escape meant a
+		// transfer that DECLARED 0 bytes skipped verification entirely and was
+		// logged "file transfer finished" — that is how an in-use/locked source
+		// file (worker.log, a spreadsheet open in Excel) arrived as a silent
+		// 0-byte "success". A genuinely empty file still passes (0 == 0).
+		if rf.written != rf.size {
+			_ = os.Remove(rf.path)
+			log.Warn().Str("id", m.ID).Int64("want", rf.size).Int64("got", rf.written).
+				Msg("worker: incomplete file — reporting failed")
+			f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": m.ID,
+				"err": fmt.Sprintf("incomplete: received %d of %d bytes", rf.written, rf.size)})
+			return true
+		}
+		log.Info().Str("id", m.ID).Str("path", rf.path).Int64("size", rf.written).
+			Msg("worker: file transfer finished")
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "saved", "id": m.ID, "path": rf.path})
+	case "cancel":
+		f.mu.Lock()
+		rf := f.open[m.ID]
+		delete(f.open, m.ID)
+		f.mu.Unlock()
+		if rf != nil {
+			_ = rf.f.Close()
+			_ = os.Remove(rf.path) // don't leave a partial from a cancelled transfer
+			log.Info().Str("id", m.ID).Msg("worker: file transfer cancelled")
 		}
 	case "request":
 		// Viewer asked the host for a file → pop a native picker on the host
 		// desktop and stream the selection back. Runs off the reader goroutine so
 		// the blocking modal dialog doesn't stall inbound messages.
+		log.Info().Msg("worker: export requested by viewer — opening host file picker")
 		go f.serveExport()
 	}
 	return true
+}
+
+// ExportFileStreaming sends a file to the viewer without a picker, reading it
+// in chunks rather than whole.
+//
+// The whole-file read that serveExport uses is fine for a document a host picks
+// by hand, but a session recording is minutes of video — around 11 MB per
+// minute — and holding all of it plus its base64 expansion in memory at once is
+// how a long session turns into an out-of-memory kill on the host.
+//
+// Returns an error rather than reporting success on a partial send: a truncated
+// recording that claims to have transferred is worse than one that visibly
+// failed.
+func (f *fileReceiver) ExportFileStreaming(path string) error {
+	fh, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", filepath.Base(path), err)
+	}
+	defer fh.Close()
+
+	st, err := fh.Stat()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", filepath.Base(path), err)
+	}
+	size := st.Size()
+	if size == 0 {
+		return fmt.Errorf("%s is empty", filepath.Base(path))
+	}
+
+	id := fmt.Sprintf("hx-%d", f.seq.Add(1))
+	name := filepath.Base(path)
+	f.sendFT(map[string]interface{}{"k": "ft", "t": "offer",
+		"id": id, "name": name, "size": size})
+
+	const chunk = 36 * 1024
+	buf := make([]byte, chunk)
+	seq := 0
+	var sent int64
+	for {
+		n, rerr := fh.Read(buf)
+		if n > 0 {
+			f.sendFTBulk(map[string]interface{}{
+				"k": "ft", "t": "data", "id": id, "seq": seq,
+				"d": base64.StdEncoding.EncodeToString(buf[:n]),
+			})
+			seq++
+			sent += int64(n)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": id,
+				"err": "host could not read " + name + ": " + rerr.Error()})
+			return fmt.Errorf("read %s: %w", name, rerr)
+		}
+	}
+	if sent != size {
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": id,
+			"err": name + " was truncated while sending"})
+		return fmt.Errorf("%s: sent %d of %d bytes", name, sent, size)
+	}
+	// "end" goes on the BULK lane, with the data — not the hi lane.
+	//
+	// The lanes are independent, so an "end" sent on the hi lane could overtake
+	// the tail of a large file still queued on the bulk lane. The receiver then
+	// finalised early, found fewer bytes than the offer promised, and reported
+	// an incomplete transfer. A session recording is the biggest thing this
+	// sends, so it lost that race most often — a recording failure surfacing as
+	// a transfer error. Ordering it behind the data removes the race at source.
+	f.sendFTBulk(map[string]interface{}{"k": "ft", "t": "end", "id": id})
+	log.Info().Str("name", name).Int64("bytes", sent).
+		Msg("worker: streamed file to viewer")
+	return nil
 }
 
 // serveExport shows the host file picker and streams the chosen file to the
@@ -114,14 +261,31 @@ func (f *fileReceiver) serveExport() {
 	// first (same reason the chat window needed it), or it can fail to appear.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	bindInputDesktop()
+	// Abort if the thread can't be bound: without a desktop the picker either
+	// never appears or opens somewhere the user can't see it, and the export
+	// then completes against whatever (or nothing) came back. Better a reported
+	// failure the viewer can retry than a phantom transfer.
+	if !bindInputDesktop() {
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed",
+			"id":  fmt.Sprintf("hx-%d", f.seq.Add(1)),
+			"err": "host could not open the file picker (desktop busy) — try again"})
+		return
+	}
 	path, ok := showOpenFileDialog()
 	if !ok {
+		log.Info().Msg("worker: export picker closed/cancelled — nothing sent")
 		return // cancelled
 	}
-	data, err := os.ReadFile(path)
+	data, err := readFileVerified(path)
 	if err != nil {
-		log.Warn().Err(err).Str("path", path).Msg("worker: read export file failed")
+		// Never ship a short/empty read as a successful transfer: a file that is
+		// open and being written (a live log) or locked by its app can read as 0
+		// bytes, which used to be sent as a valid 0-byte file and logged
+		// "sent file to viewer bytes=0". Fail loudly instead.
+		log.Warn().Err(err).Str("path", path).Msg("worker: export ABORTED — could not read the file completely")
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed",
+			"id":  fmt.Sprintf("hx-%d", f.seq.Add(1)),
+			"err": "host could not read " + filepath.Base(path) + ": " + err.Error()})
 		return
 	}
 	id := fmt.Sprintf("hx-%d", f.seq.Add(1))
@@ -134,31 +298,116 @@ func (f *fileReceiver) serveExport() {
 		if end > len(data) {
 			end = len(data)
 		}
-		f.sendFT(map[string]interface{}{
+		f.sendFTBulk(map[string]interface{}{
 			"k": "ft", "t": "data", "id": id, "seq": seq,
 			"d": base64.StdEncoding.EncodeToString(data[off:end]),
 		})
 		seq++
 	}
-	f.sendFT(map[string]interface{}{"k": "ft", "t": "end", "id": id})
+	// "end" goes on the BULK lane, with the data — not the hi lane.
+	//
+	// The lanes are independent, so an "end" sent on the hi lane could overtake
+	// the tail of a large file still queued on the bulk lane. The receiver then
+	// finalised early, found fewer bytes than the offer promised, and reported
+	// an incomplete transfer. A session recording is the biggest thing this
+	// sends, so it lost that race most often — a recording failure surfacing as
+	// a transfer error. Ordering it behind the data removes the race at source.
+	f.sendFTBulk(map[string]interface{}{"k": "ft", "t": "end", "id": id})
 	log.Info().Str("name", name).Int("bytes", len(data)).Msg("worker: sent file to viewer")
 }
 
+// readFileVerified reads a file and refuses to return a short or empty result.
+// A file that is open and being written (a live log) or locked by the app that
+// owns it (a spreadsheet open in Excel) can read as 0 bytes or fewer bytes than
+// its on-disk size. Those used to be shipped as valid transfers and logged
+// "sent file to viewer bytes=0" — a silent data-loss success. Retry a few times
+// to ride out a transient lock, then return a real error so the caller aborts.
+func readFileVerified(path string) ([]byte, error) {
+	var last error
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			time.Sleep(150 * time.Millisecond)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			last = err
+			continue
+		}
+		want := fi.Size()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			last = err
+			continue
+		}
+		// A growing file can legitimately read LONGER than the earlier stat; only
+		// a short read means we lost data.
+		if int64(len(data)) < want {
+			last = fmt.Errorf("short read: got %d of %d bytes (file in use?)", len(data), want)
+			continue
+		}
+		if len(data) == 0 {
+			// Nothing to send. Report it rather than completing a 0-byte "transfer".
+			return nil, fmt.Errorf("file is 0 bytes on the host — it may be locked by another app")
+		}
+		return data, nil
+	}
+	if last == nil {
+		last = fmt.Errorf("could not read the file")
+	}
+	return nil, last
+}
+
+// sendFT sends a small control message (offer/end/saved/failed) on the hi lane.
 func (f *fileReceiver) sendFT(m map[string]interface{}) {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
-	_ = ipc.WriteMessage(f.conn, ipc.KindFileData, b)
+	_ = f.conn.WriteMessage(ipc.KindFileData, b)
 }
 
-// closeAll releases any half-open transfers (worker shutdown / session swap).
+// sendFTBulk sends a bulk data chunk (host→viewer export) on the backpressured
+// bulk lane so a large export never blocks input/acks on the hi lane.
+func (f *fileReceiver) sendFTBulk(m map[string]interface{}) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = f.conn.WriteBulk(ipc.KindFileData, b)
+}
+
+// fail aborts an in-flight transfer: closes + deletes the partial file and tells
+// the viewer it FAILED, so it surfaces a real error instead of hanging until the
+// client-side timeout — and never leaves truncated data on disk.
+func (f *fileReceiver) fail(id, reason string) {
+	f.mu.Lock()
+	rf := f.open[id]
+	delete(f.open, id)
+	f.mu.Unlock()
+	if rf != nil {
+		_ = rf.f.Close()
+		_ = os.Remove(rf.path)
+	}
+	f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": id, "err": reason})
+}
+
+// closeAll aborts any half-open transfers (worker shutdown / session swap): each
+// is deleted (never leave a truncated file) and reported FAILED to the viewer.
 func (f *fileReceiver) closeAll() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	for id, file := range f.open {
-		_ = file.Close()
+	ids := make([]string, 0, len(f.open))
+	files := make([]*recvFile, 0, len(f.open))
+	for id, rf := range f.open {
+		ids = append(ids, id)
+		files = append(files, rf)
 		delete(f.open, id)
+	}
+	f.mu.Unlock()
+	for i, rf := range files {
+		_ = rf.f.Close()
+		_ = os.Remove(rf.path)
+		f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": ids[i],
+			"err": "host session ended before the transfer completed"})
 	}
 }
 

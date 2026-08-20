@@ -31,6 +31,317 @@ moves to **Working Features** after it is confirmed working on real hardware.
 
 ## Locked Decisions
 
+- **LD-MAC-LOG-1 — macOS must log connection, audio and crash events to the same
+  standard as the Windows app.log/worker.log/transport.log.** A full day was
+  lost to Mac faults that produced no diagnosable output. What exists and must
+  keep working: `~/.neev_remote/app.log` (boot + build stamp, connect attempts,
+  relay errors, peer/ICE state transitions, voice), and for the daemon
+  `transport.log` plus `worker.log` — the latter falls back to the user's temp
+  dir because /Library/Application Support/NeevRemote is root-owned and the
+  worker runs as the user. Two rules follow from what actually went wrong:
+  native code must log through zerolog, never the stdlib logger (setupFileLog
+  redirects only zerolog, and a LaunchAgent discards stderr, so the one message
+  saying whether input could work at all was written to nowhere); and a
+  swallowed error is worse than none — input injection returned nil on failure,
+  so every layer above reported success while nothing happened.
+
+- **LD-MAC-AUDIO-1 — voice/audio initialisation must never be able to fail the
+  underlying connection.** Video, input and control may not depend on voice
+  succeeding. Voice is carried on the audio transceiver already present in the
+  host's initial offer (direction forced to sendrecv before the answer, mic
+  attached later via replaceTrack), so enabling it triggers NO renegotiation and
+  has no path by which it can tear down the peer connection. Any future change
+  that would add a renegotiation to the voice path must keep that property, and
+  a microphone that cannot be opened must degrade to a visible non-fatal
+  indicator.
+
+- **LD-MAC-TCC-4 — a macOS TCC answer is fixed per PROCESS, and the process that
+  TRIGGERS a grant never benefits from it.** CGRequestScreenCaptureAccess records
+  the allow and still returns false to the caller. Verified on a real machine:
+  TCC held auth_value=2 for the agent, written by the running worker minutes
+  earlier, while both CGRequestScreenCaptureAccess and
+  CGPreflightScreenCaptureAccess reported denied. Consequences that must not be
+  forgotten: (1) every package update blanks the screen, because installing
+  replaces the binary and the first worker to run is the one that gets denied
+  while creating the grant — the installer's own bootout/bootstrap cannot fix
+  it, since at that moment the grant does not yet exist; (2) a restart is the
+  ONLY recovery, so the worker exits after ~1 minute of sustained capture
+  failure and lets launchd (KeepAlive) replace it. An earlier version gated that
+  restart on the preflight call turning true, which can never happen for the
+  same per-process reason — it shipped in r169 and never once fired.
+  Accessibility is re-read on the input path rather than cached once, since a
+  cached "denied" silently dropped every click for the life of the worker.
+
+- **LD-PKG-3 — the macOS pkg MUST be built non-relocatable
+  (`BundleIsRelocatable=false` via a component plist).** SUPERSEDED the original
+  `--root` vs `--component` reasoning, which was WRONG: both emit
+  `<upgrade-bundle>`, and that element alone is harmless. The real cause was
+  `<relocate><bundle id="com.neev.neevRemote"/></relocate>`, which pkgbuild adds
+  by default. With it present the installer asks LaunchServices where the bundle
+  id was last seen and writes the payload THERE, ignoring `--install-location`.
+  On a Mac whose lsregister still held a copy in ~/.Trash, /Applications stayed
+  empty and the postinstall failed on a package whose payload was intact; a Mac
+  that had never held the app installed fine, which made it look
+  machine-specific across r161-r163. Verified by diffing PackageInfo both ways:
+  `<relocate><bundle .../></relocate>` becomes `<relocate/>`. The release gate
+  now reads PackageInfo out of the xar (it is zlib-compressed, so the earlier
+  regex over raw bytes could never match and every pkg check silently passed)
+  and rejects a relocatable package.
+
+- **LD-PKG-2 — the macOS pkg version MUST change every release.** It was
+  hardcoded `--version 1.0.0`, so every build claimed the same version. With a
+  receipt already present, `installer` treated an install as a no-op upgrade:
+  printed "The upgrade was successful" and wrote NOTHING. Deleting the app did
+  not help — the stale receipt still claimed it was installed — leaving a
+  machine with a receipt, no app, and a postinstall reporting it could not find
+  the bundle. Version now derives from the build tag (r161 -> 1.0.161) and the
+  build FAILS if it cannot be derived.
+  Recovery on an affected machine: `sudo pkgutil --forget com.neev.neev_remote`
+  then install again.
+  The postinstall now FAILS the install when it cannot find the app, instead of
+  logging: the condition occurred four times in a row while installer reported
+  success each time.
+
+- **LD-MAC-HOST-1 — "does the service own hosting?" must be answerable with NO
+  session running.** The app decided via `transport.ready`, which the transport
+  only writes while FRAMES ARE FLOWING — and frames only flow once a viewer
+  connects. So with no session the daemon always looked idle, the app registered
+  its OWN id as a second host for the machine, and a viewer reaching that id got
+  an app-hosted session: no recording, no system sound, and the "needs the
+  background service" tooltips. The transport now writes `transport.alive` every
+  10s while REGISTERED, and the app decides on that (falling back to ready for
+  older transports). Any future "is the service active?" check must use a signal
+  that exists before a session does.
+  Also: TCC grants are PER-USER. On a Mac with two accounts, each needs its own
+  Screen Recording grant — `launchctl list` showed the worker healthy for one
+  user and SIGABRT (-6) for the other.
+
+
+- **LD-HOST-UI-1 — the host's session controls come from the SERVICE, not the
+  app.** Record (VP8→WebM mux) and system-sound sharing (WASAPI loopback /
+  ScreenCaptureKit) are host-side native code in the Go worker and NeevVoice.app.
+  An app-hosted machine — macOS without the daemon, or Windows with
+  TransportMode off — therefore has no Record or Sound, and NO menu-bar/session
+  toolbar at all, which is why a Mac host appeared to be missing every control.
+  Voice and End session DO work app-side (`setVoice` covers `_hostPeers`,
+  `endHostSession` exists), so r152 puts those in the live-session banner and
+  shows Record/Sound DISABLED with the reason rather than omitting them.
+  The real fix for full parity is installing the service, which r150 now does
+  automatically from the .pkg. Do NOT reimplement the recorder or loopback in
+  Dart to close this — that duplicates working native code.
+
+- **LD-MAC-TCC-3 — sign macOS binaries with a FIXED cert AND an explicit
+  designated requirement; a certificate alone is not enough.** VERIFIED by
+  experiment: codesign derives a certificate-based requirement only for
+  Apple-chained certs. For ad-hoc AND for self-signed it falls back to the
+  binary's cdhash, which changes every build and silently invalidates the
+  machine's Screen Recording grant while System Settings still shows it enabled.
+  Passing `-r 'designated => identifier "..." and certificate leaf = H"..."'`
+  pins the identity to the certificate: three different binaries then produced a
+  byte-identical requirement. `security find-identity` prints the cert SHA-1, so
+  one value is both the signing selector and the leaf hash.
+  Key lives ONLY in GitHub Actions secrets (MACOS_SIGNING_P12 /
+  MACOS_SIGNING_PASSWORD) — this repo is PUBLIC, so it must never be committed
+  in any form. Absent secret falls back to ad-hoc so forks still build.
+  `sign-stable.sh` FAILS the build if the result still carries a cdhash, because
+  a silent fallback would reintroduce the bug and only surface weeks later.
+  25-year cert: the requirement match ignores expiry, but codesign refuses to
+  sign with an expired certificate.
+
+- **LD-MAC-TCC-2 — an MDM PPPC profile can pin the grant to the IDENTIFIER,
+  which survives updates even ad-hoc signed.** VERIFIED: a binary ad-hoc signed
+  with `--identifier com.neev.agent` satisfies the code requirement
+  `identifier "com.neev.agent"`, and a REBUILT (different) binary signed the
+  same way still satisfies it. So MDM-delivered PPPC with that requirement
+  avoids the per-update re-grant without a Developer ID. Needs user-approved
+  MDM, and Screen Recording specifically is restricted in some macOS versions —
+  test on one machine first. Accessibility is reliably grantable this way.
+  Alternative without MDM: a self-signed code-signing cert trusted on the fleet
+  (stable identity, but does not fix Gatekeeper). Developer ID fixes both.
+
+- **LD-MAC-TCC-1 — an ad-hoc signed build LOSES its Screen Recording grant on
+  every update.** macOS ties a TCC grant to the binary's code hash when there is
+  no Developer ID, so replacing neev-agent leaves the entry visibly ENABLED in
+  System Settings while no longer applying. Symptom: `launchctl list` shows
+  com.neev.worker with a live PID and a non-zero last exit, capture fails, and a
+  session stalls right after the host accepts. The user must remove and re-add
+  the entry after an update. The only real fix is a stable Developer ID
+  certificate; packaging cannot work around it.
+  r157: the worker RETRIES capture every 5s instead of exiting. Exiting made
+  main log.Fatal, launchd's KeepAlive restart it, and the loop was invisible —
+  a fixable-while-running condition must never kill the process.
+
+- **LD-MAC-WORKER-1 — a LaunchAgent must not redirect its logs into a
+  root-owned directory.** `com.neev.worker.plist` set StandardOut/ErrorPath to
+  /Library/Application Support/NeevRemote, which the installer creates as ROOT.
+  The worker runs as the LOGGED-IN USER (Aqua), so launchd could not create
+  those files and failed the job during setup with EX_CONFIG — visible only as
+  `-  78  com.neev.worker` in `launchctl list`. The binary never ran: no
+  capture, and a session stalled immediately after the host accepted it. The
+  transport masked it by working fine, because it runs as root.
+  Diagnosing this needs `launchctl list` WITHOUT sudo — a LaunchAgent lives in
+  the user's gui/<uid> domain and does not appear in the root domain listing.
+
+- **LD-CONSENT-2 — a macOS prompt from a backgrounded app MUST call
+  `activateIgnoringOtherApps`.** r151 used `osascript -e 'display dialog ...'`,
+  which opens BEHIND everything when the calling app is not frontmost — so the
+  consent prompt was still invisible and "ask before allowing" still looked
+  broken. The daemon's JXA had always done this correctly (NSAlert +
+  `app.activateIgnoringOtherApps(true)`); r154 reuses that same script in the
+  app instead of a weaker second prompt. If a native prompt is ever added
+  elsewhere, copy the daemon's, do not write a new one.
+
+- **LD-CONSENT-1 — a host consent prompt must not depend on the app's own
+  window being visible.** A machine being used as a HOST normally has the app
+  backgrounded or minimised, and this app CANNOT raise its own window
+  (`window_manager` is commented out in pubspec — `lib/window_manager.dart` is a
+  stub). On macOS the in-window Accept/Deny dialog therefore rendered where
+  nobody could see it: the request timed out, and connecting to a Mac looked
+  broken unless the user turned "ask before allowing" OFF — trading the security
+  prompt away to get a working product. r151 adds a NATIVE osascript alert
+  (`native_consent_io.dart`, conditional-import so web still builds) that floats
+  above everything and needs no window of ours. It resolves through the SAME
+  acceptConnection/rejectConnection, so there is one consent path — a different
+  way to ASK, not a second way to ANSWER. Deny, dismissed and timed-out all read
+  as refusal.
+  Windows is unaffected: its app dialog is reliably visible and TransportMode
+  draws its own always-on-top card.
+
+- **LD-PKG-1 — the package installs everything; never leave a feature behind a
+  setting the user must find.** The macOS .pkg had no postinstall at all: it
+  dropped NeevRemote.app in /Applications and stopped, leaving TransportMode
+  (user-switch and login-window hosting, AND the host's session controls —
+  NeevVoice.app) to be installed by hand from Settings. Anyone who missed it had
+  an app that looked installed and silently lacked half its features. The pkg
+  now runs `postinstall`, which hands off to the SAME `install-daemon.sh` the
+  Settings action uses (not a second copy that could drift). Same reasoning as
+  the pre-ticked Windows installer tasks.
+  It never fails the install: an app-only build, or a daemon install error,
+  leaves a working viewer rather than a failed package.
+  LIMIT — macOS TCC (Screen Recording, Accessibility, Microphone) CANNOT be
+  granted by an installer; the OS forbids it. Those remain user actions on a
+  macOS HOST, and no packaging change can remove them.
+  NOTE — the DMG is drag-install and runs no scripts, so only the .pkg
+  auto-installs the daemon. Ship the .pkg where hosting matters.
+
+
+- **LD-FT-3 — a transfer ends when its BYTES arrive, not when "end" does.**
+  Control messages and bulk data ride independent IPC priority lanes, so an
+  "end" sent on the hi lane could overtake the tail of a large file still queued
+  on the bulk lane. The receiver finalised early, found fewer bytes than the
+  offer promised, and reported "Incomplete transfer" — which is how a screen
+  RECORDING (the biggest thing this moves, delivered over the same path) failed
+  as a transfer error. Fixed at both ends: the host sends "end" on the BULK lane
+  so it is ordered behind its own data, and the receiver waits for the offered
+  byte count before finalising, with a bounded grace period so a genuinely
+  truncated transfer still fails rather than hanging.
+  NOTE: transfer code is ONE shared Dart implementation with no platform
+  branching — per-transfer-ID tracking already applied to every platform pair.
+  There is no separate Mac path to "extend"; do not build one.
+
+
+- **LD-AUDIO-8 — capture buffers must be REFRAMED before encoding; never
+  assume a device period.** Opus encodes an exact frame (960 samples at 48 kHz)
+  and rejects anything else. miniaudio's PeriodSizeInFrames is a HINT, and
+  ScreenCaptureKit varies freely, so encoding each callback directly failed for
+  any buffer that was not exactly one frame — quietly, one warning then
+  nothing, which is how macOS system sound could be silent with every log line
+  looking healthy. `encodeAndSend` now accumulates and emits whole frames, with
+  a bounded backlog that drops the OLDEST so audio stays current.
+  Also: the NeevVoice helper now sends 48 kHz Int16 PCM (prefix "p ") instead of
+  8 kHz mu-law ("a ", still accepted for older bundles), so macOS system sound
+  is full-band rather than telephone quality.
+
+- **LD-AUDIO-7 — the voice toggle gates BOTH directions, and each must be
+  enforced separately.** WebRTC does not link a local sender's mute state to a
+  remote track being received: they are independent streams. Playback was
+  therefore unconditional — `playViewerVoice` had no reference to any local
+  state — so a side with voice off still HEARD the far end while its own UI
+  said off. Each side now checks its own toggle twice: never send when off
+  (StopCapture / replaceTrack+stop) and never play when off (gate before the
+  output device is opened, and `track.enabled=false` on the viewer's remote
+  audio, reapplied when a track first arrives). Both checks are local and
+  instant — no signalling, no renegotiation.
+  The control is therefore labelled **Voice**, not Mic, on every surface
+  (viewer toolbar, Windows session bar, macOS menu): it governs talking AND
+  listening, and a "Mic" label would leave someone who muted to cut background
+  noise wondering why the other side went quiet.
+
+- **LD-SESSION-1 — a NEW worker must be told the current session state.**
+  `handleWorker` set `t.worker = conn` without calling `announceSessionState()`,
+  so a worker spawned by a user switch never learned a viewer was connected: no
+  session bar, and `setAudioSink` never ran, leaving mic/system-sound controls
+  missing or inert until some later connect/disconnect re-announced. Any
+  per-session state the worker needs must be (re)sent on ATTACH, not only on
+  change — a fresh process starts knowing nothing.
+
+- **LD-AUDIO-6 — stop() each track to release the microphone; dispose() is not
+  enough.** `MediaStream.dispose()` only calls `streamDispose` on the native
+  side and does NOT stop the tracks, so the capture device stayed open and the
+  OS kept showing the app as listening after the user switched the microphone
+  off. Silent failure: the app said off, the mic indicator said otherwise.
+  Every mute path (`setVoice(false)`, `_stopVoice`, disconnect) now stops each
+  track before disposing. The host side already did the equivalent —
+  `StopCapture` uninits the device rather than pausing it.
+
+- **LD-AUDIO-5 — echo must be suppressed on the HOST; nothing else can.**
+  The viewer's libwebrtc AEC only cancels echo created on the VIEWER's machine.
+  When the host plays the viewer's voice, its microphone (acoustic) and its
+  system-sound loopback (digital, guaranteed) both re-capture it and send it
+  back, so the viewer hears itself. Only the host knows when it is playing
+  far-end audio. r144: loopback is DROPPED outright while far-end audio plays
+  (it is literally our own output), the microphone is DUCKED to ~-16 dB rather
+  than muted (so the host can still interrupt and the call stays two-way), with
+  a 250 ms hangover because speakers and rooms do not stop instantly.
+  This is suppression, not cancellation — proper AEC needs an adaptive filter,
+  pion has no audio processing module, and hand-rolled DSP would be worse.
+
+- **LD-AUDIO-4 — voice codec is OPUS at 48 kHz, via layeh.com/gopus.**
+  Replaces PCMU 8 kHz: ~79 bytes per 20 ms frame vs 160, at six times the audio
+  bandwidth. gopus VENDORS the Opus C sources and compiles them on amd64
+  (Windows + Linux), so there is NO system libopus, no MSYS2 package and no DLL
+  to ship — deliberately chosen over hraban/opus, which needs libopus AND
+  opusfile via pkg-config on every runner. Adding a native dep to the Windows
+  toolchain is exactly what has broken this build before.
+  Devices already open at 48 kHz (r140) and Opus is natively 48 kHz, so the
+  resampling PCMU forced on every frame is gone. Opus is STATEFUL — one encoder
+  and one decoder per worker, reset on teardown; a codec per frame would cost
+  more and sound worse. RTP: payload type 111, 48 kHz clock, and the timestamp
+  advances by one FRAME of samples per packet — NOT by byte count, which means
+  nothing for a compressed codec and would drift the jitter buffer.
+  The macOS NeevVoice helper still sends 8 kHz mu-law and is bridged up to PCM
+  on receipt, so already-installed bundles keep working.
+
+- **LD-AUDIO-3 — voice IS a WebRTC track on the existing peer connection.**
+  One `RTCPeerConnection` carries VP8 video and PCMU audio in one SDP. The raw
+  PCM only crosses the worker↔transport IPC, mirroring video exactly
+  (`KindVideoFrame` / `KindAudioFrame`+`KindAudioPlay`, same droppable lane),
+  because the session-0 transport has no audio device — the same constraint
+  that puts capture and input in the worker. It follows a user switch via
+  `sendToWorker` targeting the current worker, like input does.
+  Checked against RustDesk (closest comparator: Rust core, Flutter UI, same
+  session-0 problem): same shape — capture in the session process, resample in
+  code, encode, relay. Differences: they use OPUS where this uses PCMU 8 kHz,
+  and they gate silence (r142 adds the gate). Notably RustDesk has NO AEC/NS/AGC
+  either; on this product the viewer gets it from libwebrtc's audio engine and
+  the host has none, since pion has no audio processing module.
+
+- **LD-AUDIO-1 — never decode an RTP packet without checking its PAYLOAD TYPE.**
+  A voice track carries more than the negotiated codec: libwebrtc also sends CN
+  (comfort noise, PT 13) and telephone-event on the SAME SSRC, and switches to
+  CN whenever the microphone is muted or silent. `pumpViewerVoice` forwarded
+  every payload to the speakers as mu-law, so CN bytes were decoded as audio —
+  noise BY CONSTRUCTION, audible with the mic off, on both machines, unrelated
+  to speech. Filter on `track.PayloadType()`; drop padding too.
+- **LD-AUDIO-2 — miniaudio already converts between client and hardware format.**
+  `channels/format/rate` in the "device opened" log are the CLIENT side;
+  `hw_*` are the internal device side, bridged by miniaudio's `ma_data_converter`.
+  A mismatch between them is normal and must NOT be "fixed" with a second
+  conversion layer — that double-converts. The one value that is NOT converted
+  is the rate you request: asking for 8 kHz makes miniaudio run the HARDWARE at
+  8 kHz (see r140). Open devices at a rate hardware supports and convert in code.
+
+
 - **LD-1 — The transport connection lives in a user-session process, so it
   cannot survive a user switch.** A user switch destroys the session and tears
   the Flutter host (and its WebRTC transport) down → disconnect. True seamless
@@ -146,17 +457,210 @@ moves to **Working Features** after it is confirmed working on real hardware.
   (launchd KeepAlive respawns it to wait again). Exactly ONE on-console producer.
   This is the macOS analogue of the Windows `WTSQueryUserToken` spawn-into-active-
   session rule (LD-7) — never regress it into "last worker wins".
+- **LD-15 — File-transfer resources (SCTP send buffer / handles / channels) must
+  drain/release immediately after each transfer completes or fails — never
+  accumulate. Both directions share the single `file` channel per peer, so a leak
+  in one blocks the other.** The sender must pace against the REAL buffered amount
+  for its actual send direction (host: max across viewers; viewer: the host peer),
+  drain to a small high-water (512 KB, well under the ~16 MB SCTP cap), and on a
+  stall ABORT the transfer — NEVER force-send into a full buffer (that saturates
+  the shared channel and wedges both directions until reconnect, the "fails at
+  file 5" bug). Go receiver releases every `*os.File` on end/cancel/teardown.
+- **LD-21 — Transport↔worker IPC writes go through ONE writer goroutine draining
+  three priority lanes (hi > bulk > droppable); no producer ever holds a lock
+  across a blocking socket write. File transfer is backpressured end-to-end so a
+  file larger than the pipe streams steadily and can never deadlock the lane;
+  input/capture/clipboard stay live throughout.** `ipc.Conn` supersedes the r69
+  write-mutex: `WriteMessage` = hi (input/control/acks/clip-control/chat/keyframe/
+  video-info), `WriteBulk` = bounded reliable (file + clipboard-file BYTES →
+  backpressure to the sender), `WriteDroppable` = video (drop-oldest, keyframe
+  recovers). One goroutine writes, so frames never interleave (keeps LD-19
+  integrity); hi always beats bulk, so a large transfer can't head-of-line-block
+  input. The r69 bug was: a producer blocked in `WriteMessage` while holding the
+  mutex → input starved and the bidirectional pipe deadlocked on a >~16 MB file.
+  pion runs a per-channel read goroutine (network/peer.go), so blocking the file
+  channel on `WriteBulk` backpressure never blocks the control (input) channel.
+  Do NOT put bulk file/clipboard bytes on the hi lane or reintroduce a write
+  mutex held across the socket write.
+- **LD-22 — In TransportMode the CONSENT gate lives in the Go transport, not the
+  Flutter app.** The SYSTEM-service transport (session 0) owns hosting and used to
+  auto-accept every viewer (`onConnect`→`CreateAgentOffer`, LD-7); the Flutter
+  app's in-app consent dialog is on the SUPPRESSED `startHosting` path, so it can
+  never fire there. Consent now: the app mirrors the "Ask before allowing
+  connections" toggle to `%ProgramData%\NeevRemote\consent.txt` (`consent_flag.dart`
+  shim, Windows only); the transport reads it per connect (`consentRequired`), and
+  when on, asks the per-session worker (`KindConsentRequest`) to show a modal
+  Accept/Deny (`consent_windows.go` `MessageBoxW` on the interactive desktop),
+  waits ≤30 s for `KindConsentReply`, and only offers on Accept. Deny / 30 s
+  timeout / NO worker attached (lock screen / unattended) → refuse (no offer) —
+  the literal meaning of "ask before allowing". The two consent IPC kinds are the
+  first request/response pair over the worker IPC. Flutter-hosted (non-Transport)
+  boxes still use the in-app dialog (LD-17). macOS daemon consent is a later port
+  (`consent_other.go` returns true; the flag is Windows-only).
+- **LD-16 — Every incoming file transfer gets a UNIQUE destination — never a
+  shared/reused path or handle — and "Sent" status is only shown after the host
+  confirms the file was fully and uniquely saved.** The receiver reserves a
+  unique path the moment the `offer` arrives (Dart: `FileStore.reserveUnique`
+  atomically `create(exclusive:true)` a placeholder before the next offer is
+  handled; Go: `os.Create(uniquePath)` synchronously at offer on the single
+  reader goroutine), keyed off the transfer — so rapid back-to-back sends can
+  never resolve to the same name and clobber. The sender marks a transfer
+  `done` ONLY on an explicit receiver→sender `{k:'ft',t:'saved',id,path}` ack;
+  until then it is `sent` ("Delivered — confirming…"), never a false success.
+  Both the Dart receiver and the Go worker send the ack. Do NOT reintroduce a
+  save that picks its destination at `end` time via check-then-write (the TOCTOU
+  that let 4 same-named files overwrite one slot and all report "Sent").
+- **LD-17 — The "Ask before allowing connections" setting is authoritative and
+  read LIVE by `startHosting()`; it is NOT clamped by unattended access.** An
+  unattended/fixed password governs REACHABILITY; this toggle governs PROMPTING —
+  the two are independent. `startHosting` reads `askOnConnect` from prefs at the
+  moment hosting starts (not via a widget build), and the UI keeps it updated for
+  mid-session toggles. Verify via `app.log`: `promptOnConnect` must match the
+  actual toggle state, never be permanently `false`. Do NOT reintroduce the
+  `&& !unattendedEnabled` clamp (it made the toggle inert on every always-on host
+  that had an unattended password). Consent-on-by-default (`askOnConnect` default
+  `true`) stands; silent unattended access requires explicitly turning it OFF.
+- **LD-18 — File-transfer confirmation/acknowledgment is tracked per-transfer by
+  unique ID — never a single shared slot/callback/completer. Every transfer in a
+  batch must be able to confirm (or fail) independently.** Incoming state is
+  `_incoming[id]`; the reserved destination is `inc.reserved` (one Future per id);
+  the `{t:'saved',id}` / `{t:'failed',id}` acks and the sender's ack timers
+  (`_ackTimers[id]`) are all keyed by id. A send never spins "confirming…"
+  forever: it settles on `saved` (done), `failed` (error), or a per-id timeout
+  ("Delivered (unconfirmed)"). Do NOT reintroduce any single "current transfer"
+  reference — it strands transfer 2..N when transfer 1 holds the slot.
+- **LD-19 — File transfer (esp. large files) runs OFF the input-injection/capture
+  execution path and can never block or freeze remote control; all writes to a
+  shared IPC connection are SERIALIZED; interrupted transfers are explicitly
+  reported and their partial files deleted — never silently truncated.** The
+  transport↔worker `net.Conn` is written by many goroutines (input, file chunks,
+  keyframe reqs; video frames, clipboard, chat, export); a framed message is two
+  writes (header+payload), so concurrent writers interleave and corrupt the
+  stream → the reader errors/blocks → input + capture wedge forever (a 71 MB file
+  racing with live input reproduced it). Fix: `ipc.Conn` wraps the conn with a
+  write mutex (`NewConn`; all writes go through `conn.WriteMessage`); reads stay
+  lock-free (one reader per direction). The worker also hands `KindFileData` to a
+  DEDICATED drain goroutine (buffered chan), so disk writes never delay
+  `KindInput`. `filerecv` tracks announced-size vs written and, on `end`, acks
+  `saved` only if complete — else deletes the partial and sends `{t:'failed'}`;
+  `closeAll`/create-error/write-error do the same. Do NOT write to the worker
+  conn with the bare `ipc.WriteMessage(conn,…)` package func — always the
+  `*ipc.Conn` method, or the interleave bug returns.
+- **LD-20 — Worker IPC serializes only WRITES (stream integrity, LD-19) and
+  per-lane ordering; clipboard-file and file-transfer run on INDEPENDENT
+  non-blocking lanes, and any whole-file stream runs on its own goroutine — so no
+  operation can stall another.** `KindFileData` multiplexes file transfers
+  ({k:ft}) AND clipboard-file ops ({k:clipf*}); the worker reader routes them to
+  two separate drain goroutines (`fileCh`/`clipCh`) by a cheap kind peek
+  (`isFileTransferMsg`). `serveBytes` (clipboard SOURCE serving a whole file) and
+  the `finishFile` clipagent write run on their OWN goroutines, so a large paste
+  or a slow helper never blocks the next pull or a file-transfer ack. Concurrent
+  serves are safe (per-message `ipc.Conn` write mutex + token/index/seq demux on
+  the viewer). Input/capture stay on the reader goroutine, off both lanes (LD-19).
+  Do NOT re-merge the two lanes or call a whole-file stream inline on a drain
+  goroutine — that reintroduces the r69 head-of-line block (clipboard paste never
+  completing + file acks stuck "unconfirmed").
+- **LD-23 — The machine password MUST be STABLE across restarts/reinstalls;
+  never re-minted per boot. And every connect-failure reason MUST surface a
+  distinct, actionable viewer message — never a silent "Connecting…".** ROOT of
+  the 2026-07-23 "won't connect one direction" hunt: `machine.dat` carries only
+  the id (the installer never sets a password), so `transport.go` setupSignaling
+  fell through to `GenerateRandomPassword()` on EVERY boot and never wrote it
+  back → the host advertised a fresh password each start → a viewer's saved
+  password went stale → the relay rejected it (`hub.go` logs `invalid password
+  attempt`, sends `errMsg("invalid password")`). FIX: `persistMachineCreds()`
+  writes the resolved id+password back to `machine.dat` on first register, ONLY
+  when it had no password (never clobbers a user-set one). Do NOT reintroduce a
+  per-boot random password without persisting it. Viewer side: `_friendlyConnectError()`
+  maps raw relay errors (password / too-many / offline) to clear text; the raw
+  reason still drives retry/stop. **META-LESSON (this class has now cost multiple
+  cycles): ONE symptom, MANY causes.** A hung viewer looked identical for stale
+  password, consent timeout, consent-toggle-write-failure, and transient Wi-Fi —
+  and today it was misattributed first to the r77 IPC change (reverted as r78,
+  then restored — r77 was innocent) and then to a consent-popup Accept-wiring
+  regression that DID NOT EXIST (the AnyDesk two-Accept popup was never built —
+  the only consent UIs are the single-Accept `AlertDialog` in `connect_page.dart`,
+  wired to `acceptConnection()`, and the Win32 `MessageBox`; both verified wired).
+  BEFORE assuming a code regression on a "won't connect" report: (1) read the
+  RELAY logs first (`docker logs deploy-server-1` — `invalid password` / `forwarded`
+  / `registered` are decisive), (2) separate config/env (password, consent flag,
+  network) from code, (3) confirm the suspected UI element actually EXISTS and its
+  button actually calls the backend before "re-wiring" it. AND the standing rule
+  the user set: **every UI rebuild of an action button (Accept/Dismiss, Import/
+  Export, toggles) must be verified end-to-end against its backend call
+  immediately** — this UI-rebuilt-but-backend-disconnected class has recurred, so
+  test the full connection flow after ANY change to the consent popup or connect
+  buttons.
+
+- **LD-24 — A zero-byte or short transfer is NEVER reported as success, at any
+  layer.** A file that is open and being written (a live log) or locked by the
+  app that owns it can read as 0 bytes on Windows. Every layer used to accept
+  that: the viewer logged `file: send "worker.log" (0 B)`, the host's truncation
+  guard was `rf.size > 0 && rf.written != rf.size` so a transfer DECLARING 0
+  bytes skipped verification entirely and logged `file transfer finished`, and
+  `serveExport` shipped whatever `os.ReadFile` returned and logged `sent file to
+  viewer bytes=0`. The user saw a completed transfer and an empty file. RULE:
+  reads are verified against the on-disk size (`readFileVerified` in Go,
+  `_readVerified` in Dart — retry 3×/150 ms for a transient lock, then a real
+  error), the receiver compares written-vs-declared UNCONDITIONALLY, and a file
+  that cannot be read fails VISIBLY (`{t:failed}` / `failLocal`) instead of
+  moving zero bytes successfully. Applies to import, export and clipboard files.
+  Never re-introduce a size>0 escape into an integrity check.
+
+- **LD-25 — GUI that the remote user must actually SEE aborts when it cannot
+  attach to the input desktop.** `bindInputDesktop()` logged
+  `SetThreadDesktop failed err="The requested resource is in use."` and returned
+  normally, so `serveExport` opened a file picker on a thread with no desktop —
+  invisible or absent — and the export proceeded anyway. That error is transient
+  (the thread still owns a window/hook on its current desktop), so the bind
+  retries 3×/150 ms and RETURNS whether it succeeded. Callers whose result the
+  remote user depends on (the export picker) must abort and report a failure the
+  viewer can retry; callers showing optional GUI (chat window, privacy overlay)
+  may ignore it. Note: this was NOT the cause of the 0-byte export in the
+  2026-07-30 log — that file was already 0 bytes on disk (see LD-24).
+
+- **LD-26 — Per-session child processes are supervised by what they SERVE, not
+  by whether the process object still exists.** The clipboard agent was judged
+  solely by `WaitForSingleObject(clip, 0)`, so one that was alive but not
+  listening on 47922 was neither "dead" nor "moved" and was never relaunched —
+  the file clipboard stayed broken for the rest of the session while every op
+  got "the target machine actively refused it". Reachable in practice: with
+  `SO_REUSEADDR`, Windows lets a bind take a port another socket already holds,
+  so a leftover agent from a previous user session can leave the new one running
+  without a live listener. RULE: probe the actual service (non-blocking connect,
+  500 ms select, every ~15 s, act after 2 consecutive failures) and restart on
+  failure. Any future per-session helper that owns a port gets the same
+  treatment. The service process needs its own `WSAStartup` for this.
+
+- **LD-27 — Clipboard files are delayed-render: an announce WITHOUT a pull is
+  correct, but a pull that fails must fail LOUDLY.** `clipfann` means the host
+  clipboard now holds files; bytes move only when the other side actually pastes
+  (`clipfreq`). Copying eight things and pasting one legitimately produces eight
+  announces and one pull, so un-pulled announce tokens are NOT evidence of
+  failure and must never be given acks, retries or expiry — that machinery would
+  fire constantly on correct behaviour. What DOES need to be explicit is a
+  failed pull: on Windows the paste is a blocked delayed-render call, so any
+  abandoned receive (an out-of-order chunk, an unreadable source) must complete
+  as a failure or Explorer hangs until the session ends.
 
 ---
 
 ## Working Features (confirmed)
 
+- Large file transfer (viewer→host, tens of MB) over TransportMode — receiver-ack
+  flow control (r82), hardware-confirmed 2026-07-24. Sends multiple files back-to-
+  back incl. a 24MB one under live mouse movement with no ack-timeout, no peer drop,
+  no input death. Do NOT pace on `bufferedAmount` (reads 0 on flutter_webrtc Windows)
+  — the RECEIVER acks bytes/1MB, the sender windows 2MB ahead (see LD-15 / r82).
 - Normal remote control host↔viewer (~20 fps), Windows/macOS/Linux.
 - Clicks/drags correct (no click-becomes-drag; no dead clicks; no stuck-Alt →
   double-click opens files, not Properties).
 - Discovery shows real machine names (LAN UDP + relay-assisted).
 - File **copy** no longer becomes **move** (Preferred DropEffect = Copy).
 - Clipboard text/image sync; clipboard sync on/off toggle.
+- Multi-file selection and queued transfer, both directions (r65): pick many
+  files at once (export and import), sent sequentially through the fixed file
+  channel with per-file progress; one failure is isolated and the queue continues.
 - Viewer captures TRACKPAD two-finger scroll (`PointerPanZoom`) in addition to the
   mouse wheel (`PointerScroll`), forwarded through the existing scroll pipeline to
   the existing host injection (r58; mouse-wheel win-win/mac-win already confirmed).
@@ -199,6 +703,263 @@ All macOS work is platform-guarded (LD-13); Win→Win byte-for-byte unchanged +
 hardware-confirmed intact.
 
 ## Known Problems (open)
+
+- **r140 — the static was the DEVICE RATE.** Found from r139's diagnostics:
+  `audio: device opened ... hw_rate=8000` on speakers, microphone AND loopback,
+  on both machines. Setting `cfg.SampleRate = 8000` makes miniaudio run the
+  HARDWARE at 8 kHz; Windows endpoints run at their mix-format rate and almost
+  none support 8 kHz natively, so every device was being driven at a rate it
+  could not do — continuous static regardless of speech or mute state. Devices
+  now open at `DeviceRate` (48 kHz, universally supported) and the 8 kHz wire
+  conversion happens in `audio.Downsample` / `audio.Upsample`. Downsampling
+  AVERAGES (plain decimation aliases into a metallic warble); upsampling
+  INTERPOLATES (sample-and-hold is broadband noise on top of the voice).
+  Earlier attempts r138 (stereo buffer shape, idle release) and the r139
+  overrun guard were real bugs but not this one — guessing failed twice, the
+  log line settled it immediately.
+
+- **r137 — the ACTUAL cause of silent viewer→host voice.** `pc.OnTrack` in
+  `agent/network/peer.go` was registered only `if role == RoleController`. The
+  host is RoleAgent, so pion never delivered an incoming track to it and
+  `transport.go`'s `peer.OnTrack` assignment was DEAD CODE. No SDP change could
+  have fixed it. Proven by host logs: `audio track added ... codec=audio/PCMU`
+  present, `viewer opened a voice track` absent. Regression test connects two
+  real pion peers and asserts a RoleAgent peer receives an audio track.
+  r134/r135 (direction + mid matching) were still necessary but were fixes at
+  the wrong layer — the lesson is that "host→viewer works, reverse silent"
+  points at the RECEIVING side, and I spent two releases on the sender.
+
+- **r134 — viewer→host voice was NEVER working (fixed).** Host→viewer worked,
+  so voice looked fine. The viewer adopted the offered audio transceiver and
+  took its sender, but never set its DIRECTION — with no mic attached at answer
+  time the answer declared `recvonly`, and `replaceTrack` swaps a track, it
+  does NOT change a negotiated direction. So enabling the viewer mic opened the
+  device and transmitted into a channel the SDP said was one-way. Fix:
+  `setDirection(SendRecv)` on the adopted transceiver BEFORE `createAnswer`.
+  Lesson: a one-way voice bug is indistinguishable from a dead microphone from
+  the outside. Diagnostics added on all three hops — viewer logs the NEGOTIATED
+  direction when the mic turns on, transport logs the viewer track opening and
+  its first arriving packet, worker logs first playback to the speakers.
+
+- **r133 — the VIEWER can start/stop recording.** Record button in the viewer
+  toolbar sends `{k:'cmd',c:'record',on:...}`; the host captures (no re-encode)
+  and streams the file back on stop. Handled BEFORE the per-platform
+  `handleCommand` so lock/logoff/reboot/privacy keep their existing shape —
+  tests assert the record handler consumes ONLY its own message and never mouse
+  or keyboard traffic.
+  No host approval prompt: the viewer already sees every pixel live, so a
+  recording adds no new visibility. It is not silent either — the host's session
+  bar turns red "Recording" whoever started it (`setSessionBarRecording`, pushed
+  to the macOS helper over the control socket), and the host can stop it.
+
+- **r132 — recordings reach the VIEWER.** Recording still happens host-side
+  (VP8 mux, no re-encode), but when the host stops it the file is streamed to
+  the connected viewer over the existing file-transfer channel and lands in
+  their Downloads. No consent gate: the viewer WATCHED that session live, so the
+  file contains nothing new to them — and the host keeps their copy regardless.
+  Viewer-side recording remains impossible (flutter_webrtc `startRecordToFile`
+  is unimplemented on Windows/macOS; `captureFrame` exists but polling PNGs is
+  not a recorder).
+  Two transfer bugs found while building it:
+  • `ExportFileStreaming` added — the old export read the WHOLE file into memory,
+    which at ~11 MB/min of recording is an OOM risk on the host.
+  • RECEIVER never checked that the bytes received matched the offered size: it
+    wrote whatever arrived, marked it done, acked `saved`, and set
+    `transferred = offered size` regardless. Since `end` (hi lane) can overtake
+    data (bulk lane), a truncated recording looked identical to a good one. Now
+    a length mismatch is an error. This was the receiving half of the sender-side
+    short-read bug fixed earlier.
+
+- **r129 features (pending hardware verify).** Remote sound + session recording.
+  • Remote sound = WASAPI loopback via miniaudio on Windows. **CORRECTION
+    (r130): the earlier claim that macOS cannot capture system audio without a
+    virtual device (BlackHole) was WRONG.** ScreenCaptureKit gained audio
+    capture in macOS 13 (`SCStreamConfiguration.capturesAudio`), so no driver is
+    needed. r130 implements it in NeevVoice.app — Swift, because SCStream is an
+    ObjC/Swift framework and TCC attributes capture to the asking bundle — and
+    ships 8 kHz mu-law frames to the worker as base64 lines over the existing
+    control socket. Needs SCREEN RECORDING permission (macOS captures system
+    audio under that grant even for audio-only), and NeevVoice.app needs its own
+    grant separate from neev-agent; the helper shows an alert saying so. macOS
+    12 and older keep the disabled menu item.
+    The Swift mu-law encoder was verified byte-identical to agent/audio's Go one
+    across all 65536 sample values — a mismatch would decode as noise, not fail. Mic + system sound share
+    ONE PCMU track and are mixed in the PCM domain (`audio.Mix`) — adding mu-law
+    bytes would be noise, since mu-law is logarithmic. Quality is 8 kHz mono
+    telephone-grade: fine for an error chime or speech, poor for music.
+  • Recording = VP8 → WebM MUX in the worker (`agent/record`), reusing frames
+    already encoded, so no second encoder competes with the live stream.
+    Segment and clusters use UNKNOWN size so a recording cut short by a crash
+    still plays — verified with ffprobe in the test suite. Saved to
+    ~/Documents/Neev Recordings/. A resolution change closes the file and opens
+    a new one, because a WebM track declares one size.
+  • BOTH are host-only controls, by design: a viewer able to start recording or
+    open the host's mic remotely would make this a surveillance tool.
+  • NOT possible viewer-side: flutter_webrtc's MediaRecorder (`startRecordToFile`)
+    is unimplemented on Windows and macOS — Dart-side only. Viewer-side recording
+    needs native plugin work in libwebrtc.
+
+- **KP-WHENOPEN — FIXED r128 (pending hardware verify).** Interactive Access
+  "Only while the app is open" behaved exactly like "always": the headless
+  transport could not observe the app window, so `interactiveAllowed()` admitted
+  everything while the UI promised "Requests are ignored when the app is
+  closed". The app now writes a HEARTBEAT (`app-open.txt`, refreshed every 5s)
+  and the transport treats anything older than 15s as closed. A heartbeat, not a
+  create/delete flag: a crashed or force-quit app never deletes anything, and a
+  stale flag would hold the door open forever. Refusal is the correct failure
+  direction — the host chose to be reachable only while at the app.
+  Also: refused viewers now receive a bye with a stable reason token
+  (`interactive_disabled`, `consent_denied`) instead of sitting on a spinner
+  until timeout and blaming the network. The viewer stops auto-reconnecting on a
+  refusal — re-dialling a decision means repeated consent popups at someone who
+  already said no.
+
+- **KP-VOICE — PARTLY CLOSED in r126 (pending hardware verify).** The Go
+  transport now carries a PCMU audio track, capture/playback live in the worker,
+  and the host has a "Mic on/off" button on the Windows session bar. Still open:
+  CLOSED in r127: macOS hosts now get NeevVoice.app, a menu-bar item with
+  "Remote session active", a microphone toggle and End session, started by the
+  worker for the life of a session. It is an .app bundle rather than a bare tool
+  because macOS shows the mic prompt using the CALLING process's Info.plist — a
+  bare executable gets an unexplained prompt, which users decline. Ad-hoc signed
+  with a pinned identifier (com.neev.remote.voice) so TCC grants survive updates.
+  Still unverified on hardware: the TCC prompt itself, and audio over a real
+  session. Original entry follows.
+
+- **r140 — the static was the DEVICE RATE.** Found from r139's diagnostics:
+  `audio: device opened ... hw_rate=8000` on speakers, microphone AND loopback,
+  on both machines. Setting `cfg.SampleRate = 8000` makes miniaudio run the
+  HARDWARE at 8 kHz; Windows endpoints run at their mix-format rate and almost
+  none support 8 kHz natively, so every device was being driven at a rate it
+  could not do — continuous static regardless of speech or mute state. Devices
+  now open at `DeviceRate` (48 kHz, universally supported) and the 8 kHz wire
+  conversion happens in `audio.Downsample` / `audio.Upsample`. Downsampling
+  AVERAGES (plain decimation aliases into a metallic warble); upsampling
+  INTERPOLATES (sample-and-hold is broadband noise on top of the voice).
+  Earlier attempts r138 (stereo buffer shape, idle release) and the r139
+  overrun guard were real bugs but not this one — guessing failed twice, the
+  log line settled it immediately.
+
+- **r137 — the ACTUAL cause of silent viewer→host voice.** `pc.OnTrack` in
+  `agent/network/peer.go` was registered only `if role == RoleController`. The
+  host is RoleAgent, so pion never delivered an incoming track to it and
+  `transport.go`'s `peer.OnTrack` assignment was DEAD CODE. No SDP change could
+  have fixed it. Proven by host logs: `audio track added ... codec=audio/PCMU`
+  present, `viewer opened a voice track` absent. Regression test connects two
+  real pion peers and asserts a RoleAgent peer receives an audio track.
+  r134/r135 (direction + mid matching) were still necessary but were fixes at
+  the wrong layer — the lesson is that "host→viewer works, reverse silent"
+  points at the RECEIVING side, and I spent two releases on the sender.
+
+- **r134 — viewer→host voice was NEVER working (fixed).** Host→viewer worked,
+  so voice looked fine. The viewer adopted the offered audio transceiver and
+  took its sender, but never set its DIRECTION — with no mic attached at answer
+  time the answer declared `recvonly`, and `replaceTrack` swaps a track, it
+  does NOT change a negotiated direction. So enabling the viewer mic opened the
+  device and transmitted into a channel the SDP said was one-way. Fix:
+  `setDirection(SendRecv)` on the adopted transceiver BEFORE `createAnswer`.
+  Lesson: a one-way voice bug is indistinguishable from a dead microphone from
+  the outside. Diagnostics added on all three hops — viewer logs the NEGOTIATED
+  direction when the mic turns on, transport logs the viewer track opening and
+  its first arriving packet, worker logs first playback to the speakers.
+
+- **r133 — the VIEWER can start/stop recording.** Record button in the viewer
+  toolbar sends `{k:'cmd',c:'record',on:...}`; the host captures (no re-encode)
+  and streams the file back on stop. Handled BEFORE the per-platform
+  `handleCommand` so lock/logoff/reboot/privacy keep their existing shape —
+  tests assert the record handler consumes ONLY its own message and never mouse
+  or keyboard traffic.
+  No host approval prompt: the viewer already sees every pixel live, so a
+  recording adds no new visibility. It is not silent either — the host's session
+  bar turns red "Recording" whoever started it (`setSessionBarRecording`, pushed
+  to the macOS helper over the control socket), and the host can stop it.
+
+- **r132 — recordings reach the VIEWER.** Recording still happens host-side
+  (VP8 mux, no re-encode), but when the host stops it the file is streamed to
+  the connected viewer over the existing file-transfer channel and lands in
+  their Downloads. No consent gate: the viewer WATCHED that session live, so the
+  file contains nothing new to them — and the host keeps their copy regardless.
+  Viewer-side recording remains impossible (flutter_webrtc `startRecordToFile`
+  is unimplemented on Windows/macOS; `captureFrame` exists but polling PNGs is
+  not a recorder).
+  Two transfer bugs found while building it:
+  • `ExportFileStreaming` added — the old export read the WHOLE file into memory,
+    which at ~11 MB/min of recording is an OOM risk on the host.
+  • RECEIVER never checked that the bytes received matched the offered size: it
+    wrote whatever arrived, marked it done, acked `saved`, and set
+    `transferred = offered size` regardless. Since `end` (hi lane) can overtake
+    data (bulk lane), a truncated recording looked identical to a good one. Now
+    a length mismatch is an error. This was the receiving half of the sender-side
+    short-read bug fixed earlier.
+
+- **r129 features (pending hardware verify).** Remote sound + session recording.
+  • Remote sound = WASAPI loopback via miniaudio on Windows. **CORRECTION
+    (r130): the earlier claim that macOS cannot capture system audio without a
+    virtual device (BlackHole) was WRONG.** ScreenCaptureKit gained audio
+    capture in macOS 13 (`SCStreamConfiguration.capturesAudio`), so no driver is
+    needed. r130 implements it in NeevVoice.app — Swift, because SCStream is an
+    ObjC/Swift framework and TCC attributes capture to the asking bundle — and
+    ships 8 kHz mu-law frames to the worker as base64 lines over the existing
+    control socket. Needs SCREEN RECORDING permission (macOS captures system
+    audio under that grant even for audio-only), and NeevVoice.app needs its own
+    grant separate from neev-agent; the helper shows an alert saying so. macOS
+    12 and older keep the disabled menu item.
+    The Swift mu-law encoder was verified byte-identical to agent/audio's Go one
+    across all 65536 sample values — a mismatch would decode as noise, not fail. Mic + system sound share
+    ONE PCMU track and are mixed in the PCM domain (`audio.Mix`) — adding mu-law
+    bytes would be noise, since mu-law is logarithmic. Quality is 8 kHz mono
+    telephone-grade: fine for an error chime or speech, poor for music.
+  • Recording = VP8 → WebM MUX in the worker (`agent/record`), reusing frames
+    already encoded, so no second encoder competes with the live stream.
+    Segment and clusters use UNKNOWN size so a recording cut short by a crash
+    still plays — verified with ffprobe in the test suite. Saved to
+    ~/Documents/Neev Recordings/. A resolution change closes the file and opens
+    a new one, because a WebM track declares one size.
+  • BOTH are host-only controls, by design: a viewer able to start recording or
+    open the host's mic remotely would make this a surveillance tool.
+  • NOT possible viewer-side: flutter_webrtc's MediaRecorder (`startRecordToFile`)
+    is unimplemented on Windows and macOS — Dart-side only. Viewer-side recording
+    needs native plugin work in libwebrtc.
+
+- **KP-WHENOPEN — FIXED r128 (pending hardware verify).** Interactive Access
+  "Only while the app is open" behaved exactly like "always": the headless
+  transport could not observe the app window, so `interactiveAllowed()` admitted
+  everything while the UI promised "Requests are ignored when the app is
+  closed". The app now writes a HEARTBEAT (`app-open.txt`, refreshed every 5s)
+  and the transport treats anything older than 15s as closed. A heartbeat, not a
+  create/delete flag: a crashed or force-quit app never deletes anything, and a
+  stale flag would hold the door open forever. Refusal is the correct failure
+  direction — the host chose to be reachable only while at the app.
+  Also: refused viewers now receive a bye with a stable reason token
+  (`interactive_disabled`, `consent_denied`) instead of sitting on a spinner
+  until timeout and blaming the network. The viewer stops auto-reconnecting on a
+  refusal — re-dialling a decision means repeated consent popups at someone who
+  already said no.
+
+- **KP-VOICE (as filed at r125) — in-session voice does not work against a
+  TransportMode host.** The Flutter host/viewer path carries two-way audio, but a
+  TransportMode host is the Go transport, which builds a video track only
+  (`agent/network/peer.go` adds one `TrackLocalStaticRTP`, VP8) — so those
+  sessions have no `m=audio` section at all. Since TransportMode is the default
+  install, most users get no voice. This is SURFACED, not hidden:
+  `RemoteService.voiceAvailable` is false and the mic button disables with an
+  explanation. Plan for closing it (design settled, not built):
+  - Capture/playback must live in the **capture worker**, not the transport. The
+    worker runs in the user session via `CreateProcessAsUser` and therefore has
+    an audio session; the SYSTEM transport does not.
+  - Use **G.711 PCMU, not Opus**. PCMU is ~40 lines of pure Go (mu-law table),
+    is a standard WebRTC codec, and needs no libopus — which would mean a new
+    system dependency on both CI runners. Telephone-grade 8 kHz mono is right
+    for support voice, and keeping the Windows toolchain unchanged protects the
+    Windows-to-Windows baseline (LD rule).
+  - Device I/O via header-only miniaudio (cgo, compiles inline, no external
+    lib). cgo is already in the build for libvpx, so this adds no new class of
+    dependency.
+  - New IPC kinds for audio in both directions, mirroring `KindVideoFrame`;
+    transport packetizes to an RTP audio track and depacketizes `OnTrack` back
+    down to the worker.
+  - The Flutter viewer needs NO change: it adopts whatever audio transceiver the
+    offer contains and does not munge the `m=audio` section.
 
 - **KP-1 — UAC prompt not shown on viewer (regression). FIX IMPLEMENTED
   2026-07-08 (pending hardware verify).** Root cause: NOT capture (helper log
@@ -264,6 +1025,617 @@ hardware-confirmed intact.
 
 ## Change Log
 
+- **2026-08-07 — the macOS host was unusable end to end; six separate faults,
+  each hiding the next (r164-r169).** Fixed in order of discovery:
+  (1) the pkg followed a Trash copy instead of /Applications (LD-PKG-3);
+  (2) the app called a daemon "installed" from its plist alone while the agent
+  binary was gone, so it skipped repair and hosted the session itself;
+  (3) the app could not read the daemon's id — transport.txt is root-owned 0600
+  because it carries the password — so the share card rendered an empty id on a
+  machine that was registered and hosting; the transport now announces
+  credentials to the worker over IPC (KindHostCreds) and the worker writes them
+  into the logged-in user's own directory at 0600, matching how Windows already
+  asks its SYSTEM helper;
+  (4) a Mac without Screen Recording did not fail to capture, it ABORTED —
+  flutter_webrtc's source enumeration calls abort() — so the host died before it
+  could show the consent prompt and every viewer hung at "Requesting the
+  device"; now preflighted;
+  (5) the shipped agent linked Homebrew dylibs from the CI machine
+  (/opt/homebrew/...), so the daemon could not start on any Mac without
+  Homebrew; now self-contained via @loader_path with the libraries installed
+  beside it and verified against the binary's own references;
+  (6) **the relay minted ids as NNN-NNN-NNN while the app strips every
+  non-alphanumeric character before dialing**, so every daemon-hosted machine
+  showed Online and answered "agent not found or offline" to every connect. Both
+  the in-memory map and the Redis registry are now keyed by one normalized form;
+  AgentInfo.ID keeps its dashed shape for display. Deployed server-side, which
+  repaired every already-installed client without an app update. Windows-to-
+  Windows is unaffected: it has only ever used bare-digit ids, for which the
+  normalizer is exactly the identity function.
+  Also added: peer/ICE state logging in the shared WebRTC service, input
+  injector logging through zerolog, and self-healing after a TCC grant
+  (LD-MAC-TCC-4) so a macOS host no longer needs a manual `launchctl kickstart`
+  the way it did all day.
+
+- **2026-08-03 — Unattended access is no longer optional; seamless transport has
+  a crash-loop fallback (r120).** The installer offered "Seamless user-switch
+  (experimental)" UNCHECKED, plus a second unattended-access checkbox. A user who
+  skipped them silently got a lesser product — that path carries unattended
+  access, the host consent prompt, host-side view-only enforcement and the
+  session bar — and could not fix it afterwards: the flags live in
+  `HKLM\SOFTWARE\NeevRemote` and nothing in the app can write them, so the only
+  remedy was reinstalling. Both checkboxes are removed and both flags are now
+  written unconditionally; only the desktop-shortcut choice remains.
+  **This was only safe once the service could give up.** The helper previously
+  relaunched the transport forever with no alternative, so a `neev-host.exe`
+  that could never start left the machine unreachable with a log full of
+  relaunch lines. It now counts a transport exiting within 15s of launch (or
+  failing to launch at all) as a fast failure, and after three marks seamless
+  broken and runs the Flutter host instead — regardless of the ServiceHost flag,
+  because unreachable is the worst outcome. Logged loudly, never silent.
+  **LD-34 (new): a capability the product depends on must not be an installer
+  checkbox that is OFF by default, especially when nothing in the app can turn
+  it on afterwards — getting it wrong once meant reinstalling. Default it on and
+  make the failure path recoverable, rather than relying on the user to choose
+  correctly.**
+  The fallback is deliberately TEMPORARY: `transport.Run()` exits immediately if
+  `ipc.Listen(47930)` fails, which is exactly what an upgrade does while the old
+  transport still holds the port, so a permanent fallback would have downgraded
+  healthy machines until reboot. Threshold 5 fast failures, retried after a
+  5-minute cool-off. A relay outage cannot trigger it at all — the signaling
+  client reconnects with backoff and its error is logged, not returned.
+
+- **2026-08-03 — Consent card flicker fixed at the root; stale prompt withdrawn;
+  new logo applied (r114–r115).**
+  **(a) FLICKER.** Removing the map animation was necessary but NOT sufficient —
+  the animation was only one trigger. The card was painted DIRECTLY to the
+  window, so every repaint rebuilt it in place (background, map polygons, text)
+  and the intermediate states were visible. Hovering Accept/Decline invalidates
+  the whole card, so the flash happened exactly while the user was deciding.
+  Fixed by drawing into an off-screen bitmap blitted in one BitBlt, and claiming
+  WM_ERASEBKGND so the system never blanks the window first. Session bar gets the
+  same treatment. **LD-33 (new): any owner-drawn Win32 surface here must be
+  double buffered and must claim WM_ERASEBKGND. Hover states alone repaint often
+  enough that direct drawing is visibly broken.**
+  **(b) STALE CONSENT PROMPT.** If the viewer cancelled while the host's prompt
+  was open, it stayed up until dismissed by hand — nothing told the host the
+  question was moot; the transport just waited out its 30s timeout and the worker
+  was never notified. Added `KindConsentCancel`; withdrawn on viewer bye, on
+  askConsent giving up (covers cancel/timeout/shutdown), via WM_CLOSE on Windows
+  and by killing osascript on macOS. **The Flutter host had the same bug on its
+  own path** (bye removed the peer but left `_pendingConsent` set and the dialog
+  on screen) — fixed there too.
+  **(c) BRANDING.** New logo applied to macOS/Windows app icons, Flutter web
+  favicon + PWA icons, the deployed website and the Wails client. Two latent
+  problems found: `web/index.html` referenced `/favicon.png` **which never
+  existed** (broken favicon all along), and `.gitignore`'s blanket `public/` rule
+  would have silently swallowed the new one — narrow exceptions added. Browser
+  tab identity corrected from `neev_remote` to "Neev Remote".
+  **OPEN: the logo is green while DESIGN.md specifies an orange accent
+  (#F05A28) used throughout the UI. Shipped as-is on the user's instruction; the
+  icon and the app currently read as different brands. Needs a decision: retune
+  the design system to green, or recolour the mark.**
+
+- **2026-08-01 — Privacy becomes a LEASE; End button moved to the page that
+  actually renders; laptop artwork corrected (r112).** All three reported as
+  "still broken" after r111.
+  **(a) THE END BUTTON WAS MY REGRESSION.** It was added to
+  `CommandActivityPanel`, which **nothing instantiates** — dead code from the
+  redesign, so it could never appear. Moved to a live-session banner at the top
+  of `HomeCommandCenter` (the rendered page), showing who is watching and
+  whether they hold control or view-only. `RemoteService` now notifies on viewer
+  CONNECT as well as removal, or the banner would not appear until something
+  else rebuilt the page. **Lesson: verify a widget is actually instantiated
+  before adding a control to it — the analyzer reports these as
+  `unused_element`, and several other redesign leftovers are still listed.**
+  **(b) PRIVACY IS NO LONGER A LATCH.** The r111 fix cleared privacy when the
+  transport reported zero viewers. That wiring is correct but depends on
+  NOTICING a disconnect, and every disconnect signal can fail: a crashed or
+  network-dropped viewer sends no bye, an unclean teardown never reaches
+  dropPeer, a lost IPC message takes the session-state notice with it. Now the
+  viewer re-asserts privacy every 4s and the host restores itself 12s after
+  those stop — for any reason. **LD-32 (new): any state that can lock a user out
+  of their own machine must EXPIRE on its own, never depend on observing a
+  disconnect. Session-end teardown stays as the fast path, never as the
+  guarantee.**
+  **(c) ARTWORK.** The accent laptop read as a leaning slab: bezel and display
+  were both accent-filled so no edge defined the screen plane, over a
+  tint-on-white deck that was nearly invisible. Both machines now share one
+  construction and differ only in display fill; bezel inset 0.055 -> 0.13.
+
+- **2026-07-31 — Access model reworked end to end: host authority, AnyDesk-style
+  unattended access, host-side disconnect, privacy lock-out fix (r109–r111).
+  Pending hardware validation.**
+  **(a) VIEW-ONLY WAS BACKWARDS.** Reported: enabling view-only on the HOST did
+  nothing while enabling it on the VIEWER worked. View-only was enforced only in
+  RemoteViewWidget (viewer side), so it was an honour system; `permControl`
+  existed on the host, was assigned in three places and READ IN NONE. The host is
+  now authoritative and drops control attempts where input is consumed
+  (`transport.go` for SYSTEM/root, `remote_service.dart` for the Flutter host).
+  Blocked: mouse/keys/wheel + lock/logoff/reboot/privacy/SAS. Still allowed:
+  clipboard, chat, file transfer, monitor switch — a watcher stays useful.
+  Two later holes closed in the same class: the UNATTENDED path and the
+  REMEMBERED-decision path both took control from `defaultPermControl` and
+  ignored the host's view-only setting entirely.
+  **(b) UNATTENDED ACCESS NOW MATCHES ANYDESK.** The relay already verified each
+  connection against the session password OR the unattended password, then threw
+  that distinction away — so `askOnConnect=false` admitted ANYONE holding the
+  session password unprompted. The relay now stamps `auth: unattended|session`;
+  unattended logins skip the prompt (that password IS the authorisation), session
+  logins are still prompted. Interactive Access is three-state
+  (always / when-open / never); "never" leaves the unattended password as the only
+  door. Separate permission profiles per mode, with clipboard and files now
+  enforced (previously only control was). An older relay omits the field and falls
+  back to "session" — the side that prompts.
+  **(c) THE HOST COULD NEVER HANG UP.** Only the viewer had a disconnect control.
+  Added `KindEndSession` + `KindSessionState`, a native always-on-top
+  "Remote session active / Disconnect" bar on Windows (topmost, non-activating;
+  closing it only hides it — dismissing an indicator must not disconnect anyone),
+  and `endHostSession()` + a button on the Flutter host. **Gap: no native
+  indicator on the macOS daemon host** (its worker has no window infrastructure).
+  **(d) PRIVACY MODE LOCKED USERS OUT OF THEIR OWN MACHINE.** Reported: privacy ON
+  + disconnect left the host blanked with local input blocked, recoverable only by
+  reconnecting to turn it off. Privacy was only ever toggled by an explicit viewer
+  command and nothing cleared it when a session ended. Now torn down on every path
+  (zero-viewer signal, worker start AND defer-on-exit, every Flutter peer-removal
+  route). **The start-side clear matters most on macOS: the gamma table PERSISTS
+  after the process dies, so a crash with privacy on blacked the display until
+  someone reset it manually.** `PrivacyMode` was fire-and-forget and now tracks
+  state; a failed DISABLE stays marked ON so teardown retries.
+  **(e) CONSENT CARD.** Redrawn to the approved landscape design, then corrected:
+  800x560 -> 700x452, and the "laptops" that rendered as stray lines were a
+  PROJECTION bug — an isometric rhombus spans both axes but scale came from `du`
+  alone, so a 132px-wide laptop was drawn 230px wide with ~98px clipped off-panel.
+  **LD-29 (new): the HOST is the sole authority on access level. Viewer-side
+  view-only is a courtesy; enforcement belongs where input is consumed. Any new
+  path that admits a viewer MUST record an explicit grant — and unknown viewers
+  default to ALLOWED, never denied, so an unset flag can never silently kill
+  working features (the footgun that got the original host gate deleted).**
+  **LD-30 (new): whether a connection is prompted depends on HOW it
+  authenticated, never on a global switch. The unattended password is the
+  authorisation; the session password is a request.**
+  **LD-31 (new): privacy mode is SESSION state, not machine state. It must be
+  cleared on every path a session can end, including worker start (a previous
+  crash) — on macOS the gamma blanking survives process death.**
+
+- **2026-07-31 — CRITICAL: the r106 native consent prompt worked only ONCE per
+  worker, then denied every connection (r108).** Reported from the field as
+  "connects only 1 time; closing and reopening the app doesn't help" — the
+  viewer sat on "Negotiating display quality" forever. Restarting the viewer
+  could never help: the wedge was in the HOST worker process. Two independent
+  cross-prompt state leaks, both mine, both shipped in r106/r107:
+  (1) The window class was registered PER PROMPT with a fresh
+  `syscall.NewCallback` closed over that `consentWin`. The second
+  `RegisterClassW` fails with ERROR_CLASS_ALREADY_EXISTS (the code comment
+  asserting this "is fine" was wrong), so the class kept the FIRST callback and
+  every later window was driven by the first prompt's state — Accept set
+  `answered` on a struct nobody was watching, the loop never exited,
+  `showConsentDialog` never returned, and the transport denied on its 30s
+  timeout. Also leaked one callback per prompt against a small process-wide cap.
+  (2) `answer()` and WM_DESTROY called `PostQuitMessage`; WM_QUIT lands on the
+  THREAD queue, and `showConsentDialog` locks/unlocks its OS thread, so a pooled
+  thread could carry a stale WM_QUIT into the next prompt, whose `GetMessage`
+  returns 0 immediately and denies. Fixes: register the class exactly once
+  (`sync.Once`) behind one stable window procedure that resolves the prompt by
+  hwnd, and never post WM_QUIT (every answer arrives from a dispatched message,
+  so the loop exits on its own). Only reachable with "Ask before allowing
+  connections" ON.
+  **LD-28 (new): a process-wide Win32 window class is registered ONCE, behind a
+  stable window procedure that resolves per-window state by hwnd. Never close a
+  wndproc over one dialog's state, and never PostQuitMessage from a dialog that
+  runs on a pooled/locked OS thread.**
+  Two reporting lessons recorded: view-only does NOT touch the WebRTC/peer setup
+  and cannot stop the remote stream, so that correlation was incidental; and the
+  connect screen's four stage checkmarks are a COSMETIC 420ms timer that holds
+  on the last stage until the stream arrives — they indicate nothing about real
+  progress and are a Data Honesty violation still to be fixed.
+
+- **2026-07-31 — macOS consent prompt implemented; a Mac daemon host no longer
+  auto-accepts every connection (r107). Pending hardware validation.** Found
+  while answering "will the popup work on Mac too?" — it would not have, and
+  worse, NO prompt appeared at all. macOS ships the same two-process Go
+  architecture (`com.neev.transport.plist` root LaunchDaemon +
+  `com.neev.worker.plist` LaunchAgent), but two things were Windows-only:
+  (1) `showConsentDialog` was a `!windows` stub returning **true**, and
+  (2) `writeConsentFlag` began `if (!Platform.isWindows) return;`, so
+  `consent.txt` was never written, `consentRequired()` returned false, and the
+  transport auto-accepted — the "Ask before allowing connections" toggle had NO
+  effect on a Mac daemon host.
+  Fixes: `consent_darwin.go` shows a real NSAlert **with a "Remember this
+  decision" checkbox**, hosted by `osascript -l JavaScript` through the ObjC
+  bridge. In-process AppKit is not an option — the agent has no NSApplication
+  and no main-thread run loop (`privacy_darwin.go` runs its CFRunLoop on a
+  private pthread) and the call arrives on an arbitrary goroutine. The device id
+  is passed as argv, never interpolated, so nothing from the wire is executable.
+  The flag now travels via the console user's
+  `~/Library/Application Support/NeevRemote/consent.txt`, read by the root
+  transport through `/dev/console` ownership (`consentflag_darwin.go`); the
+  machine-wide path is still checked FIRST so MDM can force it on. The
+  non-Windows/non-darwin stub now returns **false** (deny) — returning true
+  would auto-accept everything the moment the flag became readable.
+  **Also fixes a real bug in the r106 Windows work:** the consent store used
+  `dataDir()`, which the daemon creates root/SYSTEM-owned, but the capture
+  worker runs as the logged-in USER on both platforms — so saving a remembered
+  decision failed with "permission denied" and was silently lost. Proven on
+  macOS in a test. Added `userDataDir()` (LOCALAPPDATA / ~/Library/Application
+  Support / XDG) and moved the store there, which also scopes a security
+  decision to the user who made it. Same class as the r104 hostlog fallback.
+  Verified by running the real JXA script on macOS: AppKit construction and
+  argv both work and it returns exactly the JSON the Go side parses. 4 Go tests.
+
+- **2026-07-31 — Consent prompt redesigned on BOTH hosts + "Remember this
+  decision" wired; view-only actually enforced (r106). Pending hardware
+  validation.** Two separate pieces of work.
+  (a) VIEW-ONLY was enforced only in `RemoteViewWidget`, which simply doesn't
+  wire its pointer/Focus listeners when viewOnly is set. That covers the mouse,
+  but the OS keyboard hook (`KeyboardHook.supported` is true on Windows AND
+  macOS — why all three pairs broke) and `sendKeyCombo()` from the shortcuts
+  menu call `sendViewerInput` directly and never saw the flag; the host does not
+  gate input at all, so everything sent was injected. The gate now lives in
+  `sendViewerInput`, the documented single funnel. The hook is DISARMED under
+  view-only rather than ignored (it swallows keys locally), and held keys are
+  released when view-only turns on mid-session. NOT a redesign regression: the
+  mode selector was correctly wired the whole time. 5 tests in
+  `test/view_only_test.dart`.
+  (b) CONSENT PROMPT: the box users actually see on a TransportMode host was a
+  stock `MessageBoxW` — its text is verbatim the copy in the approved mockup,
+  which is how that was identified. `MessageBoxW` can't render the design, so
+  `consentwin_windows.go` now hand-draws the card (GDI owner-draw, DPI-scaled,
+  self-hit-tested buttons), with the MessageBox kept as a fallback so a
+  windowing failure degrades to a plain prompt instead of denying a legitimate
+  connection. `consent_dialog.dart` mirrors it for macOS/attended hosts. Closing
+  or dismissing the prompt is always a refusal, never an accept.
+  "Remember this decision" is fully wired in both directions — a remembered
+  Decline auto-declines — with separate stores per host mode
+  (`consent-decisions.json`, SharedPreferences), written atomically via
+  temp+rename. `ForgetConsentDecisions()` / `ConsentStore.forgetAll()` exist so
+  a remembered Decline is undoable; **neither is surfaced in Settings yet — that
+  is the known gap.** A render test caught a 178px footer overflow before it
+  ever shipped.
+
+- **2026-07-30 — Four evidence-based fixes from worker.log: silent zero-byte
+  transfers, the ignored desktop bind, unsupervised clipagent, and hung
+  clipboard pulls (r105). Implements LD-24..LD-27. Pending hardware
+  validation.** Three of the four reported root causes were confirmed in code;
+  the fourth was investigated and REJECTED with its evidence (see LD-27).
+  (1) `filerecv.go` end-guard `rf.size > 0 && rf.written != rf.size` skipped
+  verification whenever a transfer declared 0 bytes → `file transfer finished
+  size=0` and an empty file in Downloads. Now compared unconditionally. The 0
+  bytes originated on the SENDER, where an in-use file (`worker.log`, a
+  spreadsheet open in Excel) read as empty and was sent as a valid transfer;
+  both sides now verify reads against the on-disk size with a short retry, and
+  report a visible failure instead. `serveExport` aborts rather than logging
+  `sent file to viewer bytes=0`.
+  (2) `bindInputDesktop()` warned `SetThreadDesktop failed err="The requested
+  resource is in use."` and returned normally; `serveExport` then opened a
+  picker on a desktop-less thread. Now retries 3×/150 ms, returns success, and
+  the export aborts with `{t:failed}` when it can't attach. NOTE: this did not
+  cause the 0-byte Airtel export — that file was already 0 bytes on disk from
+  the import at 16:27:56, so the correlation in the log is coincidental. Two
+  real bugs, not cause and effect.
+  (3) `clipagent dial FAILED ... actively refused` with no recovery: the helper
+  judged the clipboard agent by process liveness only, so an agent that was
+  alive but not listening was never relaunched. Added a loopback health probe
+  (+ `WSAStartup` in the service process, which had none, and a log line for a
+  failed clipagent launch — previously silent).
+  (4) "Announce tokens never retrieved" is NOT a bug — it is the documented
+  deliver-on-paste design (LD-4/LD-27), and the log contains a healthy pair
+  (18:23:33 announce h2 → 18:23:42 served). No ack/retry/expiry added. The real
+  gap was a FAILED pull: an out-of-order chunk removed the receive record and
+  returned, leaving the blocked delayed-render paste hung in Explorer until the
+  session ended; and the source side swallowed read errors in `catch (_) {}`.
+  Both now complete as explicit failures and are logged.
+  Large-file transfer is deliberately untouched — chunking, the 1 MB `{t:prog}`
+  acks and the 2 MB send window (r82, hardware-confirmed) are unchanged, and a
+  large file stats and reads equal so it takes exactly the same path.
+
+- **2026-07-24 — THE real large-upload fix: receiver-driven ack flow control (r82).
+  ✅ HARDWARE-CONFIRMED by user ("now everything is working after this test").
+  Supersedes the r77/r81 keyframe theory — that was the WRONG layer.** Decisive
+  logs: viewer app.log `sent end` for a 24MB file just 1.3s after `send` (a full
+  dump, no pacing), then host worker.log `receiving file progress written=8404992`
+  then NOTHING, then viewer `ack TIMEOUT` + peer dies + input dies. ROOT CAUSE: the
+  viewer never paces large uploads. `FileTransferManager.sendFile` gated on
+  `bufferedAmount` (`while buffered() > 512KB`), but flutter_webrtc's `bufferedAmount`
+  reads ~0 on Windows (async-cached value the tight send loop starves), so the loop
+  NEVER blocked → the whole file dumped into the ~16MB SCTP send buffer at once →
+  overflow → the 'file' data channel + peer connection tore down → the host froze
+  ~8MB in and EVERY later transfer failed too (small files fit the buffer, so they
+  "worked" — the misleading clue). r80 (clipagent) and r81 (keyframe) both fixed the
+  wrong layer; `8404992` was just the every-8MB progress-LOG mark, not a hard buffer.
+  FIX (bufferedAmount-independent, drain-rate-adaptive): the RECEIVER acks bytes-
+  written every 1MB (`{k:ft,t:prog,id,recv}` — Go `filerecv.go` + Dart host
+  `handleMessage 'data'`); the SENDER never runs more than a 2MB window ahead of the
+  last ack (`file_transfer_service.dart`), so it paces to the real drain rate on any
+  link and can never flood SCTP. Graceful fallback: if the receiver never acks (old
+  build) the sender time-paces (~9MB/s) instead of blocking. Refines LD-15 (pacing is
+  now receiver-ack-driven, NOT bufferedAmount, which is unreliable). Kept r80+r81
+  (independent, correct). Go builds (win) + vet + Dart analyze clean.
+- **2026-07-24 — RESTORED the r77 large-upload fix that a botched revert silently
+  dropped (r81). THE actual cause of "file/clipboard broken after switch".** The
+  viewer app.log (app 10.log) was decisive and reframed the whole hunt: small
+  files SAVE instantly (19KB docx, 298KB pdf → `recv saved`), but LARGE uploads
+  (24MB exe, 13MB zip) → `sent end` then NO ack → the WHOLE viewer peer dies
+  (`no live viewer peer` floods from the instant the big files land) → `ft: ack
+  TIMEOUT` at 30s. Input dies with it. This is NOT a clipboard/switch bug — it is
+  the exact r77 symptom (large upload → host receive-lane starves → worker wedges
+  ~8MB → no ack → peer drops → everything dead). ROOT CAUSE of the regression: the
+  r77→r78 revert dance. r77 (b814309, keyframe throttle + IPC writeLoop fairness)
+  was reverted by b76b335 (the code revert). The intended "un-revert" then ran
+  `git revert HEAD` against the WRONG commit — 68a8ae7, the r78 build-TAG bump
+  ("1 file, 1 insertion") — NOT b76b335. So r77's CODE was never restored; r79 and
+  r80 shipped without it (verified: ipc.go writeLoop had no `hiStreak` fairness,
+  transport.go had no `lastKeyframe`). FIX: `git revert b76b335` (code files only;
+  kept current docs/tag) → restored the keyframe throttle (`requestKeyframe`
+  ≤1/200ms via `lastKeyframe atomic.Int64`) + writeLoop bulk-fairness (a bulk slot
+  after 8 consecutive hi, so a keyframe flood can't starve the file lane). r80's
+  clipagent recv-timeout + dial logging STAY (independent, real hardening — the
+  dial-fail log confirmed the clipagent was healthy, exonerating it). LESSON
+  (reinforces LD-23 meta): after ANY `git revert` of a revert, VERIFY the code
+  actually came back (grep for the restored symbols), never trust the commit
+  subject — a revert can silently target the tag-bump commit instead of the code.
+  Re-test: viewer→host send several files back-to-back INCLUDING a >15MB one while
+  moving the mouse; all must save, none time out, peer must not drop. Go builds
+  (win+darwin) + vet clean.
+- **2026-07-23 — Clipagent wedge-hardening + clipboard-file diagnostics (r80).
+  Part 1 of the file/clipboard session-switch investigation — HARDENING + DIAG
+  only; the targeted fix + full isolation refactor are GATED on a switch-repro
+  log (below).** A deep trace (Go worker/transport/ipc + C++ helper + Dart viewer)
+  of the reported "after a user-profile switch, Import/Export AND clipboard break
+  globally and don't recover" found the Go per-session layer is CLEAN and
+  self-healing: the worker is a SEPARATE PROCESS per session (CreateProcessAsUser),
+  so every Go package singleton (incl. chatStart/chatSend) resets fresh each swap;
+  the transport repoints `t.worker` under lock on every attach and holds no
+  per-worker clip/file state (transport.go:518-536); ipc.Conn is per-connection.
+  So the code as-written SHOULD recover on switch-back — which contradicts the
+  symptom (clipboard+file break, but video+input keep working). Rather than guess
+  a fix blind (the r77/r78 mistake), shipped only what is safe + non-speculative:
+  • **Clipagent recv-timeout** (neev_helper.cpp RunClipAgent): the clipboard-file
+    agent on 127.0.0.1:47922 is single-threaded with a blocking `recv()` and NO
+    read timeout — a half-open/stalled client (e.g. a worker killed mid-op during
+    the deferred prevWorker+new-worker swap overlap, both polling 47922) blocks
+    the one thread FOREVER, so no future worker is served: a genuine global,
+    non-recovering wedge. Added `SO_RCVTIMEO` 5s on accepted sockets (payloads are
+    tiny CF_HDROP paths, so a healthy client never hits it). This is the only
+    single-slot server in the clipboard-file path (contrast the 47921 UAC server,
+    already multi-client). Real robustness bug regardless of whether it is THE bug.
+  • **Clipagent dial-failure logging** (clipfiles_windows.go): the polled read-dial
+    (`clipAgentReadFiles`, every 700ms) and the write-dial (`clipAgentWriteFiles`)
+    swallowed connect errors — the one diagnostic blind spot. Now logged (read is
+    throttled to once-until-recovery). So the switch-repro log will show if the
+    new-session worker can't reach its clipagent.
+  • **REGRESSION_CHECKLIST.md** added (repo root): the mandatory file/clipboard +
+    session-switch matrix to run after ANY UI/IPC/session/helper change.
+  NEXT (gated): user runs the switch-repro (import/export/text-copy/file-copy each
+  tested, original→profile2→profile3→back, both worker.logs + transport.log +
+  helper log) → pins the exact op that fails → THEN the targeted fix + the Part 2
+  isolation (separate KindClipFile IPC lane, one explicit per-session lifecycle
+  contract, Dart file-channel dispatch split) lands as a reviewed refactor with a
+  new Locked Decision. Win↔Win capture/input/secure-desktop unchanged (LD-13). Go
+  builds (windows) + vet clean; C++ compiled by CI's build_windows.ps1 (cl).
+- **2026-07-23 — Stable host password + clear viewer connect errors (r79).
+  Implements LD-23.** A long "won't connect one direction / stuck on Connecting"
+  investigation resolved to a NON-code + code mix. RELAY logs (`deploy-server-1`)
+  were decisive: `invalid password attempt ×5` for one target, `connect request
+  forwarded` for the other. ROOT CAUSE: the TransportMode host re-minted a random
+  password every boot (`transport.go` fell through to `GenerateRandomPassword()`
+  and never persisted it — `machine.dat` had only the id), so a viewer's saved
+  password silently went stale and the relay rejected it. FIX: `persistMachineCreds()`
+  freezes id+password into `machine.dat` on first register (only when it had no
+  password — never clobbers a user-set one); `_friendlyConnectError()` turns raw
+  relay errors into actionable viewer text (wrong password / too many / offline)
+  so a failure is never a blank "Connecting…". Also folds back the restored r77
+  (keyframe throttle + IPC lane fairness) that the r78 revert had removed — r77
+  was proven innocent of the connect issue by the relay logs. Detours corrected
+  this session (recorded so they aren't repeated): (a) r77→r78 REVERT then
+  RESTORE — r77 never broke Win↔Win; the first failure was a consent 30 s timeout
+  (`consent.txt=1`, nobody clicked the Win32 box); (b) a hypothesised AnyDesk
+  consent-popup Accept-wiring regression was DISPROVEN — that rich popup was never
+  built; the only consent UIs (single-Accept `AlertDialog` → `acceptConnection()`,
+  Win32 `MessageBox`) are both correctly wired. No change to consent dialog,
+  Win↔Win capture/input/secure-desktop, clipboard, chat, or file transfer (LD-13).
+  Go builds (darwin + windows) + vet + Dart analyze clean.
+- **2026-07-23 — Clipboard/chat/file regressions + card rebuild (r75).**
+  • **IPC writeLoop deadlock (root cause of clipboard host→viewer + chat replies +
+    file 'saved' acks all breaking together, "1st file ok, 2nd unconfirmed, 3rd
+    stuck"):** `agent/ipc/ipc.go` writeLoop returned on ANY socket write error
+    WITHOUT closing `done`, so every later WriteMessage/WriteBulk buffered then
+    blocked FOREVER (and never returned an error, so the worker's transport-gone
+    respawn never fired). FIX: on write error close `done` via closeOnce → producers
+    get ErrConnClosed, the reader sees the dead conn, session reconnects instead of
+    silently wedging.
+  • **Consent thread-desktop leak (viewer→host clipboard while consent ON):**
+    `consent_windows.go` did LockOSThread + bindInputDesktop + UnlockOSThread
+    without restoring/closing the desktop → returned a desktop-polluted thread to
+    the Go pool; a later clipboard call landing on it ran under the wrong desktop.
+    FIX: new `bindInputDesktopSaved()` (deskbind_windows.go) saves the prior thread
+    desktop + closes the opened HDESK on return; consent uses it.
+  • **Chat window not displaying (host got the message, no popup):** the boot-time
+    chat window could be behind/minimised. `chatEnsureShown` now SW_RESTORE +
+    BringWindowToTop + SetForegroundWindow. (If it persists it's a wrong-desktop
+    creation at boot — check worker.log "chat window created/create failed".)
+  • **Consent prompt wording** cleaned (strip internal "ctrl-" prefix, group the id
+    as XXX XXX XXX). Full AnyDesk-style custom window is a later follow-up.
+  • **Device cards rebuilt** (Command Center): smaller (~108px thumbnail, ~240px,
+    2–6 cols), premium — online dot + name + favorite in the body, OS·ID on one
+    mono line, compact Connect; LIGHT tinted placeholder + small tilting glyph
+    instead of the heavy dark ground so real screenshots stand out. Single device
+    profile (removed nav-rail + top-bar "This PC" chips; kept the activity-panel
+    "This device" card) — r74b.
+- **2026-07-21 — Discovery flicker/slow-refresh fix + consent gate in
+  TransportMode (r73). Implements LD-22.**
+  • **Discovery (Dart, viewer-side):** flaky "shows then vanishes" + "refresh
+    takes long to rediscover". ROOT CAUSE: the refresh button hard-cleared BOTH
+    sources (`_devices.clear()` UDP + `_serverPeers.clear()` relay) → list blinked
+    empty → spinner → slow repopulate at 3 s/5 s cadence; plus a tight 12 s UDP
+    stale window flickered devices under lossy broadcast; plus the relay list
+    full-replaced on any transient/empty poll. FIX: refresh no longer clears
+    (re-announce/re-poll, let stale-prune remove gone devices); UDP announce 3→2 s,
+    stale 12→20 s (tolerates ~9 lost packets); relay eviction now needs 2
+    consecutive misses (`_serverPeerMiss`) so one empty reply can't wipe the list.
+  • **Consent in TransportMode:** the "Ask before allowing connections" Accept/Deny
+    dialog never popped on SYSTEM-service hosts. ROOT CAUSE: the Go transport
+    auto-accepts (`onConnect`→`CreateAgentOffer`, no gate) and the Flutter consent
+    dialog is on the suppressed startHosting path; the transport had no knowledge
+    of the toggle. FIX (LD-22): app writes `%ProgramData%\NeevRemote\consent.txt`
+    (`consent_flag*.dart`); transport `consentRequired()` reads it and, when on,
+    `askConsent()` sends `KindConsentRequest` to the worker, which shows a
+    `MessageBoxW` Accept/Deny on the interactive desktop (`consent_windows.go`) and
+    replies `KindConsentReply`; the offer is deferred until Accept — Deny/30 s
+    timeout/no-session → refuse. New IPC kinds 0x0A/0x0B (first request/response
+    pair). Windows-first (macOS stub). Pending hardware validation of the modal +
+    deny path. Go builds (darwin + windows cross-compile) + Dart analyzes clean.
+- **2026-07-21 — Large file aborted mid-send (false stall); progress-based drain
+  timeout + cancel-on-abort (r72).** After r71 killed the file-lane DEADLOCK
+  (confirmed: a stalled large file no longer wedges the lane — every file after it
+  finishes), one gap remained: an individual large file (~>12 MB) intermittently
+  aborted mid-transfer (host wrote ~8–16 MB, never finished), and it worked again
+  only after a reconnect. ROOT CAUSE (viewer-side, file_transfer_service.dart):
+  `sendFile`'s drain wait used a FIXED 30 s timeout — `while buffered()>highWater`
+  for 30 s → abort. r71's bulk-lane backpressure legitimately PAUSES the sender
+  when the import competes with the live video stream for bandwidth; once the SCTP
+  buffers fill (after several transfers) that pause exceeds 30 s and the fixed
+  timeout misread "receiving slowly" as "peer dead" → false abort. Fresh SCTP
+  buffers (after reconnect) are empty, so the first big file slips through — hence
+  "works after reconnect". FIX: the stall timer now RESETS whenever the buffer
+  actually drains; it only fires after the window with ZERO drain progress (peer
+  truly stopped). A large file over a slow/contended link now completes (drains
+  steadily, just slowly). Also: on a real abort the viewer sends `{t:'cancel',id}`
+  so the host deletes the partial immediately (was leaked until worker teardown).
+  Refines LD-15 (drain pacing is progress-based, not fixed-duration). Viewer-only
+  Dart change; no Go/wire change. Analyzes clean.
+- **2026-07-21 — Large file (>~16 MB) deadlocked the whole file lane; writer-
+  goroutine IPC redesign (r71). Implements LD-21.** Logs (r70): viewer sent a
+  23.8 MB import fully (`sent end`) → host logged only the offer, never finished;
+  then EVERY later file (63 KB, 194 KB) + all export requests `ack TIMEOUT`, until
+  a manual reconnect. Clipboard lane stayed alive (r70 split holds) — only the
+  FILE lane wedged. ROOT CAUSE: the r69 per-conn write MUTEX was held across a
+  blocking socket write — on a file bigger than the pipe (fileCh 256 + socket
+  buffers) the transport's file-forward `WriteMessage` blocked holding the mutex,
+  starving input and deadlocking the single bidirectional transport↔worker pipe;
+  it never self-cleared. Export uses the same lane → same wedge → no picker. FIX:
+  replaced the mutex with a single WRITER GOROUTINE per `ipc.Conn` draining three
+  priority lanes — `WriteMessage` (hi: input/control/acks/chat/keyframe/video-info),
+  `WriteBulk` (bounded reliable: file + clipboard-file bytes = real backpressure),
+  `WriteDroppable` (video: drop-oldest). No producer holds a lock across a socket
+  write; hi always beats bulk (input never behind file data); one writer keeps
+  frame integrity (LD-19). Bulk backpressure paces the sender via pion's
+  per-channel read goroutine, which (confirmed in network/peer.go) means blocking
+  the file channel never blocks the input channel. Call sites: transport
+  file-forward → WriteBulk; worker video → WriteDroppable; clipboard image +
+  clipfdat bytes + export data chunks → WriteBulk; everything else → hi. Also:
+  host receive-progress log every 8 MB + export request/picker logs (a stall is
+  no longer invisible); `fileCh` 256→512. Pure Go, no wire change; Win↔Win
+  capture/input/secure-desktop untouched. Builds + vets clean.
+- **2026-07-21 — r69 side effect: clipboard-file + file-transfer shared one lane
+  and blocked each other (r70). Implements LD-20.** After r69 (`r69-ipc-serialize`)
+  a test showed clipboard Ctrl+C/Ctrl+V never completing (worker.log: 3 `announcing
+  host clipboard files` h1/h2/h3, no pull) and one export file stuck "Delivered
+  (unconfirmed)". ROOT CAUSE: r69 correctly moved `KindFileData` off the input
+  goroutine, but funnelled BOTH file transfers ({k:ft}) and clipboard-file ops
+  ({k:clipf*}) onto ONE `fileCh` drain goroutine — and `serveBytes` (viewer pasting
+  a host file) streamed the WHOLE file SYNCHRONOUSLY on it. So a clipboard serve
+  blocked file-transfer acks, and a file transfer blocked clipboard pulls — one
+  shared serial lane, both symptoms. FIX (keeps r68 anti-freeze + r69 write mutex):
+  (1) reader routes KindFileData to two independent lanes `fileCh`/`clipCh` by a
+  cheap kind peek (`isFileTransferMsg`); (2) `serveBytes` now runs on its own
+  goroutine (`go cf.serveBytes`), like serveExport, so a big paste never blocks its
+  lane; (3) the `finishFile` clipagent write (host-destination staging, ~2s helper
+  round-trip) runs async too; (4) added pull/serve logs (`viewer pulling host
+  clipboard file` / `served host clipboard file`) — the missing completion
+  instrumentation. Three independent lanes now: capture/input (reader), file
+  transfer, clipboard — no shared serial choke. Pure Go, no wire change; Win↔Win
+  capture/input/secure-desktop untouched. Builds + vets clean.
+- **2026-07-21 — Large file froze remote control: IPC write race in the Go
+  transport/worker (r69). Implements LD-19.** Log evidence: host `worker.log`
+  logged `receiving file …SADP__EN.zip size=71581150` then NOTHING ever again;
+  viewer logged 3 files `ack TIMEOUT` + 2 min of `input mv dropped — no live
+  viewer peer` starting the instant the big file began; the file landed truncated
+  at 756 KB. ROOT CAUSE (not "blocking write starves input" — sharper): the single
+  transport↔worker `net.Conn` is written by many goroutines, and `ipc.WriteMessage`
+  emits header+payload as two unsynchronized `Write`s. A 71 MB transfer = ~2000
+  chunk writes racing with live input + keyframe reqs → interleaved partial
+  messages corrupt the frame stream → the worker's `ReadMessage` reads a bogus
+  length → reader loop errors/blocks → input AND file processing wedge forever.
+  Small files (few chunks) rarely collided, so 1–3 worked. FIX (4 parts): (1)
+  `ipc.Conn` wrapper serializes all writes with a mutex (`agent/ipc/ipc.go`);
+  every worker-conn write on both sides now goes through `conn.WriteMessage`
+  (transport.go, worker.go, clipboard.go, clipfiles_windows.go, filerecv.go).
+  (2) worker hands `KindFileData` to a dedicated drain goroutine (buffered chan)
+  so disk I/O never delays `KindInput` injection (worker.go). (3) `filerecv`
+  tracks size-vs-written and reports `{t:'failed'}` + deletes the partial on
+  truncation / create-error / write-error / session-teardown (`closeAll`) —
+  never a silent 756 KB truncation. (4) r68's client 30 s ack-timeout stays as
+  the backstop. Platform-guarded: pure Go serialization, no wire-format/logic
+  change; Win↔Win capture/input/secure-desktop paths unchanged (it FIXES a
+  Win↔Win freeze); macOS daemon shares the IPC and benefits too. Builds + vets
+  clean locally.
+- **2026-07-21 — File transfer r67 follow-up: no-hang confirmation + per-id
+  diagnostics (r68). Implements LD-18.** Reported: viewer sends 5 files, host
+  saves file 1, files 2–5 stuck at "Delivered — confirming…" forever, never on
+  disk; `worker.log` silent (so the receive path is the Dart `FileTransferManager`,
+  NOT the Go worker — confirmed). INVESTIGATION: read every layer (sender queue,
+  receiver, `_finishIncoming`, ack handler, file-channel `onMessage` wiring on
+  both offerer+answerer) and REPRODUCED concurrent `reserveUnique` (5 same-name
+  after 7 pre-existing → 5 distinct paths, no hang). The ack path is ALREADY
+  per-id — the "single shared slot" theory does not match the source. The true
+  drop (offers 2–5 leaving no placeholder ⇒ not reaching/completing on the host)
+  is only pinnable from a real run, so per the KP-2 "no blind behavior changes"
+  rule we did NOT invent a fix. Shipped: (A) per-id diag logs on both ends
+  (`ft` tag): recv offer / reserved / recv end / wrote / ack saved / recv
+  saved|failed, sender sent-end / ack timeout — the next 8-file run's app.log
+  shows exactly where 2–5 die. (B) HARDENING so it can never hang silently:
+  `_finishIncoming` now emits `{t:'failed',id,err}` on any exception; the sender
+  arms a per-id 30 s ack timeout (`_ackTimers[id]`) that settles a stuck send as
+  "Delivered (unconfirmed)" instead of an infinite spinner; new `failed` handler
+  + `FileTransfer.unconfirmed`. Everything keyed by transfer id (LD-18). Part C
+  (precise fix at the real drop point) follows once the instrumented log is in.
+- **2026-07-21 — File transfer: fixed silent overwrite (only last file survived)
+  + false "Sent"; consent toggle actually wired (r67). Implements LD-16 + LD-17.**
+  • **Overwrite (data loss):** the Flutter-host receive path allocated the
+    destination at `end` time via a check-then-write dedup loop in
+    `saveToDownloads`, and `_finishIncoming` was fired un-awaited — so N same-named
+    transfers finishing close together all evaluated "does `foo.png` exist?" before
+    any had written, all picked the identical path, and the last write won (4
+    silent losses looked like 5 "Sent"). FIX: `FileStore.reserveUnique` atomically
+    `create(exclusive:true)` a unique placeholder the MOMENT the `offer` arrives
+    (`file_store_io.dart`); `_Incoming` carries that reserved path; `_finishIncoming`
+    writes to it via `writeReserved`. Race-free regardless of same-name. The Go
+    worker path (`filerecv.go`) already created the file synchronously at offer on
+    one goroutine — safe, unchanged behavior.
+  • **False "Sent":** the sender set `done` purely when its SCTP buffer drained —
+    no host confirmation existed on the wire. FIX: new `{k:'ft',t:'saved',id,path}`
+    ack sent by BOTH receivers (Dart `_finishIncoming`, Go `filerecv.go` on `end`).
+    New `FileStatus.sent` = "Delivered — confirming…"; a send flips to `done`
+    ("Saved on host") ONLY on the ack. If a host never acks it stays "Delivered"
+    (honest), never a false success. `clearFinished`/`anyDone` keep unconfirmed
+    rows. Cancel deletes the reserved placeholder.
+  • **Consent toggle inert (LD-17):** `promptOnConnect` was `askOnConnect &&
+    !unattendedEnabled` in `ConnectPage.build()` — so any always-on host with an
+    unattended password forced the prompt OFF regardless of the toggle (the
+    `promptOnConnect=false` every log showed). Also `startHosting` only LOGGED the
+    field, never read the setting. FIX: dropped the `&& !unattendedEnabled` clamp
+    (`connect_page.dart`); `startHosting` now reads `askOnConnect` from prefs LIVE
+    at start (`remote_service.dart`). Consent UI already existed + fully wired
+    (`_showConsentDialog`), so it now fires. Win↔Win video/input/secure-desktop
+    untouched; the only Go change is the additive `saved` ack.
+- **2026-07-15 — File transfer: fixed the "stops after 4 files" leak + multi-file
+  select (r65).** ROOT CAUSE (not a literal pool of 4): the single bidirectional
+  `file` SCTP data channel's send buffer (~16 MB libwebrtc default) saturated
+  because backpressure was broken — `_fileBuffered()` read only `_viewerPeer`, so
+  when HOSTING it returned 0 and Host→Viewer had zero backpressure; and the send
+  loop force-sent into a full buffer after a 32 s give-up. ~4 medium files ×
+  ~4 MB ≈ 16 MB → "file 5 fails", and since it's ONE channel per peer, a full
+  buffer stalls BOTH directions until reconnect. FIX: `_fileBuffered()` now
+  reports the max buffered across whichever peers we send to (host or viewer);
+  send loop drains to a 512 KB high-water and, if it can't drain in 30 s, ABORTS
+  that transfer (never force-floods) so the channel stays healthy for the next
+  file and the other direction; `bufferedAmountLowThreshold` armed so native emits
+  drain events. Go receive side (`filerecv.go`) already released handles — clean.
+  MULTI-FILE: `openFiles()` on both export and import; `sendFilesQueued()` sends
+  each file sequentially through the fixed channel, fault-isolated (one failure
+  logs and the queue continues); per-file progress via existing FileTransfer rows.
+
 - **2026-07-17 — Merge all branches → main + CI trigger for testing builds.**
   All 41 commits consolidated: `claude/blissful-lamarr-93a6a9` (39 commits:
   macOS daemon, scroll, clipboard, file transfer 2GB, privacy mode, keyboard
@@ -295,7 +1667,24 @@ hardware-confirmed intact.
     (shared web-safe path; not worth the Windows-regression risk now).
   • **.app bundles** still unsupported (directories are skipped by
     `_announceClipFiles`) — needs zip-on-send; separate additive piece.
-  • **MM-1 privacy NOT fixed** — see Known Problems: needs runtime facts first.
+  • **MM-1 privacy — FIXED in r60.** ROOT CAUSE (confirmed by user: daemon
+    installed on both Macs, nothing blanked at all): with the daemon hosting, the
+    viewer's `{k:cmd,c:privacy}` reached the Go worker, whose `handleCommand` was a
+    no-op off Windows (`command_other.go`), so it was dropped — Flutter's working
+    `PrivacyMode.swift` never runs because the app is no longer the host. Second
+    wall: the daemon captures with **CGDisplayStream (full framebuffer)**, which
+    IGNORES `sharingType=.none`, so a black overlay window would have blacked out
+    the VIEWER too. FIX = blank via the display **transfer/gamma table**
+    (`CGSetDisplayTransferByFormula` 0 on every active display): gamma is applied
+    at SCANOUT, so the physical screen goes black while the FRAMEBUFFER — what
+    CGDisplayStream captures — is untouched, so the viewer still sees the real
+    desktop. No ScreenCaptureKit rewrite needed. Local input blocked by a
+    `CGEventTap` on a dedicated pthread+CFRunLoop (the daemon has no GUI run loop);
+    remote input passes because `input_darwin.go` now stamps every injected event
+    with `kCGEventSourceUserData = 0x4E56494E4A` (same tag as the app's
+    InputInjector). New `privacy_darwin.go` + `command_darwin.go`; `privacy_other.go`
+    / `command_other.go` narrowed to `!windows && !darwin`, so Windows and Linux
+    take byte-identical paths.
 - **2026-07-15 — Viewer captures TRACKPAD two-finger scroll (r58).** A mouse WHEEL
   scrolled the host fine, but a trackpad two-finger scroll did nothing. Flutter
   delivers precision-trackpad scroll as PAN-ZOOM events
@@ -829,6 +2218,33 @@ Guardrail: shipping Flutter host (r30) stays default + untouched through 1–3.
 
 ---
 
+## Releasing
+
+Publish with ONE command; do not hand-copy files.
+
+    # resolve the (short-lived, tokenless) artifact URLs locally, then:
+    ssh neev@172.17.17.77 "/tmp/publish_release.sh <tag> '<mac-url>' '<win-url>'"
+
+`scripts/publish_release.sh` runs ON THE PORTAL and does the whole release:
+download (resumed, size-checked), zip-integrity check, the 28 content checks in
+`scripts/verify_release.py`, backup, fan-out to all 8 canonical names, and
+`version.json` LAST so the update check never advertises a build that is not
+fully served.
+
+Why the portal and not CI: GitHub-hosted runners have no route to this
+machine's private address. Why not a developer laptop: that link failed
+repeatedly — truncated files, stalled transfers, signed URLs expiring
+mid-download — and the size check caught THREE corrupt artifacts in one day
+that would otherwise have shipped. The portal fetches the same files in seconds.
+No GitHub credential is stored on the portal; the caller passes resolved URLs.
+
+Artifact-download gotchas, learned the hard way:
+- Signed artifact URLs EXPIRE. A retry loop must re-resolve the URL each
+  attempt; `curl --retry` re-requests the same dead URL and overwrites good data
+  with a 544-byte error page.
+- Always verify by EXACT byte size against the artifact API, then test the zip.
+  A short read reports success.
+
 ## Notes for future changes
 
 - Never mark a feature "working" until confirmed on hardware (user request).
@@ -836,3 +2252,6 @@ Guardrail: shipping Flutter host (r30) stays default + untouched through 1–3.
   or test secure-desktop/session behavior — those go via CI + user hardware.
 - When a bug report contradicts the code, verify which build (commit SHA) the
   installer under test was actually built from.
+- A control that cannot do anything must be DISABLED and say why, never left
+  looking live. This project has been bitten twice (End button on a widget
+  nothing instantiated; mic button with no audio channel behind it).

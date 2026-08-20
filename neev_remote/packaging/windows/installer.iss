@@ -51,12 +51,22 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 ; account is active. DEFAULT ON — without it the host stays stuck in the first
 ; user's session and won't follow user-switching / logon of another account.
 Name: "allusersstart"; Description: "Keep reachable for every user (follow user-switching / lock screen)"; GroupDescription: "Unattended access:"
-; Seamless user-switch (opt-in, EXPERIMENTAL): run the SYSTEM-service transport
-; (session 0, survives switches) + a per-session capture+input worker instead of
-; the per-session Flutter host, so a user-profile switch hands the viewer the new
-; profile's screen + control with NO disconnect. Requires neev-host.exe to be
-; bundled. DEFAULT OFF — the Flutter host stays the default until validated.
-Name: "seamless"; Description: "Seamless user-switch (experimental, no disconnect)"; GroupDescription: "Unattended access:"; Flags: unchecked
+; Seamless user-switch: the SYSTEM-service transport (session 0, survives
+; switches) + a per-session capture+input worker instead of the per-session
+; Flutter host, so a user-profile switch hands the viewer the new profile's
+; screen + control with NO disconnect.
+;
+; DEFAULT ON (was unchecked). This is the path that carries unattended access,
+; the host consent prompt, host-side view-only enforcement and the session bar,
+; so a user who skipped it silently got a lesser product — and could not enable
+; it afterwards, because the flag lives in HKLM and nothing in the app writes
+; it. Left visible so it can still be deliberately turned off.
+;
+; Safe to default on because the service falls back on its own: repeated fast
+; transport failures and the helper runs the Flutter host instead (temporarily,
+; retried after a cool-off), so a transport that cannot start never leaves the
+; machine unreachable. See neev_helper.cpp (transportBroken).
+Name: "seamless"; Description: "Seamless user-switch (recommended — no disconnect when switching users)"; GroupDescription: "Unattended access:"
 
 [Files]
 ; Packages the entire release folder produced by `flutter build windows`.
@@ -81,15 +91,21 @@ Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Neev Remote
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
-; ServiceHost mode (opt-in via the "allusersstart" task): the helper SERVICE
+; ServiceHost mode (task "allusersstart", default ON): the helper SERVICE
 ; launches + follows the host into the active session, so there is exactly ONE
 ; service-owned host (no duplicate from a per-user Run key). The service reads
 ; this flag live. Removed on uninstall.
 Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "ServiceHost"; ValueData: "1"; Flags: uninsdeletevalue; Tasks: allusersstart
-; TransportMode (opt-in via the "seamless" task): the service runs the Go
-; transport (session 0) + per-session capture+input worker for a zero-disconnect
-; user-profile switch. The service reads this live. Written 1 when chosen, and
-; forced 0 when NOT chosen so unticking it on re-install actually turns it off.
+; TransportMode (task "seamless", default ON): the service runs the Go transport (session 0) +
+; per-session capture+input worker for a zero-disconnect user-profile switch.
+; This is the path that carries unattended access, the host consent prompt,
+; host-side view-only enforcement and the session bar — the product is
+; incomplete without it, so it is not optional.
+;
+; Safe to force on because the service falls back on its own: three fast
+; transport failures and the helper runs the Flutter host instead, so a
+; transport that cannot start can never leave the machine unreachable.
+; See neev_helper.cpp (transportBroken).
 Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "TransportMode"; ValueData: "1"; Flags: uninsdeletevalue; Tasks: seamless
 Root: HKLM; Subkey: "SOFTWARE\NeevRemote"; ValueType: dword; ValueName: "TransportMode"; ValueData: "0"; Flags: uninsdeletevalue; Tasks: not seamless
 #if RelayURL != ""
