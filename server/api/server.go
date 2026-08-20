@@ -59,6 +59,9 @@ func New(cfg *config.Config, registry *session.Registry, hub *signaling.Hub, aut
 	return s
 }
 
+// wsMaxFrameBytes bounds one WebSocket frame on the signaling endpoints.
+const wsMaxFrameBytes = 1 << 20 // 1 MiB
+
 func (s *Server) routes() {
 	// Health check
 	s.app.Get("/health", func(c *fiber.Ctx) error {
@@ -83,10 +86,18 @@ func (s *Server) routes() {
 	s.app.Use("/ws", controllerWSGuard(), wsOriginGuard(s.allowedOrigins))
 	s.app.Get("/ws", websocket.New(s.hub.HandleWS, websocket.Config{
 		HandshakeTimeout: 10 * time.Second,
+		// Cap a single frame. Signaling carries SDP and ICE candidates — a large
+		// offer is tens of KB — so 1 MiB is far above anything legitimate while
+		// stopping one connection from making the relay allocate without bound.
+		// Unset, a single client could exhaust the server's memory by
+		// announcing an enormous frame, which needs no credentials and no
+		// session: the read happens before any of that.
+		ReadBufferSize: wsMaxFrameBytes,
 	}))
 	s.app.Use("/agent/ws", agentWSGuard())
 	s.app.Get("/agent/ws", websocket.New(s.hub.HandleWS, websocket.Config{
 		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   wsMaxFrameBytes,
 	}))
 
 	// REST API v1
