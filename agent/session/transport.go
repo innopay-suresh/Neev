@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -649,7 +650,18 @@ func (t *Transport) announceHostOS(peer *network.Peer) {
 	nameJSON, _ := json.Marshal(name)
 
 	for i := 0; i < 15; i++ {
-		if err := peer.SendControlText(`{"k":"os","v":"windows"}`); err == nil {
+		// runtime.GOOS, not the literal "windows" this used to send.
+		//
+		// Every host announced itself as Windows, including macOS ones. The
+		// viewer keys real behaviour off this value, so a Mac host produced:
+		// no Ctrl->Command translation (viewer and host both looked
+		// non-mac, so no swap happened and every shortcut reached macOS as
+		// Control — copy, paste, save and quit all silently did nothing), the
+		// Windows-only Login/UAC button offered for a machine that has no such
+		// prompt, and any macOS-specific branch skipped. Reported as two
+		// separate bugs, "Ctrl+C does not work" and "the sound/mic/record dock
+		// is missing when I connect to a Mac"; both were this string.
+		if err := peer.SendControlText(`{"k":"os","v":"` + runtime.GOOS + `"}`); err == nil {
 			log.Info().Msg("transport: announced host OS to viewer")
 			if name != "" {
 				_ = peer.SendControlText(`{"k":"hostname","v":` + string(nameJSON) + `}`)

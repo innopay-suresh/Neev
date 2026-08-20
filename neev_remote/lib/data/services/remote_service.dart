@@ -2358,7 +2358,12 @@ class RemoteService extends ChangeNotifier {
     // Host announces its OS so the viewer can map ⌘ ↔ Ctrl.
     if (m['k'] == 'os') {
       _remoteHostOs = m['v'] as String?;
-      if (kRemoteVerboseLog) debugPrint('[os] remote host is $_remoteHostOs');
+      // DiagLog, not debugPrint behind a verbose flag: this single value decides
+      // whether Ctrl is translated to Command for a macOS host, and when it is
+      // null every keyboard shortcut silently does nothing on the remote side.
+      // It was invisible in app.log, so "copy/paste doesn't work from Windows"
+      // could not be told apart from a broken key mapping without guessing.
+      DiagLog.log('viewer', 'remote host OS announced: $_remoteHostOs');
       notifyListeners();
       return;
     }

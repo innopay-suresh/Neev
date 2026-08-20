@@ -368,6 +368,10 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
     if (kLogRemoteInput) debugPrint('[remote-input] $msg');
   }
 
+  // Set once a modifier has been passed through untranslated, so the warning
+  // cannot repeat at key-repeat rates.
+  bool _warnedNoHostOs = false;
+
   // HID usages for the primary command modifiers.
   static const int _hidCtrlL = 0xE0, _hidCtrlR = 0xE4;
   static const int _hidGuiL = 0xE3, _hidGuiR = 0xE7; // ⌘ on macOS, Win key
@@ -377,7 +381,23 @@ class _RemoteViewWidgetState extends State<RemoteViewWidget>
   /// Windows/Linux use Ctrl. Same-family pairs pass through unchanged.
   int _remapModifier(int hid) {
     final host = widget.hostOs;
-    if (host == null) return hid;
+    if (host == null) {
+      // Log ONCE, and only for the modifiers this would have translated.
+      //
+      // A null hostOs means every shortcut reaches a macOS host as Ctrl, which
+      // that host ignores — copy, paste, save, quit all silently do nothing
+      // while the session looks healthy. Without this line nothing anywhere
+      // recorded that the translation had been skipped.
+      if (!_warnedNoHostOs &&
+          (hid == _hidCtrlL || hid == _hidCtrlR ||
+              hid == _hidGuiL || hid == _hidGuiR)) {
+        _warnedNoHostOs = true;
+        DiagLog.log('viewer',
+            'host OS unknown — NOT translating Ctrl/Cmd; shortcuts will not '
+            'work if the host is a different platform');
+      }
+      return hid;
+    }
     final viewerIsMac = defaultTargetPlatform == TargetPlatform.macOS;
     final hostIsMac = host == 'macos';
     if (viewerIsMac == hostIsMac) return hid; // same family, no swap
