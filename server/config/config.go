@@ -28,14 +28,16 @@ type ServerConfig struct {
 	// This is what lets us roll out TLS without a flag-day: legacy ws:// clients
 	// keep using Port while new builds move to wss on TLSPort; Port is retired
 	// only once every client is migrated. (Phase 1 security rollout.)
-	TLSPort           int      `yaml:"tls_port"`
-	TLSCert           string   `yaml:"tls_cert"`
-	TLSKey            string   `yaml:"tls_key"`
-	TLSClientCA       string   `yaml:"tls_client_ca"`
-	TLSClientCAKey    string   `yaml:"tls_client_ca_key"`
-	PublicDownloadDir string   `yaml:"public_download_dir"`
-	Debug             bool     `yaml:"debug"`
-	AllowedOrigins    []string `yaml:"allowed_origins"`
+	TLSPort           int    `yaml:"tls_port"`
+	TLSCert           string `yaml:"tls_cert"`
+	TLSKey            string `yaml:"tls_key"`
+	TLSClientCA       string `yaml:"tls_client_ca"`
+	TLSClientCAKey    string `yaml:"tls_client_ca_key"`
+	PublicDownloadDir string `yaml:"public_download_dir"`
+	// LogPath tees the relay's own log to a file. Empty keeps stdout only.
+	LogPath        string   `yaml:"log_path"`
+	Debug          bool     `yaml:"debug"`
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 type RedisConfig struct {

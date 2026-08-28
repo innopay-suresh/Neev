@@ -300,6 +300,52 @@ func (h *Hub) disconnectAgent(agentID, reason string) {
 	_ = cli.conn.Close()
 }
 
+// KillAllSessions drops every connected peer, immediately.
+//
+// The emergency control: a device is compromised, a support contractor is
+// removed, credentials leak. Ending sessions one at a time is not an answer
+// when the point is to stop everything NOW, and there was no way to do it
+// short of restarting the relay — which also drops registrations, so hosts
+// stop being reachable and have to reconnect before anyone can work again.
+//
+// Sends a Bye first so the far end shows a real reason instead of a frozen
+// screen, then closes. Returns the number of connections dropped so the caller
+// can report what actually happened rather than assuming.
+//
+// Agents are NOT unregistered: the goal is to sever live sessions, not to take
+// the fleet offline. Hosts stay reachable for a legitimate reconnect.
+// Registry exposes the session registry so the API layer can write audit
+// events for actions it performs against the hub.
+func (h *Hub) Registry() *session.Registry { return h.registry }
+
+func (h *Hub) KillAllSessions(reason string) int {
+	if h == nil {
+		return 0
+	}
+	if reason == "" {
+		reason = "all sessions were terminated by an administrator"
+	}
+	// Snapshot under the lock, disconnect outside it: cli.send and conn.Close
+	// can block on a slow peer, and holding the hub lock through that stalls
+	// every other connection — including the ones still trying to register.
+	h.mu.RLock()
+	targets := make([]*client, 0, len(h.agents))
+	for _, cli := range h.agents {
+		if cli != nil && cli.conn != nil {
+			targets = append(targets, cli)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, cli := range targets {
+		_ = cli.send(Message{Type: MsgBye, Error: reason})
+		_ = cli.conn.Close()
+	}
+	log.Warn().Int("dropped", len(targets)).Str("reason", reason).
+		Msg("KILL SWITCH: all sessions terminated")
+	return len(targets)
+}
+
 func authActorFromAgent(info *session.AgentInfo) string {
 	if info == nil {
 		return "system"

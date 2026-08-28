@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +70,26 @@ func downloadsDir() string {
 // file-transfer message (so the caller doesn't treat it as anything else).
 // The host→viewer "request" (export) needs a picker on the headless host and is
 // not carried yet — it's consumed here so it doesn't error downstream.
+// maxTransferBytes caps a single incoming file.
+//
+// 2 GiB by default: remote support moves screenshots, logs and installers, and
+// this covers those with room to spare while bounding what one session can
+// write to the host's disk. Override per deployment with NEEV_MAX_TRANSFER_MB.
+var maxTransferBytes int64 = 2 << 30
+
+func init() { applyTransferLimitFromEnv() }
+
+// applyTransferLimitFromEnv reads the override. Split out of init so it is
+// testable, and deliberately ignores unparseable or non-positive values: a
+// typo that silently REMOVED the cap would be worse than no override.
+func applyTransferLimitFromEnv() {
+	if v := os.Getenv("NEEV_MAX_TRANSFER_MB"); v != "" {
+		if mb, err := strconv.ParseInt(v, 10, 64); err == nil && mb > 0 {
+			maxTransferBytes = mb * 1024 * 1024
+		}
+	}
+}
+
 func (f *fileReceiver) handle(payload []byte) bool {
 	var m struct {
 		K    string `json:"k"`
@@ -84,6 +105,22 @@ func (f *fileReceiver) handle(payload []byte) bool {
 	}
 	switch m.T {
 	case "offer":
+		// Refuse an oversized transfer BEFORE creating the file.
+		//
+		// There was no limit at all: a viewer could push a file until the host's
+		// disk filled, and the host had no say in it. Remote support moves
+		// screenshots, logs and installers — a couple of gigabytes covers that
+		// with room to spare, and anything larger is either a mistake or an
+		// attempt to fill the disk.
+		if m.Size > maxTransferBytes {
+			log.Warn().Str("name", m.Name).Int64("size", m.Size).
+				Int64("limit", maxTransferBytes).
+				Msg("worker: REFUSED an oversized file transfer")
+			f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": m.ID,
+				"err": fmt.Sprintf("file is larger than the %d MB limit this host accepts",
+					maxTransferBytes/(1024*1024))})
+			return true
+		}
 		path := f.uniquePath(m.Name)
 		file, err := os.Create(path)
 		if err != nil {
@@ -106,6 +143,22 @@ func (f *fileReceiver) handle(payload []byte) bool {
 		rf := f.open[m.ID]
 		f.mu.Unlock()
 		if rf != nil {
+			// Enforce the limit on what ACTUALLY arrives, not on what was
+			// declared. The offer's size is a number the sender chose: trusting
+			// it means a transfer announced as 1 byte can still write forever,
+			// which is precisely the case a limit exists to stop.
+			if rf.written+int64(len(raw)) > maxTransferBytes {
+				log.Warn().Str("path", rf.path).Int64("written", rf.written).
+					Msg("worker: ABORTED a transfer that exceeded the limit mid-stream")
+				rf.f.Close()
+				_ = os.Remove(rf.path)
+				f.mu.Lock()
+				delete(f.open, m.ID)
+				f.mu.Unlock()
+				f.sendFT(map[string]interface{}{"k": "ft", "t": "failed", "id": m.ID,
+					"err": "transfer exceeded the size limit and was stopped"})
+				return true
+			}
 			n, werr := rf.f.Write(raw)
 			rf.written += int64(n)
 			if werr != nil {

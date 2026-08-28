@@ -125,6 +125,7 @@ func (s *Server) routes() {
 	admin.Post("/users", s.createUser)
 	admin.Patch("/users/:email", s.updateUser)
 	admin.Delete("/users/:email", s.deleteUser)
+	admin.Post("/sessions/kill-all", s.killAllSessions)
 	admin.Post("/agents/:id/certificate/reissue", s.reissueAgentCertificate)
 	admin.Delete("/agents/:id/certificate", s.revokeAgentCertificate)
 
@@ -217,6 +218,40 @@ func (s *Server) getICEServers(c *fiber.Ctx) error {
 		}
 	}
 	return c.JSON(fiber.Map{"ice_servers": servers})
+}
+
+// killAllSessions drops every live connection. Admin only.
+//
+// The emergency control for a compromised device, a removed contractor, or
+// leaked credentials. Restarting the relay was the only previous way to do
+// this, and that also drops registrations — so the fleet goes unreachable and
+// every host has to reconnect before anyone can work again.
+//
+// POST, never GET: this is destructive, and a GET can be triggered by a link,
+// a prefetch, or a browser tab restoring itself.
+//
+// Audited before acting, so the record survives even if the caller's own
+// connection is among the ones dropped.
+func (s *Server) killAllSessions(c *fiber.Ctx) error {
+	actor := "unknown"
+	if u, ok := c.Locals("auth_user").(*serverauth.User); ok && u != nil {
+		actor = u.Email
+	}
+	reason := strings.TrimSpace(c.Query("reason"))
+	if reason == "" {
+		reason = "all sessions were terminated by an administrator"
+	}
+
+	_ = s.hub.Registry().AddAuditEvent(c.Context(), &session.AuditEvent{
+		Type:    "session.kill_all",
+		Actor:   actor,
+		Outcome: "accepted",
+		IP:      c.IP(),
+		Details: map[string]any{"reason": reason},
+	})
+
+	dropped := s.hub.KillAllSessions(reason)
+	return c.JSON(fiber.Map{"dropped": dropped, "reason": reason})
 }
 
 // getEnrollment returns the current fleet enrollment settings for the admin dashboard.
