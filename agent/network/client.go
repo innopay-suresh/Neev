@@ -111,6 +111,23 @@ func NewClient(relayURL, passwordHash, unattendedHash, version, orgID, deviceGro
 	}
 }
 
+// UpdatePasswordHash updates the SESSION password hash and re-registers, so a
+// rotated password takes effect at the relay immediately. Without the
+// re-register the host keeps accepting the old password until it reconnects for
+// some other reason — which is the entire window a rotation is meant to close.
+func (c *Client) UpdatePasswordHash(hash string) {
+	c.mu.Lock()
+	c.passwordHash = hash
+	conn := c.conn
+	c.mu.Unlock()
+
+	if conn != nil {
+		if err := c.register(); err != nil {
+			log.Error().Err(err).Msg("failed to re-register after session password rotation")
+		}
+	}
+}
+
 // UpdateUnattendedHash updates the unattended password hash and sends a re-registration to the signaling server.
 func (c *Client) UpdateUnattendedHash(hash string) {
 	c.mu.Lock()

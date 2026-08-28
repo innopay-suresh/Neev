@@ -172,19 +172,39 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 	// fixed unattended password (env) or a fresh random one for non-helper/PoC
 	// runs. id/password are also written to transport.txt on register.
 	machineID, machinePw := loadMachineCreds()
-	password := machinePw
-	if password == "" {
-		password = os.Getenv("UNATTENDED_PASSWORD")
+
+	// TWO passwords, not one.
+	//
+	// These used to be the same value: machine.dat's password was minted once
+	// and reused forever, so the id/password shown on the share card never
+	// changed — a reinstall was the only thing that rotated it, because that is
+	// the only thing that deletes machine.dat. Anyone who ever saw the password
+	// kept working access indefinitely.
+	//
+	//   SESSION password   — fresh on every transport start and after every
+	//                        session ends. This is what the card shows and what
+	//                        you read out for one-off support.
+	//   UNATTENDED password — the stable one from machine.dat. Rotating it would
+	//                        break unattended access, which exists precisely so a
+	//                        machine is reachable with nobody in front of it.
+	//
+	// The relay already stores and verifies both independently and records which
+	// one authenticated, so this needs no protocol change.
+	unattended := machinePw
+	if unattended == "" {
+		unattended = os.Getenv("UNATTENDED_PASSWORD")
 	}
-	if password == "" {
-		if p, err := auth.GenerateRandomPassword(); err == nil {
-			password = p
-		}
-	}
+	password := newSessionPassword()
 	t.password = password
-	var passwordHash string
+
+	var passwordHash, unattendedHash string
 	if h, err := auth.HashPassword(password); err == nil {
 		passwordHash = h
+	}
+	if unattended != "" {
+		if h, err := auth.HashPassword(unattended); err == nil {
+			unattendedHash = h
+		}
 	}
 
 	ice, err := network.FetchICEServers(ctx, t.relayURL)
@@ -195,7 +215,7 @@ func (t *Transport) setupSignaling(ctx context.Context) error {
 	}
 	t.iceServers = ice
 
-	t.sigClient = network.NewClient(t.relayURL, passwordHash, passwordHash,
+	t.sigClient = network.NewClient(t.relayURL, passwordHash, unattendedHash,
 		"transport", os.Getenv("ORG_ID"), os.Getenv("DEVICE_GROUP"),
 		os.Getenv("ENROLLMENT_CODE"))
 	// Register under the machine-wide id (the relay honors a requested id), so
@@ -636,6 +656,41 @@ func (t *Transport) announceGrant(peer *network.Peer, control bool) {
 	log.Warn().Msg("transport: grant announce never landed (control DC not open)")
 }
 
+// newSessionPassword mints the rotating session password.
+//
+// Falls back to the previous value only if generation fails, because a host
+// with NO password would be reachable by anyone — strictly worse than one whose
+// password did not rotate this time.
+func newSessionPassword() string {
+	if p, err := auth.GenerateRandomPassword(); err == nil {
+		return p
+	}
+	return ""
+}
+
+// rotateSessionPassword issues a new session password and re-registers.
+//
+// Called when the last viewer leaves, so a password read aloud during one
+// support call cannot be reused to connect again later. Unattended access is
+// untouched: that hash is separate and stays stable.
+func (t *Transport) rotateSessionPassword() {
+	next := newSessionPassword()
+	if next == "" {
+		return // keep the existing one rather than leaving the host open
+	}
+	hash, err := auth.HashPassword(next)
+	if err != nil {
+		return
+	}
+	t.password = next
+	t.sigClient.UpdatePasswordHash(hash)
+	// The card and transport.txt must show what actually works now; a stale
+	// displayed password is indistinguishable from a broken host.
+	t.writeCreds()
+	t.announceHostCreds()
+	log.Info().Msg("transport: session password rotated after the session ended")
+}
+
 // announceHostOS tells the viewer this host is Windows so it un-hides the
 // Windows-only Privacy/Login buttons and applies ⌘↔Ctrl mapping. The control DC
 // can open a beat after the peer connects, so retry until a send succeeds. pion
@@ -821,12 +876,21 @@ func (t *Transport) dropPeer(id string) {
 	if ok {
 		delete(t.peers, id)
 	}
+	remaining := len(t.peers)
 	t.mu.Unlock()
 	if ok && ps.peer != nil {
 		ps.peer.Close()
 	}
 	if ok {
 		t.announceSessionState()
+		// Last viewer gone: retire the password they used.
+		//
+		// Rotating only on the LAST disconnect, not on every peer leaving, so a
+		// two-viewer session does not invalidate the password the second one is
+		// still holding.
+		if remaining == 0 {
+			t.rotateSessionPassword()
+		}
 	}
 }
 
